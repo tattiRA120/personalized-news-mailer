@@ -1,0 +1,35 @@
+name: Deploy Cloudflare Worker
+
+on:
+  push:
+    branches:
+      - main # デプロイをトリガーするブランチを指定
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20' # プロジェクトで使用しているNode.jsのバージョンを指定
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Publish Cloudflare Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }} # wrangler.jsoncにaccount_idがないため追加
+          # プロジェクト名が必要な場合は追加 (wrangler.jsoncで指定済みのため不要)
+          # name: your-worker-name
+        env:
+          # Workers Secrets を環境変数として渡す
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+          BREVO_WEBHOOK_SECRET: ${{ secrets.BREVO_WEBHOOK_SECRET }}
+          # 他のシークレットもここに追加
