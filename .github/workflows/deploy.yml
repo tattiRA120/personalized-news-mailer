@@ -25,6 +25,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }} # wrangler.jsoncにaccount_idがないため追加
+          wranglerVersion: 'latest' # 最新のWranglerを使用
           # プロジェクト名が必要な場合は追加 (wrangler.jsoncで指定済みのため不要)
           # name: your-worker-name
         env:
