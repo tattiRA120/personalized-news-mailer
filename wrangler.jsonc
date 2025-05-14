@@ -1,0 +1,89 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "mail-news-worker",
+	"main": "src/index.ts",
+	"compatibility_date": "2025-05-14",
+	"observability": {
+		"enabled": true
+	},
+	"triggers": {
+		"crons": [
+			"0 6 * * *"
+		]
+	},
+
+	"kv_namespaces": [
+		{
+			"binding": "mail-news-user-profiles",
+			"id": "36b95e68aa684faf98d02edc9ee44eb4" // TODO: Replace with your actual KV Namespace ID
+		}
+	],
+
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "CLICK_LOGGER", // Binding name for Durable Object
+				"class_name": "ClickLogger" // TODO: Replace with your actual Durable Object class name
+			}
+		]
+	},
+
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"ClickLogger"
+			]
+		}
+	],
+
+	/**
+	 * Environment Variables
+	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
+	 */
+	"vars": {
+		// Note: Use `wrangler secret put <VARIABLE_NAME>` to set these values securely.
+		"GEMINI_API_KEY": "placeholder", // Replace with `wrangler secret put GEMINI_API_KEY`
+		"BREVO_API_KEY": "placeholder", // Replace with `wrangler secret put BREVO_API_KEY`
+		"BREVO_WEBHOOK_SECRET": "placeholder" // Replace with `wrangler secret put BREVO_WEBHOOK_SECRET`
+	},
+
+	/**
+	 * Smart Placement
+	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
+	 */
+	// "placement": { "mode": "smart" },
+
+	/**
+	 * Bindings
+	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
+	 * databases, object storage, AI inference, real-time communication and more.
+	 * https://developers.cloudflare.com/workers/runtime-apis/bindings/
+	 */
+
+	/**
+	 * Environment Variables
+	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
+	 */
+	// "vars": { "MY_VARIABLE": "production_value" },
+	/**
+	 * Note: Use secrets to store sensitive data.
+	 * https://developers.cloudflare.com/workers/configuration/secrets/
+	 */
+
+	/**
+	 * Static Assets
+	 * https://developers.cloudflare.com/workers/static-assets/binding/
+	 */
+	// "assets": { "directory": "./public/", "binding": "ASSETS" },
+
+	/**
+	 * Service Bindings (communicate between multiple Workers)
+	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
+	 */
+	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
+}

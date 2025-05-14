@@ -1,0 +1,25 @@
+memory-bank/
+.clinerules
+
+# Node.js dependencies
+node_modules/
+
+# Build artifacts
+dist/
+build/
+
+# Environment variables
+.env
+
+# Cloudflare Wrangler
+.wrangler/
+
+# Log files
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/ # VS Codeの設定ファイルなど、共有しない場合
