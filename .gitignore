@@ -23,3 +23,6 @@ Thumbs.db
 
 # Editor files
 .vscode/ # VS Codeの設定ファイルなど、共有しない場合
+
+# Local environment variables
+.dev.vars

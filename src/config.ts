@@ -1,7 +1,7 @@
 export const NEWS_RSS_URLS: string[] = [
-    'https://www.nasa.gov/rss/dyn/breaking_news.rss', // NASA Breaking News
-    'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', // New York Times World News
-    'https://feeds.reuters.com/Reuters/worldNews' // Reuters World News
+    // 'https://www.nasa.gov/rss/dyn/breaking_news.rss', NASA Breaking News
+    // 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', New York Times World News
+    'https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com&ceid=JP:ja&hl=ja&gl=JP' // Reuters News via Google News
 ];
 
 // You can add other configuration variables here, like API keys (though better to use Workers Secrets for sensitive info)

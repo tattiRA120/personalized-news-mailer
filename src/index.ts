@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { collectNews } from './newsCollector';
-import { getEmbedding, generateContent } from './geminiClient'; // Assuming these functions are in geminiClient.ts
-import { getUserProfile, updateUserProfile, UserProfile, getAllUserIds } from './userProfile'; // Assuming these functions are in userProfile.ts
+import { generateContent } from './geminiClient'; // Keep generateContent from geminiClient.ts
+import { getOpenAIEmbeddingsBatch } from './openaiClient'; // Import OpenAI embeddings client
+import { getUserProfile, updateUserProfile, UserProfile, getAllUserIds, createUserProfile } from './userProfile'; // Assuming these functions are in userProfile.ts
 import { selectTopArticles, selectPersonalizedArticles } from './articleSelector'; // Assuming these functions are in articleSelector.ts
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator'; // Assuming these functions are in emailGenerator.ts
 import { ClickLogger } from './clickLogger'; // Assuming this is your Durable Object class
@@ -9,9 +10,10 @@ import { logError, logInfo, logWarning } from './logger'; // Import logging help
 
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
-	USER_PROFILES: KVNamespace;
+	'mail-news-user-profiles': KVNamespace; // KV Namespace binding name from wrangler.jsonc
 	CLICK_LOGGER: DurableObjectNamespace;
-	GEMINI_API_KEY?: string; // Assuming GEMINI_API_KEY is set as a secret or var
+	GEMINI_API_KEY?: string; // Assuming GEMINI_API_KEY is set as a secret or var (for scoring)
+	OPENAI_API_KEY?: string; // Add OpenAI API key
 	BREVO_API_KEY?: string; // Assuming BREVO_API_KEY is set as a secret or var
 	BREVO_WEBHOOK_SECRET?: string; // Assuming BREVO_WEBHOOK_SECRET is set as a secret or var
 	// Add other bindings as needed (e.g., R2, Queues)
@@ -40,7 +42,8 @@ export default {
 
 			// --- 2. Get all users ---
 			logInfo('Fetching all user IDs...');
-			const userIds = await getAllUserIds(env);
+			// Pass the correct KV binding to userProfile functions
+			const userIds = await getAllUserIds({ 'mail-news-user-profiles': env['mail-news-user-profiles'] });
 			logInfo(`Found ${userIds.length} users to process.`, { userCount: userIds.length });
 
 			if (userIds.length === 0) {
@@ -54,7 +57,8 @@ export default {
 				try {
 					logInfo(`Processing user: ${userId}`);
 
-					const userProfile = await getUserProfile(userId, env);
+					// Pass the correct KV binding to userProfile functions
+					const userProfile = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
 
 					if (!userProfile) {
 						logError(`User profile not found for ${userId}. Skipping email sending for this user.`, null, { userId });
@@ -64,53 +68,106 @@ export default {
 
 					// --- 3. Embedding & Scoring (per user, based on profile) ---
 					logInfo(`Generating embeddings and scoring articles for user ${userId}...`);
+
 					const articlesWithScores: (typeof articles[0] & { score?: number, embedding?: number[] })[] = [];
-					for (const article of articles) {
+					const maxBatchTokenLength = 8000 * 2; // Approximate max characters for 8k tokens (assuming 1 token ~ 2 chars for Japanese)
+					const preferredBatchSize = 5; // Preferred batch size, further reduced
+
+					let currentBatchTexts: string[] = [];
+					let currentBatchArticles: typeof articles[0][] = [];
+					let currentBatchTokenCount = 0;
+
+					const processBatch = async (batchTexts: string[], batchArticles: typeof articles[0][]) => {
+						if (batchTexts.length === 0) return;
+
 						try {
-							// Get embedding
-							const embedding = await getEmbedding(`${article.title} ${article.link}`, env); // Use title and link for embedding
-							if (!embedding) {
-								logWarning(`Could not get embedding for article: ${article.title}. Skipping.`, { articleTitle: article.title });
-								continue; // Skip article if embedding fails
+							// Get embeddings in batch using OpenAI client
+							const embeddings = await getOpenAIEmbeddingsBatch(batchTexts, env);
+
+							if (!embeddings) {
+								logWarning(`Failed to get OpenAI embeddings for batch. Skipping batch.`, { batchSize: batchTexts.length });
+								return; // Skip this batch if embedding fails
 							}
 
-							// Calculate relevance score based on user profile keywords and article content/title
-							// Using Gemini to score based on keywords and article content/title
-							let score = 0;
-							// Ensure userProfile.keywords is not empty before creating prompt
-							const keywordsPrompt = userProfile.keywords && userProfile.keywords.length > 0 ?
-								`ユーザーの興味キーワード「${userProfile.keywords.join(', ')}」にどの程度関連しているか` :
-								'一般的なニュースとしてどの程度重要か'; // Fallback prompt if no keywords
+							// Process each article in the batch
+							for (let j = 0; j < batchTexts.length; j++) {
+								const article = batchArticles[j];
+								const embedding = embeddings[j];
 
-							const scoringPrompt = `以下の記事が、${keywordsPrompt}を0から100のスコアで評価してください。スコアのみを数値で回答してください。記事タイトル: "${article.title}"。記事リンク: "${article.link}"`;
-							const scoreResponse = await generateContent(scoringPrompt, env);
-
-							if (scoreResponse) {
-								try {
-									score = parseInt(scoreResponse.trim(), 10);
-									if (isNaN(score) || score < 0 || score > 100) {
-										logWarning(`Invalid score received from Gemini for article "${article.title}": ${scoreResponse}. Assigning default low score.`, { articleTitle: article.title, scoreResponse });
-										score = 10; // Default low score for invalid response
-									} else {
-										logInfo(`Scored article "${article.title}": ${score}`, { articleTitle: article.title, score });
-									}
-								} catch (e) {
-									logError(`Error parsing score response for article "${article.title}": ${scoreResponse}`, e, { articleTitle: article.title, scoreResponse });
-									score = 10; // Default low score on error
+								if (!embedding) {
+									logWarning(`Could not get embedding for article: ${article.title}. Skipping.`, { articleTitle: article.title });
+									continue; // Skip article if embedding is missing in batch result
 								}
-							} else {
-								logWarning(`Could not get score response from Gemini for article: ${article.title}. Assigning default low score.`, { articleTitle: article.title });
-								score = 10; // Default low score
+
+								// Calculate relevance score based on user profile keywords and article content/title
+								// Using Gemini to score based on keywords and article content/title
+								let score = 0;
+								// Ensure userProfile.keywords is not empty before creating prompt
+								const keywordsPrompt = userProfile.keywords && userProfile.keywords.length > 0 ?
+									`ユーザーの興味キーワード「${userProfile.keywords.join(', ')}」にどの程度関連しているか` :
+									'一般的なニュースとしてどの程度重要か'; // Fallback prompt if no keywords
+
+								const scoringPrompt = `以下の記事が、${keywordsPrompt}を0から100のスコアで評価してください。スコアのみを数値で回答してください。記事タイトル: "${article.title}"。記事リンク: "${article.link}"`;
+								const scoreResponse = await generateContent(scoringPrompt, env);
+
+								if (scoreResponse) {
+									try {
+										score = parseInt(scoreResponse.trim(), 10);
+										if (isNaN(score) || score < 0 || score > 100) {
+											logWarning(`Invalid score received from Gemini for article "${article.title}": ${scoreResponse}. Assigning default low score.`, { articleTitle: article.title, scoreResponse });
+											score = 10; // Default low score for invalid response
+										} else {
+											logInfo(`Scored article "${article.title}": ${score}`, { articleTitle: article.title, score });
+										}
+									} catch (e) {
+										logError(`Error parsing score response for article "${article.title}": ${scoreResponse}`, e, { articleTitle: article.title, scoreResponse });
+										score = 10; // Default low score on error
+									}
+								} else {
+									logWarning(`Could not get score response from Gemini for article: ${article.title}. Assigning default low score.`, { articleTitle: article.title });
+									score = 10; // Default low score
+								}
+
+								articlesWithScores.push({ ...article, score, embedding });
 							}
 
-							articlesWithScores.push({ ...article, score, embedding });
-
-						} catch (articleProcessError) {
-							logError(`Error processing article "${article.title}" for user ${userId}:`, articleProcessError, { userId, articleTitle: article.title });
-							// Continue to the next article even if one fails
+						} catch (batchProcessError) {
+							logError(`Error processing article batch:`, batchProcessError, { batchSize: batchTexts.length });
+							// Continue processing even if one batch fails
 						}
+					};
+
+					for (const article of articles) {
+						const articleText = `${article.title} ${article.link}`;
+						const articleTokenLength = articleText.length / 2; // Approximate token count
+
+						// Check if adding this article exceeds the max token length or preferred batch size
+						if (currentBatchTokenCount + articleTokenLength > maxBatchTokenLength || currentBatchTexts.length >= preferredBatchSize) {
+							// Process the current batch
+							await processBatch(currentBatchTexts, currentBatchArticles);
+
+							// Process the current batch
+							await processBatch(currentBatchTexts, currentBatchArticles);
+
+							// Start a new batch
+							currentBatchTexts = [];
+							currentBatchArticles = [];
+							currentBatchTokenCount = 0;
+						}
+
+						// Add the current article to the batch
+						currentBatchTexts.push(articleText);
+						currentBatchArticles.push(article);
+						currentBatchTokenCount += articleTokenLength;
 					}
-					logInfo(`Finished embedding and scoring for user ${userId}. Processed ${articlesWithScores.length} articles.`, { userId, processedCount: articlesWithScores.length });
+
+					// Process the last batch if any
+					if (currentBatchTexts.length > 0) {
+						await processBatch(currentBatchTexts, currentBatchArticles);
+					}
+
+
+					logInfo(`Finished embedding and scoring for user ${userId}. Processed ${articlesWithScores.length} articles with scores and embeddings.`, { userId, processedCount: articlesWithScores.length });
 
 
 					// --- 4. Diversity MMR + Bandit ---
@@ -146,7 +203,8 @@ export default {
 					// generateNewsEmail 関数に userId を渡す
 					const htmlEmailContent = generateNewsEmail(selectedArticles, userId);
 
-					const emailSent = await sendNewsEmail(env.BREVO_API_KEY, recipientEmail, userId, selectedArticles);
+					// Pass the sender object to sendNewsEmail
+					const emailSent = await sendNewsEmail(env.BREVO_API_KEY, recipientEmail, userId, selectedArticles, sender);
 
 					if (emailSent) {
 						logInfo(`Personalized news email sent to ${recipient.email}`, { userId, email: recipient.email });
@@ -162,7 +220,8 @@ export default {
 						embedding: article.embedding, // embedding も一緒に保存
 					}));
 
-					const logSentResponse = await clickLogger.fetch(new Request(new URL('/log-sent-articles', request.url), {
+					// In scheduled task, request.url is not defined. Use relative path.
+					const logSentResponse = await clickLogger.fetch(new Request('http://dummy-host/log-sent-articles', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ sentArticles: sentArticlesData }),
@@ -177,7 +236,8 @@ export default {
 
 					// --- Trigger Reward Decay in Durable Object ---
 					logInfo(`Triggering reward decay in ClickLogger for user ${userId}...`, { userId });
-					const decayResponse = await clickLogger.fetch(new Request(new URL('/decay-rewards', request.url), {
+					// In scheduled task, request.url is not defined. Use relative path.
+					const decayResponse = await clickLogger.fetch(new Request('http://dummy-host/decay-rewards', {
 						method: 'POST',
 					}));
 
@@ -196,7 +256,8 @@ export default {
 					} else {
 						userProfile.sentArticleIds = selectedArticles.map(a => a.articleId);
 					}
-					await updateUserProfile(userProfile, env);
+					// Pass the correct KV binding to userProfile functions
+					await updateUserProfile(userProfile, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
 					logInfo(`Updated user profile for ${userId} with sent article IDs.`, { userId });
 
 
@@ -216,6 +277,55 @@ export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 		const path = url.pathname;
+
+		// --- User Registration Handler ---
+		if (request.method === 'POST' && path === '/register') {
+			logInfo('Registration request received');
+			try {
+				const { email, keywords } = await request.json();
+
+				if (!email) {
+					logWarning('Registration failed: Missing email in request body.');
+					return new Response('Missing email', { status: 400 });
+				}
+
+				// Generate a simple user ID (e.g., hash of email)
+				const encoder = new TextEncoder();
+				const data = encoder.encode(email);
+				const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+				const userId = Array.from(new Uint8Array(hashBuffer))
+					.map(b => b.toString(16).padStart(2, '0'))
+					.join('');
+
+				// Check if user already exists
+				// Pass the correct KV binding to userProfile functions
+				const existingUser = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+				if (existingUser) {
+					logWarning(`Registration failed: User with email ${email} already exists.`, { email, userId });
+					return new Response('User already exists', { status: 409 });
+				}
+
+				// Create user profile
+				// Pass the correct KV binding to userProfile functions
+				const newUserProfile = await createUserProfile(userId, email, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+
+				// Optionally add initial keywords if provided
+				if (keywords && Array.isArray(keywords)) {
+					newUserProfile.keywords = keywords.map(kw => String(kw)); // Ensure keywords are strings
+					// Pass the correct KV binding to userProfile functions
+					await updateUserProfile(newUserProfile, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+					logInfo(`Added initial keywords for user ${userId}.`, { userId, keywords: newUserProfile.keywords });
+				}
+
+				logInfo(`User registered successfully: ${userId}`, { userId, email });
+				return new Response('User registered', { status: 201 });
+
+			} catch (error) {
+				logError('Error during user registration:', error, { requestUrl: request.url });
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
 
 		// --- Webhook Handler (for Brevo click events) ---
 		if (request.method === 'POST' && path === '/webhook/brevo') {
@@ -314,17 +424,17 @@ export default {
 									}
 
 									// TODO: Update user profile in KV with clicked article ID
-									const userProfile = await getUserProfile(userId, env);
+									// Pass the correct KV binding to userProfile functions
+									const userProfile = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
 									if (userProfile && !userProfile.clickedArticleIds.includes(articleId)) {
-										userProfile.clickedArticleIds.push(articleId);
-										await updateUserProfile(userProfile, env);
+										await updateUserProfile({ ...userProfile, clickedArticleIds: [...userProfile.clickedArticleIds, articleId] }, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
 										logInfo(`Updated user profile for ${userId} with clicked article ${articleId}.`, { userId, articleId });
 									}
 
 								} else {
 									logWarning('Could not extract userId or articleId from Brevo webhook payload or X-Mailin-Custom.', { event });
 									// メールアドレスからユーザーIDを検索して処理を続行することも検討
-									// const userProfile = await getUserByEmail(email, env); // getUserByEmail 関数が必要
+									// const userProfile = await getUserByEmail(email, { 'mail-news-user-profiles': env['mail-news-user-profiles'] }); // getUserByEmail 関数が必要
 									// if (userProfile) { ... }
 								}
 

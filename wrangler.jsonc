@@ -49,7 +49,8 @@
 		// Note: Use `wrangler secret put <VARIABLE_NAME>` to set these values securely.
 		"GEMINI_API_KEY": "placeholder", // Replace with `wrangler secret put GEMINI_API_KEY`
 		"BREVO_API_KEY": "placeholder", // Replace with `wrangler secret put BREVO_API_KEY`
-		"BREVO_WEBHOOK_SECRET": "placeholder" // Replace with `wrangler secret put BREVO_WEBHOOK_SECRET`
+		"BREVO_WEBHOOK_SECRET": "placeholder", // Replace with `wrangler secret put BREVO_WEBHOOK_SECRET`
+		"OPENAI_API_KEY": "placeholder" // Replace with `wrangler secret put OPENAI_API_KEY`
 	},
 
 	/**

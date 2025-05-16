@@ -11,15 +11,15 @@ export interface UserProfile {
     // interestVector?: number[]; // To be generated/updated based on clicked articles
 }
 
-// Assuming a KV Namespace binding named 'USER_PROFILES'
+// Assuming a KV Namespace binding named 'mail-news-user-profiles' from wrangler.jsonc
 // Add this binding to your wrangler.toml:
 // [[kv_namespaces]]
-// binding = "USER_PROFILES"
+// binding = "mail-news-user-profiles"
 // id = "<your_kv_namespace_id>"
 
-export async function getUserProfile(userId: string, env: { USER_PROFILES: KVNamespace }): Promise<UserProfile | null> {
+export async function getUserProfile(userId: string, env: { 'mail-news-user-profiles': KVNamespace }): Promise<UserProfile | null> {
     try {
-        const profile = await env.USER_PROFILES.get(userId, { type: 'json' });
+        const profile = await env['mail-news-user-profiles'].get(userId, { type: 'json' });
         if (profile) {
             logInfo(`Retrieved user profile for ${userId}.`, { userId });
         } else {
@@ -32,9 +32,9 @@ export async function getUserProfile(userId: string, env: { USER_PROFILES: KVNam
     }
 }
 
-export async function updateUserProfile(profile: UserProfile, env: { USER_PROFILES: KVNamespace }): Promise<void> {
+export async function updateUserProfile(profile: UserProfile, env: { 'mail-news-user-profiles': KVNamespace }): Promise<void> {
     try {
-        await env.USER_PROFILES.put(profile.userId, JSON.stringify(profile));
+        await env['mail-news-user-profiles'].put(profile.userId, JSON.stringify(profile));
         logInfo(`Updated user profile for ${profile.userId}.`, { userId: profile.userId });
     } catch (error) {
         logError(`Error updating user profile for ${profile.userId}:`, error, { userId: profile.userId });
@@ -42,7 +42,7 @@ export async function updateUserProfile(profile: UserProfile, env: { USER_PROFIL
 }
 
 // Create a new user profile and store email-to-userId mapping
-export async function createUserProfile(userId: string, email: string, env: { USER_PROFILES: KVNamespace }): Promise<UserProfile> {
+export async function createUserProfile(userId: string, email: string, env: { 'mail-news-user-profiles': KVNamespace }): Promise<UserProfile> {
     const newUserProfile: UserProfile = {
         userId: userId,
         email: email, // Store email in profile
@@ -54,9 +54,9 @@ export async function createUserProfile(userId: string, email: string, env: { US
 
     try {
         // Save the user profile
-        await env.USER_PROFILES.put(userId, JSON.stringify(newUserProfile));
+        await env['mail-news-user-profiles'].put(userId, JSON.stringify(newUserProfile));
         // Save the email-to-userId mapping
-        await env.USER_PROFILES.put(`email_to_userId:${email}`, userId);
+        await env['mail-news-user-profiles'].put(`email_to_userId:${email}`, userId);
         logInfo(`Created new user profile for ${userId} with email ${email}`, { userId, email });
         return newUserProfile;
     } catch (error) {
@@ -66,9 +66,9 @@ export async function createUserProfile(userId: string, email: string, env: { US
 }
 
 // Get user ID by email address
-export async function getUserIdByEmail(email: string, env: { USER_PROFILES: KVNamespace }): Promise<string | null> {
+export async function getUserIdByEmail(email: string, env: { 'mail-news-user-profiles': KVNamespace }): Promise<string | null> {
     try {
-        const userId = await env.USER_PROFILES.get(`email_to_userId:${email}`);
+        const userId = await env['mail-news-user-profiles'].get(`email_to_userId:${email}`);
         if (userId) {
             logInfo(`Retrieved user ID for email ${email}: ${userId}`, { email, userId });
         } else {
@@ -82,13 +82,13 @@ export async function getUserIdByEmail(email: string, env: { USER_PROFILES: KVNa
 }
 
 // Get all user IDs
-export async function getAllUserIds(env: { USER_PROFILES: KVNamespace }): Promise<string[]> {
+export async function getAllUserIds(env: { 'mail-news-user-profiles': KVNamespace }): Promise<string[]> {
     try {
         // List all keys with no prefix to get user IDs directly,
         // or list keys with a specific prefix if user IDs are stored with one.
         // Assuming user IDs are stored as top-level keys for now.
         // Need to filter out email_to_userId keys.
-        const listResult = await env.USER_PROFILES.list();
+        const listResult = await env['mail-news-user-profiles'].list();
         const userIds = listResult.keys
             .map(key => key.name)
             .filter(keyName => !keyName.startsWith('email_to_userId:')); // Filter out mapping keys
@@ -104,7 +104,7 @@ export async function getAllUserIds(env: { USER_PROFILES: KVNamespace }): Promis
 
 // TODO: Implement function to get/generate user interest vector based on profile data
 // export async function getUserInterestVector(userId: string, env: Env): Promise<number[] | null> {
-//     const profile = await getUserProfile(userId, env);
+//     const profile = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
 //     if (!profile) {
 //         return null;
 //     }

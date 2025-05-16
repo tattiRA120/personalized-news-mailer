@@ -3,6 +3,11 @@ import { logError, logInfo } from './logger'; // Import logging helpers
 
 import { sendEmail as sendEmailWithBrevo } from './brevoClient';
 
+interface EmailRecipient {
+    email: string;
+    name?: string;
+}
+
 interface NewsArticle {
     title: string;
     link: string;
@@ -73,9 +78,10 @@ export async function sendNewsEmail(
   brevoApiKey: string,
   toEmail: string,
   userId: string,
-  articles: NewsArticle[]
+  articles: NewsArticle[],
+  sender: EmailRecipient // Add sender as an argument
 ): Promise<Response> {
-  logInfo(`Attempting to send email to ${toEmail} for user ${userId}.`, { userId, email: toEmail });
+  logInfo(`Attempting to send email to ${toEmail} from ${sender.email} for user ${userId}.`, { userId, email: toEmail, senderEmail: sender.email });
   const subject = 'あなたのパーソナライズドニュース';
   const htmlContent = generateNewsEmail(articles, userId);
 
@@ -83,7 +89,8 @@ export async function sendNewsEmail(
     to: [{ email: toEmail }],
     subject: subject,
     htmlContent: htmlContent,
-    // Brevo の sender や replyTo などの設定が必要であればここに追加
+    sender: sender, // Add sender to params
+    // Brevo の replyTo などの設定が必要であればここに追加
   };
 
   try {
@@ -91,8 +98,8 @@ export async function sendNewsEmail(
       if (response.ok) {
           logInfo(`Email successfully sent to ${toEmail} for user ${userId}.`, { userId, email: toEmail });
       } else {
-          const errorText = await response.text();
-          logError(`Failed to send email to ${toEmail} for user ${userId}: ${response.statusText}`, null, { userId, email: toEmail, status: response.status, statusText: response.statusText, errorText });
+          // Error details are logged in brevoClient.ts, no need to read body again here
+          logError(`Failed to send email to ${toEmail} for user ${userId}: ${response.statusText}`, null, { userId, email: toEmail, status: response.status, statusText: response.statusText });
       }
       return response;
   } catch (error) {
