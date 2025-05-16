@@ -16,6 +16,7 @@ export interface Env {
 	OPENAI_API_KEY?: string; // Add OpenAI API key
 	BREVO_API_KEY?: string; // Assuming BREVO_API_KEY is set as a secret or var
 	BREVO_WEBHOOK_SECRET?: string; // Assuming BREVO_WEBHOOK_SECRET is set as a secret or var
+	SENDER_EMAIL?: string; // Add sender email environment variable
 	// Add other bindings as needed (e.g., R2, Queues)
 }
 
@@ -110,6 +111,9 @@ export default {
 								const scoringPrompt = `以下の記事が、${keywordsPrompt}を0から100のスコアで評価してください。スコアのみを数値で回答してください。記事タイトル: "${article.title}"。記事リンク: "${article.link}"`;
 								const scoreResponse = await generateContent(scoringPrompt, env);
 
+								// Gemini APIのレート制限 (RPM 15) を考慮し、4秒の遅延を挿入
+								await new Promise(resolve => setTimeout(resolve, 4000)); // 4秒 (4000ms) の遅延
+
 								if (scoreResponse) {
 									try {
 										score = parseInt(scoreResponse.trim(), 10);
@@ -198,7 +202,7 @@ export default {
 						continue;
 					}
 					const recipient: EmailRecipient = { email: recipientEmail, name: userProfile.userId }; // Using userId as name for now
-					const sender: EmailRecipient = { email: 'sender@yourdomain.com', name: 'News Bot' }; // TODO: Use your verified SendGrid sender email
+					const sender: EmailRecipient = { email: env.SENDER_EMAIL, name: 'News Bot' }; // Use SENDER_EMAIL from environment variables
 
 					// generateNewsEmail 関数に userId を渡す
 					const htmlEmailContent = generateNewsEmail(selectedArticles, userId);
