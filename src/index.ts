@@ -489,6 +489,25 @@ ${verificationTag}
 		if (request.method === 'GET' && path === '/oauth2callback') {
 			logInfo('OAuth2 callback request received');
 
+			// Google Search Console Site Verification for /oauth2callback
+			const verificationTag = '<meta name="google-site-verification" content="Q-yUAPDtHN2_WhUyR_O409-lecEhNRhUpzUd2Ww9Occ" />';
+			const htmlResponse = `<!DOCTYPE html>
+<html>
+<head>
+<title>Site Verification</title>
+${verificationTag}
+</head>
+<body>
+</body>
+</html>`;
+			// If it's a GET request, return the verification HTML
+			if (request.method === 'GET') {
+				return new Response(htmlResponse, {
+					headers: { 'Content-Type': 'text/html' },
+				});
+			}
+
+
 			const code = url.searchParams.get('code');
 			const state = url.searchParams.get('state'); // Optional: for CSRF protection
 
