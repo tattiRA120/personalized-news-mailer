@@ -211,13 +211,13 @@ export default {
 					// generateNewsEmail 関数に userId を渡す
 					const htmlEmailContent = generateNewsEmail(selectedArticles, userId);
 
-					// Pass the sender object to sendNewsEmail
-					const emailSent = await sendNewsEmail(env.BREVO_API_KEY, recipientEmail, userId, selectedArticles, sender);
+					// Pass the sender object and env to sendNewsEmail (now using Gmail API)
+					const emailResponse = await sendNewsEmail(env, recipientEmail, userId, selectedArticles, sender);
 
-					if (emailSent) {
-						logInfo(`Personalized news email sent to ${recipient.email}`, { userId, email: recipient.email });
+					if (emailResponse.ok) {
+						logInfo(`Personalized news email sent to ${recipient.email} via Gmail API.`, { userId, email: recipient.email });
 					} else {
-						logError(`Failed to send email to ${recipient.email}`, null, { userId, email: recipient.email });
+						logError(`Failed to send email to ${recipient.email} via Gmail API: ${emailResponse.statusText}`, null, { userId, email: recipient.email, status: emailResponse.status, statusText: emailResponse.statusText });
 					}
 
 					// --- Log Sent Articles to Durable Object ---
@@ -286,24 +286,6 @@ export default {
 		const url = new URL(request.url);
 		const path = url.pathname;
 
-		// --- Google Search Console Site Verification ---
-		if (request.method === 'GET' && path === '/') {
-			const verificationTag = '<meta name="google-site-verification" content="Q-yUAPDtHN2_WhUyR_O409-lecEhNRhUpzUd2Ww9Occ" />';
-			const htmlResponse = `<!DOCTYPE html>
-<html>
-<head>
-<title>Site Verification</title>
-${verificationTag}
-</head>
-<body>
-</body>
-</html>`;
-			return new Response(htmlResponse, {
-				headers: { 'Content-Type': 'text/html' },
-			});
-		}
-
-
 		// --- User Registration Handler ---
 		if (request.method === 'POST' && path === '/register') {
 			logInfo('Registration request received');
@@ -344,7 +326,29 @@ ${verificationTag}
 				}
 
 				logInfo(`User registered successfully: ${userId}`, { userId, email });
-				return new Response('User registered', { status: 201 });
+
+				// Generate OAuth consent URL
+				if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) {
+					logError('Missing Google OAuth environment variables for consent URL generation.');
+					return new Response('Server configuration error', { status: 500 });
+				}
+
+				const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+				authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
+				authUrl.searchParams.set('redirect_uri', env.GOOGLE_REDIRECT_URI);
+				authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.send');
+				authUrl.searchParams.set('access_type', 'offline'); // To get a refresh token
+				authUrl.searchParams.set('prompt', 'consent'); // To ensure refresh token is returned
+				authUrl.searchParams.set('response_type', 'code');
+				authUrl.searchParams.set('state', userId); // Include userId in state parameter
+
+				logInfo(`Generated OAuth consent URL for user ${userId}`, { userId, authUrl: authUrl.toString() });
+
+				// Return the consent URL to the user
+				return new Response(JSON.stringify({ message: 'User registered. Please authorize Gmail access.', authUrl: authUrl.toString() }), {
+					status: 201,
+					headers: { 'Content-Type': 'application/json' },
+				});
 
 			} catch (error) {
 				logError('Error during user registration:', error, { requestUrl: request.url });
@@ -489,37 +493,28 @@ ${verificationTag}
 		if (request.method === 'GET' && path === '/oauth2callback') {
 			logInfo('OAuth2 callback request received');
 
-			// Google Search Console Site Verification for /oauth2callback
-			const verificationTag = '<meta name="google-site-verification" content="Q-yUAPDtHN2_WhUyR_O409-lecEhNRhUpzUd2Ww9Occ" />';
-			const htmlResponse = `<!DOCTYPE html>
-<html>
-<head>
-<title>Site Verification</title>
-${verificationTag}
-</head>
-<body>
-</body>
-</html>`;
-			// If it's a GET request, return the verification HTML
-			if (request.method === 'GET') {
-				return new Response(htmlResponse, {
-					headers: { 'Content-Type': 'text/html' },
-				});
-			}
-
-
 			const code = url.searchParams.get('code');
-			const state = url.searchParams.get('state'); // Optional: for CSRF protection
+			const userId = url.searchParams.get('state'); // Get userId from state parameter
+
+			// Handle POST requests for token exchange
+			if (request.method !== 'POST') {
+				return new Response('Method Not Allowed', { status: 405 });
+			}
 
 			if (!code) {
 				logWarning('OAuth2 callback failed: Missing authorization code.');
 				return new Response('Missing authorization code', { status: 400 });
 			}
 
+			if (!userId) {
+				logWarning('OAuth2 callback failed: Missing state parameter (userId).');
+				return new Response('Missing state parameter', { status: 400 });
+			}
+
 			// TODO: Implement state parameter verification for CSRF protection
 
-			if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI) {
-				logError('Missing Google OAuth environment variables.');
+			if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI || !env['mail-news-gmail-tokens']) {
+				logError('Missing Google OAuth environment variables or KV binding.');
 				return new Response('Server configuration error', { status: 500 });
 			}
 
@@ -554,29 +549,14 @@ ${verificationTag}
 					// Depending on the flow, this might be expected if already authorized
 				}
 
-				// TODO: Extract user identifier from the token response (e.g., from ID token if requested)
-				// For now, let's assume we can get the user's email or a unique ID from the access token or a subsequent API call
-				// A common approach is to use the People API or the tokeninfo endpoint
-				// For simplicity in this step, let's assume we have a way to map this authorization to a user ID later.
-				// A more robust solution would involve including a user identifier in the 'state' parameter during the initial authorization request.
-
-				// For now, let's store the refresh token with a placeholder key or require manual mapping
-				// A better approach: require the user to initiate the OAuth flow *after* they have registered,
-				// and include their userId in the state parameter.
-				// Since we don't have that flow yet, let's store it with a generic key for now,
-				// or ask the user how to map this token to a user.
-
-				// Let's ask the user how to associate this token with a user profile.
-				// For now, we'll just indicate success. The actual storage will depend on user feedback.
-				logInfo('Successfully exchanged authorization code for tokens.');
-
-				// TODO: Securely store the refresh token, associated with a user ID.
-				// Example (requires user ID): await env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken);
+				// Securely store the refresh token, associated with the user ID.
+				await env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken);
+				logInfo(`Successfully stored refresh token for user ${userId}.`, { userId });
 
 				return new Response('Authorization successful. You can close this window.', { status: 200 });
 
 			} catch (error) {
-				logError('Error during OAuth2 callback processing:', error, { requestUrl: request.url });
+				logError('Error during OAuth2 callback processing:', error, { userId, requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		}

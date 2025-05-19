@@ -1,7 +1,7 @@
 // src/emailGenerator.ts
-import { logError, logInfo } from './logger'; // Import logging helpers
+import { logError, logInfo } from './logger';
 
-import { sendEmail as sendEmailWithBrevo } from './brevoClient';
+import { sendEmail as sendEmailWithGmail } from './gmailClient';
 
 interface EmailRecipient {
     email: string;
@@ -76,37 +76,37 @@ export function generateNewsEmail(articles: NewsArticle[], userId: string): stri
     }
 }
 
-// Brevo を使用してニュースメールを送信する
+// Gmail API を使用してニュースメールを送信する
 export async function sendNewsEmail(
-  brevoApiKey: string,
+  env: any, // Use any for now to avoid strict type issues with Env interface
   toEmail: string,
   userId: string,
   articles: NewsArticle[],
   sender: EmailRecipient // Add sender as an argument
 ): Promise<Response> {
-  logInfo(`Attempting to send email to ${toEmail} from ${sender.email} for user ${userId}.`, { userId, email: toEmail, senderEmail: sender.email });
+  logInfo(`Attempting to send email to ${toEmail} from ${sender.email} for user ${userId} via Gmail API.`, { userId, email: toEmail, senderEmail: sender.email });
   const subject = 'あなたのパーソナライズドニュース';
   const htmlContent = generateNewsEmail(articles, userId);
 
   const params = {
-    to: [{ email: toEmail }],
+    to: toEmail, // Gmail APIではtoは単一のメールアドレス文字列
     subject: subject,
     htmlContent: htmlContent,
-    sender: sender, // Add sender to params
-    // Brevo の replyTo などの設定が必要であればここに追加
+    from: sender.email, // Gmail APIではfromは認証に使用するGmailアドレス
   };
 
   try {
-      const response = await sendEmailWithBrevo(brevoApiKey, params);
+      // Pass userId and env to the Gmail sendEmail function
+      const response = await sendEmailWithGmail(userId, params, env);
       if (response.ok) {
-          logInfo(`Email successfully sent to ${toEmail} for user ${userId}.`, { userId, email: toEmail });
+          logInfo(`Email successfully sent to ${toEmail} for user ${userId} via Gmail API.`, { userId, email: toEmail });
       } else {
-          // Error details are logged in brevoClient.ts, no need to read body again here
-          logError(`Failed to send email to ${toEmail} for user ${userId}: ${response.statusText}`, null, { userId, email: toEmail, status: response.status, statusText: response.statusText });
+          // Error details are logged in gmailClient.ts
+          logError(`Failed to send email to ${toEmail} for user ${userId} via Gmail API: ${response.statusText}`, null, { userId, email: toEmail, status: response.status, statusText: response.statusText });
       }
       return response;
   } catch (error) {
-      logError(`Exception when sending email to ${toEmail} for user ${userId}:`, error, { userId, email: toEmail });
+      logError(`Exception when sending email to ${toEmail} for user ${userId} via Gmail API:`, error, { userId, email: toEmail });
       // エラーが発生した場合は、エラーを含む Response オブジェクトを生成して返す
       return new Response(`Error sending email: ${error}`, { status: 500 });
   }

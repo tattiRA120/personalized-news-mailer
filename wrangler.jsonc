@@ -20,6 +20,10 @@
 		{
 			"binding": "mail-news-user-profiles",
 			"id": "36b95e68aa684faf98d02edc9ee44eb4" // TODO: Replace with your actual KV Namespace ID
+		},
+		{
+			"binding": "mail-news-gmail-tokens", // Binding name for Gmail refresh tokens
+			"id": "f393b495a80a4d23bd7f2e77450e0027" // TODO: Replace with your actual KV Namespace ID for Gmail tokens
 		}
 	],
 
@@ -48,8 +52,6 @@
 	"vars": {
 		// Note: Use `wrangler secret put <VARIABLE_NAME>` to set these values securely.
 		"GEMINI_API_KEY": "placeholder", // Replace with `wrangler secret put GEMINI_API_KEY`
-		"BREVO_API_KEY": "placeholder", // Replace with `wrangler secret put BREVO_API_KEY`
-		"BREVO_WEBHOOK_SECRET": "placeholder", // Replace with `wrangler secret put BREVO_WEBHOOK_SECRET`
 		"OPENAI_API_KEY": "placeholder", // Replace with `wrangler secret put OPENAI_API_KEY`
 		"SENDER_EMAIL": "placeholder" // Replace with your sender email
 	},
