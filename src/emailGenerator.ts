@@ -39,6 +39,7 @@ export function generateNewsEmail(articles: NewsArticle[], userId: string): stri
         <body>
             <div class="container">
                 <h1>Your Daily News Update</h1>
+                <p>こんにちは！あなたのための最新ニュースをお届けします。</p>
     `;
 
     if (articles.length === 0) {
@@ -52,7 +53,7 @@ export function generateNewsEmail(articles: NewsArticle[], userId: string): stri
             htmlContent += `
                 <div class="article">
                     <h2><a href="${trackingLink}">${article.title}</a></h2>
-                    <!-- <p>${article.summary || ''}</p> -->
+                    <p>${article.summary || ''}</p>
                 </div>
             `;
         });
@@ -60,6 +61,8 @@ export function generateNewsEmail(articles: NewsArticle[], userId: string): stri
     }
 
     htmlContent += `
+                <p>このメールは自動送信されています。</p>
+                <p><a href="#">配信停止はこちら</a> (現在はダミーリンクです)</p>
             </div>
         </body>
         </html>

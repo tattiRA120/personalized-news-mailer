@@ -18,6 +18,10 @@ export interface Env {
 	BREVO_WEBHOOK_SECRET?: string; // Assuming BREVO_WEBHOOK_SECRET is set as a secret or var
 	SENDER_EMAIL?: string; // Add sender email environment variable
 	// Add other bindings as needed (e.g., R2, Queues)
+	GOOGLE_CLIENT_ID?: string; // Add Google Client ID
+	GOOGLE_CLIENT_SECRET?: string; // Add Google Client Secret
+	GOOGLE_REDIRECT_URI?: string; // Add Google Redirect URI
+	'mail-news-gmail-tokens': KVNamespace; // KV Namespace for storing Gmail refresh tokens
 }
 
 interface EmailRecipient {
@@ -96,7 +100,7 @@ export default {
 								const embedding = embeddings[j];
 
 								if (!embedding) {
-									logWarning(`Could not get embedding for article: ${article.title}. Skipping.`, { articleTitle: article.title });
+									logWarning(`Article ${article.link} has invalid or missing embedding. Skipping.`, { articleTitle: article.title, articleLink: article.link });
 									continue; // Skip article if embedding is missing in batch result
 								}
 
@@ -202,7 +206,7 @@ export default {
 						continue;
 					}
 					const recipient: EmailRecipient = { email: recipientEmail, name: userProfile.userId }; // Using userId as name for now
-					const sender: EmailRecipient = { email: env.SENDER_EMAIL, name: 'News Bot' }; // Use SENDER_EMAIL from environment variables
+					const sender: EmailRecipient = { email: env.SENDER_EMAIL, name: 'Mailify News' }; // Use SENDER_EMAIL from environment variables
 
 					// generateNewsEmail 関数に userId を渡す
 					const htmlEmailContent = generateNewsEmail(selectedArticles, userId);
@@ -281,6 +285,24 @@ export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
 		const url = new URL(request.url);
 		const path = url.pathname;
+
+		// --- Google Search Console Site Verification ---
+		if (request.method === 'GET' && path === '/') {
+			const verificationTag = '<meta name="google-site-verification" content="Q-yUAPDtHN2_WhUyR_O409-lecEhNRhUpzUd2Ww9Occ" />';
+			const htmlResponse = `<!DOCTYPE html>
+<html>
+<head>
+<title>Site Verification</title>
+${verificationTag}
+</head>
+<body>
+</body>
+</html>`;
+			return new Response(htmlResponse, {
+				headers: { 'Content-Type': 'text/html' },
+			});
+		}
+
 
 		// --- User Registration Handler ---
 		if (request.method === 'POST' && path === '/register') {
@@ -462,6 +484,84 @@ export default {
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		}
+
+		// --- OAuth2 Callback Handler ---
+		if (request.method === 'GET' && path === '/oauth2callback') {
+			logInfo('OAuth2 callback request received');
+
+			const code = url.searchParams.get('code');
+			const state = url.searchParams.get('state'); // Optional: for CSRF protection
+
+			if (!code) {
+				logWarning('OAuth2 callback failed: Missing authorization code.');
+				return new Response('Missing authorization code', { status: 400 });
+			}
+
+			// TODO: Implement state parameter verification for CSRF protection
+
+			if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI) {
+				logError('Missing Google OAuth environment variables.');
+				return new Response('Server configuration error', { status: 500 });
+			}
+
+			try {
+				// Exchange authorization code for tokens
+				const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/x-www-form-urlencoded',
+					},
+					body: new URLSearchParams({
+						code: code,
+						client_id: env.GOOGLE_CLIENT_ID,
+						client_secret: env.GOOGLE_CLIENT_SECRET,
+						redirect_uri: env.GOOGLE_REDIRECT_URI,
+						grant_type: 'authorization_code',
+					}).toString(),
+				});
+
+				if (!tokenResponse.ok) {
+					const errorText = await tokenResponse.text();
+					logError(`Failed to exchange authorization code for tokens: ${tokenResponse.statusText}`, null, { status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
+					return new Response(`Error exchanging code: ${tokenResponse.statusText}`, { status: tokenResponse.status });
+				}
+
+				const tokenData: any = await tokenResponse.json();
+				const accessToken = tokenData.access_token;
+				const refreshToken = tokenData.refresh_token; // This will only be returned on the first exchange with access_type=offline
+
+				if (!refreshToken) {
+					logWarning('No refresh token received. Ensure access_type=offline was requested and this is the first authorization.');
+					// Depending on the flow, this might be expected if already authorized
+				}
+
+				// TODO: Extract user identifier from the token response (e.g., from ID token if requested)
+				// For now, let's assume we can get the user's email or a unique ID from the access token or a subsequent API call
+				// A common approach is to use the People API or the tokeninfo endpoint
+				// For simplicity in this step, let's assume we have a way to map this authorization to a user ID later.
+				// A more robust solution would involve including a user identifier in the 'state' parameter during the initial authorization request.
+
+				// For now, let's store the refresh token with a placeholder key or require manual mapping
+				// A better approach: require the user to initiate the OAuth flow *after* they have registered,
+				// and include their userId in the state parameter.
+				// Since we don't have that flow yet, let's store it with a generic key for now,
+				// or ask the user how to map this token to a user.
+
+				// Let's ask the user how to associate this token with a user profile.
+				// For now, we'll just indicate success. The actual storage will depend on user feedback.
+				logInfo('Successfully exchanged authorization code for tokens.');
+
+				// TODO: Securely store the refresh token, associated with a user ID.
+				// Example (requires user ID): await env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken);
+
+				return new Response('Authorization successful. You can close this window.', { status: 200 });
+
+			} catch (error) {
+				logError('Error during OAuth2 callback processing:', error, { requestUrl: request.url });
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
 
 		// Handle other requests or return a default response
 		return new Response('Not Found', { status: 404 });
