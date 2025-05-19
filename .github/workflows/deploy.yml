@@ -22,37 +22,37 @@ jobs:
 
       # Add steps to set Workers Secrets using wrangler secret put
       - name: Set GEMINI_API_KEY Secret
-        run: echo "${{ secrets.GEMINI_API_KEY }}" | wrangler secret put GEMINI_API_KEY
+        run: echo "${{ secrets.GEMINI_API_KEY }}" | npx wrangler secret put GEMINI_API_KEY
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Set OPENAI_API_KEY Secret
-        run: echo "${{ secrets.OPENAI_API_KEY }}" | wrangler secret put OPENAI_API_KEY
+        run: echo "${{ secrets.OPENAI_API_KEY }}" | npx wrangler secret put OPENAI_API_KEY
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Set GOOGLE_CLIENT_ID Secret
-        run: echo "${{ secrets.GOOGLE_CLIENT_ID }}" | wrangler secret put GOOGLE_CLIENT_ID
+        run: echo "${{ secrets.GOOGLE_CLIENT_ID }}" | npx wrangler secret put GOOGLE_CLIENT_ID
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Set GOOGLE_REDIRECT_URI Secret
-        run: echo "${{ secrets.GOOGLE_REDIRECT_URI }}" | wrangler secret put GOOGLE_REDIRECT_URI
+        run: echo "${{ secrets.GOOGLE_REDIRECT_URI }}" | npx wrangler secret put GOOGLE_REDIRECT_URI
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Set GOOGLE_CLIENT_SECRET Secret
-        run: echo "${{ secrets.GOOGLE_CLIENT_SECRET }}" | wrangler secret put GOOGLE_CLIENT_SECRET
+        run: echo "${{ secrets.GOOGLE_CLIENT_SECRET }}" | npx wrangler secret put GOOGLE_CLIENT_SECRET
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Set SENDER_EMAIL Secret
-        run: echo "${{ secrets.SENDER_EMAIL }}" | wrangler secret put SENDER_EMAIL
+        run: echo "${{ secrets.SENDER_EMAIL }}" | npx wrangler secret put SENDER_EMAIL
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -61,9 +61,10 @@ jobs:
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }} # wrangler.jsoncにaccount_idがないため追加
           wranglerVersion: 'latest' # 最新のWranglerを使用
-          # プロジェクト名はwrangler.jsoncで指定済みのため不要
+          # プロジェクト名が必要な場合は追加 (wrangler.jsoncで指定済みのため不要)
+          # name: your-worker-name
         # Remove env block as secrets are now set directly
         # env:
         #   GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
