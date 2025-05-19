@@ -46,19 +46,6 @@
 	],
 
 	/**
-	 * Environment Variables
-	 * https://developers.cloudflare.com/workers/wrangler/configuration/#environment-variables
-	 */
-	"vars": {
-		// Note: Use `wrangler secret put <VARIABLE_NAME>` to set these values securely.
-		"GEMINI_API_KEY": "placeholder", // Replace with `wrangler secret put GEMINI_API_KEY`
-		"OPENAI_API_KEY": "placeholder", // Replace with `wrangler secret put OPENAI_API_KEY`
-		"GOOGLE_CLIENT_ID": "placeholder", // Replace with `wrangler secret put GOOGLE_CLIENT_ID`
-		"GOOGLE_REDIRECT_URI": "placeholder", // Replace with `wrangler secret put GOOGLE_REDIRECT_URI`
-		"GOOGLE_CLIENT_SECRET": "placeholder"
-	},
-
-	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
 	 */

@@ -20,49 +20,6 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      # Remove steps to delete existing Variables
-      #- name: Delete GEMINI_API_KEY Variable
-      #  run: npx wrangler vars delete GEMINI_API_KEY
-      #  env:
-      #    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      #    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      #  continue-on-error: true # Continue if variable doesn't exist
-
-      #- name: Delete OPENAI_API_KEY Variable
-      #  run: npx wrangler vars delete OPENAI_API_KEY
-      #  env:
-      #    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      #    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      #  continue-on-error: true # Continue if variable doesn't exist
-
-      #- name: Delete GOOGLE_CLIENT_ID Variable
-      #  run: npx wrangler vars delete GOOGLE_CLIENT_ID
-      #  env:
-      #    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      #    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      #  continue-on-error: true # Continue if variable doesn't exist
-
-      #- name: Delete GOOGLE_REDIRECT_URI Variable
-      #  run: npx wrangler vars delete GOOGLE_REDIRECT_URI
-      #  env:
-      #    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      #    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      #  continue-on-error: true # Continue if variable doesn't exist
-
-      #- name: Delete GOOGLE_CLIENT_SECRET Variable
-      #  run: npx wrangler vars delete GOOGLE_CLIENT_SECRET
-      #  env:
-      #    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      #    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      #  continue-on-error: true # Continue if variable doesn't exist
-
-      #- name: Delete SENDER_EMAIL Variable
-      #  run: npx wrangler vars delete SENDER_EMAIL
-      #  env:
-      #    CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      #    CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      #  continue-on-error: true # Continue if variable doesn't exist
-
       # Add steps to set Workers Secrets using wrangler secret put
       - name: Set GEMINI_API_KEY Secret
         run: echo "${{ secrets.GEMINI_API_KEY }}" | npx wrangler secret put GEMINI_API_KEY
