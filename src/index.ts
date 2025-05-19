@@ -496,11 +496,6 @@ export default {
 			const code = url.searchParams.get('code');
 			const userId = url.searchParams.get('state'); // Get userId from state parameter
 
-			// Handle POST requests for token exchange
-			if (request.method !== 'POST') {
-				return new Response('Method Not Allowed', { status: 405 });
-			}
-
 			if (!code) {
 				logWarning('OAuth2 callback failed: Missing authorization code.');
 				return new Response('Missing authorization code', { status: 400 });
