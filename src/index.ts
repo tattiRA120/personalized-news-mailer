@@ -280,6 +280,32 @@ export default {
 		const url = new URL(request.url);
 		const path = url.pathname;
 
+		// --- Static File Server ---
+		if (path.startsWith('/public/')) {
+			const filePath = path.replace('/public/', '');
+			const file = await fetch(new URL(`./public/${filePath}`, request.url));
+
+			if (file.ok) {
+				// Determine content type based on file extension
+				let contentType = 'application/octet-stream';
+				if (filePath.endsWith('.html')) {
+					contentType = 'text/html';
+				} else if (filePath.endsWith('.css')) {
+					contentType = 'text/css';
+				} else if (filePath.endsWith('.js')) {
+					contentType = 'application/javascript';
+				}
+				// Add other types as needed
+
+				return new Response(file.body, {
+					headers: { 'Content-Type': contentType },
+				});
+			} else {
+				// File not found
+				return new Response('Not Found', { status: 404 });
+			}
+		}
+
 		// --- User Registration Handler ---
 		if (request.method === 'POST' && path === '/register') {
 			logInfo('Registration request received');
