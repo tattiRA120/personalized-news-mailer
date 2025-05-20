@@ -281,30 +281,29 @@ export default {
 		const path = url.pathname;
 
 		// --- Static File Server ---
+		// Use env.ASSETS to serve static files from the 'public' directory
+		// The ASSETS binding is automatically configured by Wrangler for static deployments
 		if (path.startsWith('/public/')) {
-			const filePath = path.replace('/public/', '');
-			const file = await fetch(new URL(`./public/${filePath}`, request.url));
+			// Remove the leading '/public' to get the asset path
+			const assetPath = path.replace('/public', '');
+			// Fetch the asset using the ASSETS binding
+			const response = await env.ASSETS.fetch(new Request(new URL(assetPath, request.url)));
 
-			if (file.ok) {
-				// Determine content type based on file extension
-				let contentType = 'application/octet-stream';
-				if (filePath.endsWith('.html')) {
-					contentType = 'text/html';
-				} else if (filePath.endsWith('.css')) {
-					contentType = 'text/css';
-				} else if (filePath.endsWith('.js')) {
-					contentType = 'application/javascript';
+			if (response.status === 404) {
+				// If the specific asset is not found, try serving index.html for the root of /public/
+				if (assetPath === '/') {
+					const indexHtmlResponse = await env.ASSETS.fetch(new Request(new URL('/index.html', request.url)));
+					if (indexHtmlResponse.ok) {
+						return indexHtmlResponse;
+					}
 				}
-				// Add other types as needed
-
-				return new Response(file.body, {
-					headers: { 'Content-Type': contentType },
-				});
-			} else {
-				// File not found
+				// If index.html is also not found or it wasn't the root request, return 404
 				return new Response('Not Found', { status: 404 });
 			}
+
+			return response;
 		}
+
 
 		// --- User Registration Handler ---
 		if (request.method === 'POST' && path === '/register') {
