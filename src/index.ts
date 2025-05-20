@@ -13,10 +13,7 @@ export interface Env {
 	'mail-news-user-profiles': KVNamespace; // KV Namespace binding name from wrangler.jsonc
 	CLICK_LOGGER: DurableObjectNamespace;
 	GEMINI_API_KEY?: string; // Assuming GEMINI_API_KEY is set as a secret or var (for scoring)
-	OPENAI_API_KEY?: string; // Add OpenAI API key
-	BREVO_API_KEY?: string; // Assuming BREVO_API_KEY is set as a secret or var
-	BREVO_WEBHOOK_SECRET?: string; // Assuming BREVO_WEBHOOK_SECRET is set as a secret or var
-	SENDER_EMAIL?: string; // Add sender email environment variable
+	OPENAI_API_KEY?: string; // Import OpenAI embeddings client
 	// Add other bindings as needed (e.g., R2, Queues)
 	GOOGLE_CLIENT_ID?: string; // Add Google Client ID
 	GOOGLE_CLIENT_SECRET?: string; // Add Google Client Secret
@@ -205,8 +202,8 @@ export default {
 						logError(`User profile for ${userId} does not contain an email address. Skipping email sending.`, null, { userId });
 						continue;
 					}
-					const recipient: EmailRecipient = { email: recipientEmail, name: userProfile.userId }; // Using userId as name for now
-					const sender: EmailRecipient = { email: env.SENDER_EMAIL, name: 'Mailify News' }; // Use SENDER_EMAIL from environment variables
+					const recipient: EmailRecipient = { email: recipientEmail, name: userProfile.userId }; // Use actual user email from profile
+					const sender: EmailRecipient = { email: recipientEmail, name: 'Mailify News' }; // Use recipient email as sender for Gmail API
 
 					// generateNewsEmail 関数に userId を渡す
 					const htmlEmailContent = generateNewsEmail(selectedArticles, userId);
