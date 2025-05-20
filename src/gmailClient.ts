@@ -62,15 +62,46 @@ async function refreshAccessToken(userId: string, env: Env): Promise<string | nu
     }
 }
 
-// Base64url エンコード関数
+// Base64url エンコード関数 (UTF-8対応)
 function base64urlEncode(str: string): string {
-  return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const encoder = new TextEncoder();
+  const data = encoder.encode(str); // UTF-8 バイト列を取得
+
+  const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let result = '';
+  let i = 0;
+  const bytes = new Uint8Array(data);
+  const len = bytes.byteLength;
+  while (i < len) {
+    const byte1 = bytes[i++];
+    const byte2 = bytes[i++];
+    const byte3 = bytes[i++];
+
+    const enc1 = byte1 >> 2;
+    const enc2 = ((byte1 & 3) << 4) | (byte2 >> 4);
+    let enc3 = ((byte2 & 15) << 2) | (byte3 >> 6);
+    let enc4 = byte3 & 63;
+
+    if (isNaN(byte2)) {
+      enc3 = enc4 = 64;
+    } else if (isNaN(byte3)) {
+      enc4 = 64;
+    }
+
+    result += base64Chars[enc1] + base64Chars[enc2] + base64Chars[enc3] + base64Chars[enc4];
+  }
+
+  // Base64url 形式に変換
+  return result.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
+
 
 // Gmail API を使用してメールを送信する関数
 export async function sendEmail(userId: string, params: SendEmailParams, env: Env): Promise<Response> {
   logInfo(`Attempting to send email for user ${userId} via Gmail API.`, { userId, emailParams: params });
-  const GMAIL_API_URL = 'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media';
+  // Gmail API の messages.send エンドポイント (uploadType=media は MIME メッセージを直接アップロードする場合に使用)
+  // raw メッセージを送信する場合は、uploadType=media は不要で、リクエストボディに Message リソースを含める
+  const GMAIL_API_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 
   try {
     // リフレッシュトークンを使用してアクセストークンを取得
@@ -82,25 +113,30 @@ export async function sendEmail(userId: string, params: SendEmailParams, env: En
     }
 
     // MIME形式のメール本文を作成
-    const rawEmail = [
+    const rawEmailContent = [
       `From: ${params.from}`,
       `To: ${params.to}`,
-      `Subject: =?utf-8?B?${base64urlEncode(params.subject)}?=`, // 件名をBase64エンコード
+      `Subject: =?utf-8?B?${base64urlEncode(params.subject)}?=`, // 件名をBase64エンコード (MIMEエンコード)
       'MIME-Version: 1.0',
       'Content-Type: text/html; charset="UTF-8"',
-      'Content-Transfer-Encoding: base64',
+      'Content-Transfer-Encoding: base64', // HTML本文はBase64エンコードされることを示す
       '',
       base64urlEncode(params.htmlContent), // HTML本文をBase64エンコード
     ].join('\n');
 
-    // Gmail API にメールを送信
+    // MIME形式のメール本文全体を Base64url エンコード
+    const base64UrlRawEmail = base64urlEncode(rawEmailContent);
+
+    // Gmail API にメールを送信 (Message リソースとして raw フィールドに Base64url エンコードされた MIME メッセージを含める)
     const sendResponse = await fetch(GMAIL_API_URL, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'message/rfc822', // MIME形式のメール本文を送信
+        'Content-Type': 'application/json', // リクエストボディは JSON
       },
-      body: rawEmail,
+      body: JSON.stringify({
+          raw: base64UrlRawEmail // Base64url エンコードされた MIME メッセージ
+      }),
     });
 
     if (!sendResponse.ok) {
