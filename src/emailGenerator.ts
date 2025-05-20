@@ -48,7 +48,8 @@ export function generateNewsEmail(articles: NewsArticle[], userId: string): stri
     } else {
         articles.forEach(article => {
             // クリックトラッキング用の情報を記事リンクに追加
-            const trackingLink = `${article.link}?userId=${userId}&articleId=${encodeURIComponent(article.link)}`;
+            // 新しい /track-click エンドポイントを使用
+            const trackingLink = `/track-click?userId=${userId}&articleId=${encodeURIComponent(article.link)}&redirectUrl=${encodeURIComponent(article.link)}`;
 
             htmlContent += `
                 <div class="article">

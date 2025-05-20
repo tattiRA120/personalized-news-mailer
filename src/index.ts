@@ -151,9 +151,6 @@ export default {
 							// Process the current batch
 							await processBatch(currentBatchTexts, currentBatchArticles);
 
-							// Process the current batch
-							await processBatch(currentBatchTexts, currentBatchArticles);
-
 							// Start a new batch
 							currentBatchTexts = [];
 							currentBatchArticles = [];
@@ -349,6 +346,46 @@ export default {
 
 			} catch (error) {
 				logError('Error during user registration:', error, { requestUrl: request.url });
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
+		// --- Click Tracking Handler ---
+		if (request.method === 'GET' && path === '/track-click') {
+			logInfo('Click tracking request received');
+			const userId = url.searchParams.get('userId');
+			const articleId = url.searchParams.get('articleId');
+			const redirectUrl = url.searchParams.get('redirectUrl');
+
+			if (!userId || !articleId || !redirectUrl) {
+				logWarning('Click tracking failed: Missing userId, articleId, or redirectUrl.');
+				return new Response('Missing parameters', { status: 400 });
+			}
+
+			try {
+				// Get the Durable Object for this user
+				const clickLoggerId = env.CLICK_LOGGER.idFromName(userId);
+				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+				// Send a request to the Durable Object to log the click
+				// Use a relative path for the Durable Object fetch
+				const logClickResponse = await clickLogger.fetch(new Request('http://dummy-host/log-click', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ userId, articleId, timestamp: Date.now() }),
+				}));
+
+				if (logClickResponse.ok) {
+					logInfo(`Click logged successfully for user ${userId}, article ${articleId}`, { userId, articleId });
+				} else {
+					logError(`Failed to log click for user ${userId}, article ${articleId}: ${logClickResponse.statusText}`, null, { userId, articleId, status: logClickResponse.status, statusText: logClickResponse.statusText });
+				}
+
+				// Redirect the user to the original article URL
+				return Response.redirect(redirectUrl, 302);
+
+			} catch (error) {
+				logError('Error during click tracking:', error, { userId, articleId, redirectUrl, requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		}
@@ -549,6 +586,111 @@ export default {
 
 			} catch (error) {
 				logError('Error during OAuth2 callback processing:', error, { userId, requestUrl: request.url });
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
+		// --- Get Articles for Education Handler ---
+		if (request.method === 'GET' && path === '/get-articles-for-education') {
+			logInfo('Request received for articles for education');
+			try {
+				const articles = await collectNews();
+				logInfo(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
+
+				// 記事のタイトル、リンク、サマリーのみを返す（必要に応じて他の情報も追加）
+				const simplifiedArticles = articles.map(article => ({
+					articleId: article.link, // 記事IDとしてリンクを使用
+					title: article.title,
+					summary: article.summary,
+					// link: article.link, // 必要であれば追加
+				}));
+
+				return new Response(JSON.stringify(simplifiedArticles), {
+					headers: { 'Content-Type': 'application/json' },
+					status: 200,
+				});
+
+			} catch (error) {
+				logError('Error fetching articles for education:', error, { requestUrl: request.url });
+				return new Response('Error fetching articles', { status: 500 });
+			}
+		}
+
+		// --- Submit Interests Handler ---
+		if (request.method === 'POST' && path === '/submit-interests') {
+			logInfo('Submit interests request received');
+			try {
+				const { userId, selectedArticleIds } = await request.json();
+
+				if (!userId || !Array.isArray(selectedArticleIds)) {
+					logWarning('Submit interests failed: Missing userId or selectedArticleIds in request body.');
+					return new Response('Missing parameters', { status: 400 });
+				}
+
+				// Get user profile from KV
+				// Pass the correct KV binding to userProfile functions
+				const userProfile = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+
+				if (!userProfile) {
+					logWarning(`Submit interests failed: User profile not found for ${userId}.`, { userId });
+					return new Response('User not found', { status: 404 });
+				}
+
+				// Update user profile with selected article IDs
+				// 既存の興味関心データがあればそれに追加
+				if (userProfile.interests) {
+					userProfile.interests.push(...selectedArticleIds);
+					// 重複を排除
+					userProfile.interests = [...new Set(userProfile.interests)];
+				} else {
+					userProfile.interests = selectedArticleIds;
+				}
+
+				// Save updated user profile to KV
+				// Pass the correct KV binding to userProfile functions
+				await updateUserProfile(userProfile, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+
+				logInfo(`User interests updated successfully for user ${userId}.`, { userId, selectedArticleIds });
+
+				// --- Learn from User Education (Send to Durable Object) ---
+				logInfo(`Learning from user education for user ${userId}...`, { userId });
+
+				// 記事リストを再度取得してembeddingを抽出
+				const allArticles = await collectNews();
+				const selectedArticlesWithEmbeddings = allArticles
+					.filter(article => selectedArticleIds.includes(article.link) && article.embedding !== undefined)
+					.map(article => ({ articleId: article.link, embedding: article.embedding! }));
+
+				if (selectedArticlesWithEmbeddings.length > 0) {
+					// Get the Durable Object for this user
+					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId);
+					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+					// Send a request to the Durable Object to learn from selected articles
+					// Use a relative path for the Durable Object fetch
+					const learnResponse = await clickLogger.fetch(new Request('http://dummy-host/learn-from-education', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ selectedArticles: selectedArticlesWithEmbeddings }),
+					}));
+
+					if (learnResponse.ok) {
+						logInfo(`Successfully sent selected articles for learning to ClickLogger for user ${userId}.`, { userId, selectedCount: selectedArticlesWithEmbeddings.length });
+					} else {
+						logError(`Failed to send selected articles for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, status: learnResponse.status, statusText: learnResponse.statusText });
+					}
+				} else {
+					logWarning(`No selected articles with embeddings to send for learning for user ${userId}.`, { userId });
+				}
+
+
+				return new Response(JSON.stringify({ message: '興味関心が更新されました。' }), {
+					headers: { 'Content-Type': 'application/json' },
+					status: 200,
+				});
+
+			} catch (error) {
+				logError('Error submitting interests:', error, { requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		}

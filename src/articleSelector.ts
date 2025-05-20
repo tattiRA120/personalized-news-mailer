@@ -88,21 +88,52 @@ export async function selectPersonalizedArticles(
 
 
     // 記事にUCB値をマッピングし、最終的な関連度スコアを計算
+    // ユーザーの興味関心データ（選択された記事のembedding）を取得
+    // userProfile.interests には選択された記事の articleId (ここではリンク) が格納されている
+    const interestedArticleLinks = userProfile.interests || [];
+    const interestedArticles = articles.filter(article => interestedArticleLinks.includes(article.link));
+
+    // 興味関心のある記事のembeddingの平均ベクトルを計算
+    let averageInterestedEmbedding: number[] | null = null;
+    if (interestedArticles.length > 0) {
+        const dimension = interestedArticles[0].embedding?.length || 0;
+        if (dimension > 0) {
+            averageInterestedEmbedding = Array(dimension).fill(0);
+            for (const article of interestedArticles) {
+                if (article.embedding && article.embedding.length === dimension) {
+                    for (let i = 0; i < dimension; i++) {
+                        averageInterestedEmbedding[i] += article.embedding[i];
+                    }
+                }
+            }
+            for (let i = 0; i < dimension; i++) {
+                averageInterestedEmbedding[i] /= interestedArticles.length;
+            }
+        }
+    }
+
     const articlesWithFinalScore = articles.map(article => {
         const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.link); // articleId は link と仮定
         const ucb = ucbInfo ? ucbInfo.ucb : 0; // UCB値がない場合は0とする
 
+        // ユーザーの興味関心との関連度を計算 (コサイン類似度を使用)
+        let interestRelevance = 0;
+        if (averageInterestedEmbedding && article.embedding) {
+            interestRelevance = cosineSimilarity(averageInterestedEmbedding, article.embedding);
+        }
+
         // 最終的な関連度スコアを計算
-        // 重み付け線形和で score と ucb を組み合わせます。
+        // 興味関心との関連度と UCB 値を組み合わせます。
         // TODO: これらの重みは調整可能なハイパーパラメータとすることができます。
-        const scoreWeight = 1.0;
+        const interestWeight = 1.0;
         const ucbWeight = 0.5;
-        const finalScore = (article.score || 0) * scoreWeight + ucb * ucbWeight;
+        const finalScore = interestRelevance * interestWeight + ucb * ucbWeight;
 
         return {
             ...article,
             ucb: ucb, // UCB値も保持
             finalScore: finalScore, // 最終スコアを保持
+            interestRelevance: interestRelevance, // 興味関心との関連度も保持（デバッグ用など）
         };
     });
 
@@ -118,7 +149,7 @@ export async function selectPersonalizedArticles(
     const firstArticle = remaining.shift();
     if (firstArticle) {
         selected.push(firstArticle);
-        logInfo(`Selected first article: "${firstArticle.title}"`, { userId: userProfile.userId, articleTitle: firstArticle.title });
+        logInfo(`Selected first article: "${firstArticle.title}" (Final Score: ${firstArticle.finalScore})`, { userId: userProfile.userId, articleTitle: firstArticle.title, finalScore: firstArticle.finalScore });
     }
 
     // 残りからMMRに基づいて記事を選択
@@ -140,8 +171,8 @@ export async function selectPersonalizedArticles(
             }
 
             // MMR スコアの計算: lambda * Relevance - (1 - lambda) * Similarity
-            // Relevance は (score + ucb) を使用
-            const relevance = (currentArticle.score || 0) + (currentArticle.ucb || 0);
+            // Relevance は finalScore を使用
+            const relevance = currentArticle.finalScore || 0;
             const mmrScore = lambda * relevance - (1 - lambda) * maxSimilarityWithSelected;
 
             if (mmrScore > bestMMRScore) {
@@ -153,7 +184,7 @@ export async function selectPersonalizedArticles(
         if (bestArticleIndex !== -1) {
             const [nextArticle] = remaining.splice(bestArticleIndex, 1);
             selected.push(nextArticle);
-            logInfo(`Selected article "${nextArticle.title}" using MMR.`, { userId: userProfile.userId, articleTitle: nextArticle.title, mmrScore: bestMMRScore });
+            logInfo(`Selected article "${nextArticle.title}" using MMR (MMR Score: ${bestMMRScore}).`, { userId: userProfile.userId, articleTitle: nextArticle.title, mmrScore: bestMMRScore });
         } else {
             // 適切な記事が見つからなかった場合（例: 全ての記事のembeddingがないなど）
             logWarning("Could not find a suitable article using MMR. Stopping selection.", { userId: userProfile.userId, selectedCount: selected.length, remainingCount: remaining.length });

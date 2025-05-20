@@ -1,0 +1,120 @@
+document.addEventListener('DOMContentLoaded', () => {
+    const articlesListDiv = document.getElementById('articles-list');
+    const submitButton = document.getElementById('submit-button');
+    const messageElement = document.getElementById('message');
+
+    // URLからユーザーIDを取得
+    const urlParams = new URLSearchParams(window.location.search);
+    const userId = urlParams.get('userId');
+
+    if (!userId) {
+        articlesListDiv.innerHTML = '<p class="error">ユーザーIDが見つかりません。正しいリンクからアクセスしてください。</p>';
+        submitButton.disabled = true;
+        return;
+    }
+
+    // 記事リストを取得する関数
+    async function fetchArticlesForEducation() {
+        try {
+            // Workerの新しいエンドポイントから記事リストを取得
+            // TODO: エンドポイントのURLを適切に設定する
+            const response = await fetch('/get-articles-for-education');
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const articles = await response.json();
+            displayArticles(articles);
+            submitButton.disabled = false; // 記事が読み込まれたらボタンを有効化
+        } catch (error) {
+            console.error('Error fetching articles:', error);
+            articlesListDiv.innerHTML = '<p class="error">記事の読み込みに失敗しました。</p>';
+            messageElement.textContent = '記事の読み込みに失敗しました。';
+            messageElement.className = 'error';
+        }
+    }
+
+    // 記事リストをHTMLに表示する関数
+    function displayArticles(articles) {
+        articlesListDiv.innerHTML = ''; // 既存のコンテンツをクリア
+        if (articles.length === 0) {
+            articlesListDiv.innerHTML = '<p>表示できる記事がありません。</p>';
+            return;
+        }
+
+        articles.forEach(article => {
+            const articleItem = document.createElement('div');
+            articleItem.className = 'article-item';
+
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.value = article.articleId; // 記事IDとしてリンクを使用
+            checkbox.id = `article-${article.articleId}`; // 一意なIDを設定
+
+            const articleContent = document.createElement('div');
+            articleContent.className = 'article-content';
+
+            const title = document.createElement('h3');
+            title.textContent = article.title;
+
+            const summary = document.createElement('p');
+            summary.textContent = article.summary || '';
+
+            articleContent.appendChild(title);
+            articleContent.appendChild(summary);
+
+            articleItem.appendChild(checkbox);
+            articleItem.appendChild(articleContent);
+
+            articlesListDiv.appendChild(articleItem);
+        });
+    }
+
+    // 選択された記事をWorkerに送信する関数
+    async function submitSelectedArticles() {
+        const selectedArticleIds = [];
+        articlesListDiv.querySelectorAll('input[type="checkbox"]:checked').forEach(checkbox => {
+            selectedArticleIds.push(checkbox.value);
+        });
+
+        if (selectedArticleIds.length === 0) {
+            messageElement.textContent = '記事を選択してください。';
+            messageElement.className = 'error';
+            return;
+        }
+
+        try {
+            // Workerの新しいエンドポイントに選択結果を送信
+            // TODO: エンドポイントのURLを適切に設定する
+            const response = await fetch('/submit-interests', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    userId: userId,
+                    selectedArticleIds: selectedArticleIds,
+                }),
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                messageElement.textContent = result.message || '選択結果が送信されました。';
+                messageElement.className = ''; // 成功時はエラークラスを削除
+                submitButton.disabled = true; // 送信後はボタンを無効化
+            } else {
+                throw new Error(result.message || `HTTP error! status: ${response.status}`);
+            }
+        } catch (error) {
+            console.error('Error submitting selected articles:', error);
+            messageElement.textContent = `送信に失敗しました: ${error.message}`;
+            messageElement.className = 'error';
+        }
+    }
+
+    // 送信ボタンのイベントリスナー
+    submitButton.addEventListener('click', submitSelectedArticles);
+
+    // ページロード時に記事リストを取得
+    fetchArticlesForEducation();
+});

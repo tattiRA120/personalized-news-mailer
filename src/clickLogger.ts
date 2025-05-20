@@ -209,39 +209,44 @@ export class ClickLogger implements DurableObject {
             sentArticles: { articleId: string, timestamp: number, embedding: number[] }[];
         }
 
+        // /log-click エンドポイントのリクエストボディの型定義
+        interface LogClickRequestBody {
+            articleId: string;
+            timestamp: number;
+            embedding: number[];
+            reward: number;
+        }
+
 
         if (request.method === 'POST' && path === '/log-click') {
             try {
-                const clickEvent: ClickEvent = await request.json();
-                // Validate clickEvent data if necessary
+                // リクエストボディからクリック情報を取得
+                const { articleId, timestamp, embedding, reward } = await request.json() as LogClickRequestBody;
 
-                // Store the click event
-                const timestamp = Date.now();
-                const eventKey = `click:${timestamp}:${clickEvent.articleId}`; // Example key format
-                await this.state.storage.put(eventKey, clickEvent);
+                if (!articleId || timestamp === undefined || embedding === undefined || reward === undefined) {
+                    logWarning('Log click failed: Missing articleId, timestamp, embedding, or reward in request body.');
+                    return new Response('Missing parameters', { status: 400 });
+                }
 
-                logInfo(`Logged click for article ${clickEvent.articleId} at ${timestamp}`);
+                // クリックイベントをストレージに保存
+                const eventKey = `click:${this.state.id.toString()}:${articleId}:${timestamp}`; // キーフォーマット例
+                await this.state.storage.put(eventKey, { articleId, timestamp, embedding, reward });
+
+                logInfo(`Logged click for user ${this.state.id.toString()}, article ${articleId} at ${timestamp}`);
 
                 // クリックイベントに基づいてバンディットモデルを更新
-                if (this.banditModel && clickEvent.embedding && clickEvent.reward !== undefined) {
-                    this.updateBanditModel(clickEvent.embedding, clickEvent.reward); // 報酬を使用
+                if (this.banditModel && embedding && reward !== undefined) {
+                    this.updateBanditModel(embedding, reward);
                     await this.saveBanditModel();
-                    logInfo(`Updated bandit model for user ${this.state.id.toString()} with click on ${clickEvent.articleId} and reward ${clickEvent.reward}`);
-                } else if (this.banditModel && clickEvent.embedding) {
-                     // reward が指定されていない場合はデフォルト報酬 (例: 1.0) を使用
-                    this.updateBanditModel(clickEvent.embedding, 1.0);
-                    await this.saveBanditModel();
-                    logInfo(`Updated bandit model for user ${this.state.id.toString()} with click on ${clickEvent.articleId} and default reward 1.0`);
+                    logInfo(`Updated bandit model for user ${this.state.id.toString()} with click on ${articleId} and reward ${reward}`);
+                } else {
+                    logWarning(`Cannot update bandit model for user ${this.state.id.toString()}: model not initialized, embedding missing, or reward undefined.`);
                 }
-                 else {
-                    logWarning(`Cannot update bandit model: model not initialized or embedding missing for article ${clickEvent.articleId}`);
-                }
-
 
                 return new Response('Click logged', { status: 200 });
 
             } catch (error) {
-                logError('Error logging click:', error);
+                logError('Error logging click:', error, { userId: this.state.id.toString(), requestUrl: request.url });
                 return new Response('Error logging click', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/get-ucb-values') {
@@ -356,6 +361,47 @@ export class ClickLogger implements DurableObject {
             } catch (error) {
                 logError('Error during reward decay process:', error);
                 return new Response('Error during reward decay process', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/learn-from-education') {
+            try {
+                // /learn-from-education エンドポイントのリクエストボディの型定義
+                interface LearnFromEducationRequestBody {
+                    selectedArticles: { articleId: string, embedding: number[] }[];
+                }
+
+                // リクエストボディから選択された記事のembeddingリストを取得
+                const { selectedArticles } = await request.json() as LearnFromEducationRequestBody;
+
+                if (!Array.isArray(selectedArticles)) {
+                    logWarning('Learn from education failed: selectedArticles is not an array.');
+                    return new Response('Invalid parameters', { status: 400 });
+                }
+
+                logInfo(`Learning from ${selectedArticles.length} selected articles for user ${this.state.id.toString()}`);
+
+                // 各選択された記事のembeddingでバンディットモデルを更新
+                for (const article of selectedArticles) {
+                    if (article.embedding && this.banditModel) {
+                        // ユーザー教育による選択は報酬 1.0 として学習
+                        this.updateBanditModel(article.embedding, 1.0);
+                        logInfo(`Updated bandit model with education data for article ${article.articleId}`, { userId: this.state.id.toString(), articleId: article.articleId });
+                    } else {
+                        logWarning(`Cannot update bandit model with education data for article ${article.articleId}: embedding missing or bandit model not initialized.`);
+                    }
+                }
+
+                // バンディットモデルの状態を保存
+                if (selectedArticles.length > 0 && this.banditModel) {
+                     await this.saveBanditModel();
+                     logInfo(`Saved bandit model state after learning from education.`);
+                }
+
+
+                return new Response('Learning from education completed', { status: 200 });
+
+            } catch (error) {
+                logError('Error learning from education:', error, { userId: this.state.id.toString(), requestUrl: request.url });
+                return new Response('Error learning from education', { status: 500 });
             }
         }
 
