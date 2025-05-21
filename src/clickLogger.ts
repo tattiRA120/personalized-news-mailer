@@ -172,10 +172,8 @@ export class ClickLogger implements DurableObject {
              logInfo(`Loaded bandit model state for ${this.state.id.toString()}`);
         } else {
             // モデルがまだ存在しない場合は初期化
-            // TODO: embedding の次元数をどう取得するか検討が必要。
-            // 最初の記事の embedding 次元を使うか、設定で持つか。
-            // ここでは仮に次元を100とします。実際には動的に決定する必要があります。
-            const dimension = 100; // 仮の次元数
+            // OpenAI Embedding API (text-multilingual-embedding-002) の次元数 1536 で設定する。
+            const dimension = 1536; // OpenAI Embedding API の次元数
             this.banditModel = {
                 A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
                 b: Array(dimension).fill(0),
@@ -187,7 +185,7 @@ export class ClickLogger implements DurableObject {
             for (let i = 0; i < dimension; i++) {
                 this.banditModel.A[i][i] = 1.0;
             }
-            logInfo(`Initialized new bandit model state for ${this.state.id.toString()}`);
+            logInfo(`Initialized new bandit model state with dimension ${dimension} for ${this.state.id.toString()}`);
         }
 
         const savedSentArticles = savedState.get(this.sentArticlesKey);
@@ -206,7 +204,7 @@ export class ClickLogger implements DurableObject {
         }
 
         // 初期状態を保存 (モデルが初期化された場合のみ)
-        if (this.banditModel && savedModel === undefined || savedModel === null) { // savedModel が undefined または null の場合
+        if (this.banditModel && (savedModel === undefined || savedModel === null)) { // savedModel が undefined または null の場合
              await this.saveState();
         }
     }
