@@ -778,10 +778,11 @@ export default {
 		if (request.method === 'POST' && path === '/submit-interests') {
 			logInfo('Submit interests request received');
 			try {
-				const { userId, selectedArticleIds } = await request.json();
+				// リクエストボディから userId と selectedArticles (記事オブジェクトの配列) を取得
+				const { userId, selectedArticles } = await request.json();
 
-				if (!userId || !Array.isArray(selectedArticleIds)) {
-					logWarning('Submit interests failed: Missing userId or selectedArticleIds in request body.');
+				if (!userId || !Array.isArray(selectedArticles)) {
+					logWarning('Submit interests failed: Missing userId or selectedArticles in request body.');
 					return new Response('Missing parameters', { status: 400 });
 				}
 
@@ -796,6 +797,7 @@ export default {
 
 				// Update user profile with selected article IDs
 				// 既存の興味関心データがあればそれに追加
+				const selectedArticleIds = selectedArticles.map(article => article.articleId);
 				if (userProfile.interests) {
 					userProfile.interests.push(...selectedArticleIds);
 					// 重複を排除
@@ -817,20 +819,20 @@ export default {
 				const articlesToEmbedTexts: string[] = [];
 				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
 
-				// 選択された記事ごとにKVから取得し、embeddingを確認
-				for (const articleId of selectedArticleIds) {
+				// 選択された記事ごとにKVから取得し、embeddingを確認。KVにない場合はembedding生成対象とする。
+				for (const selectedArticle of selectedArticles) {
+					const articleId = selectedArticle.articleId;
 					const cacheKey = `article:${articleId}`; // 記事IDはリンクと仮定
 					const cachedArticle = await env.ARTICLE_EMBEDDINGS.get(cacheKey, { type: 'json' }) as NewsArticle | null;
 
 					if (cachedArticle && cachedArticle.embedding) {
+						// KVにあり、embeddingもある場合
 						selectedArticlesWithEmbeddings.push({ articleId: cachedArticle.link, embedding: cachedArticle.embedding });
-					} else if (cachedArticle) {
-						// KVにはあるがembeddingがない場合
-						articlesToEmbed.push(cachedArticle);
-						articlesToEmbedTexts.push(`${cachedArticle.title} ${cachedArticle.link}`); // embedding生成用のテキスト
 					} else {
-						// KVにもない場合（古い記事など） - スキップまたは再収集を検討するが、今回はスキップ
-						logWarning(`Selected article not found in KV cache: ${articleId}. Skipping.`, { articleId });
+						// KVにない、またはKVにはあるがembeddingがない場合
+						// embedding生成対象リストに追加
+						articlesToEmbed.push(selectedArticle); // フロントエンドから受け取った記事データを使用
+						articlesToEmbedTexts.push(`${selectedArticle.title} ${selectedArticle.articleId}`); // embedding生成用のテキスト
 					}
 				}
 
@@ -845,16 +847,17 @@ export default {
 							const article = articlesToEmbed[i];
 							const embedding = embeddings[i];
 							if (embedding) {
-								selectedArticlesWithEmbeddings.push({ articleId: article.link, embedding });
+								selectedArticlesWithEmbeddings.push({ articleId: article.articleId, embedding });
 								// 生成したembeddingをKVにキャッシュ（スケジュールタスクと同様のロジック）
-								const cacheKey = `article:${article.link}`; // 記事IDはリンクと仮定
+								const cacheKey = `article:${article.articleId}`; // 記事IDはリンクと仮定
 								const expirationTtl = 30 * 24 * 60 * 60; // 30 days in seconds
-								// 既存の記事データにembeddingを追加して保存
-								const updatedArticle = { ...article, embedding };
+								// 既存の記事データにembeddingを追加して保存（KVに記事データがなかった場合は新規作成）
+								const cachedArticle = await env.ARTICLE_EMBEDDINGS.get(cacheKey, { type: 'json' }) as NewsArticle | null;
+								const updatedArticle = cachedArticle ? { ...cachedArticle, embedding } : { ...article, embedding }; // KVに既存データがあればそれを使用、なければフロントエンドからのデータを使用
 								articleCachePromises.push(env.ARTICLE_EMBEDDINGS.put(cacheKey, JSON.stringify(updatedArticle), { expirationTtl }));
-								logInfo(`Cached generated embedding for article: "${article.title}"`, { articleTitle: article.title, articleLink: article.link });
+								logInfo(`Cached generated embedding for article: "${article.title}"`, { articleTitle: article.title, articleLink: article.articleId });
 							} else {
-								logWarning(`Embedding generation failed for selected article: "${article.title}". Skipping.`, { articleTitle: article.title, articleLink: article.link });
+								logWarning(`Embedding generation failed for selected article: "${article.title}". Skipping.`, { articleTitle: article.title, articleLink: article.articleId });
 							}
 						}
 						await Promise.all(articleCachePromises);

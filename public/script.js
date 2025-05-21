@@ -71,12 +71,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 選択された記事をWorkerに送信する関数
     async function submitSelectedArticles() {
-        const selectedArticleIds = [];
-        articlesListDiv.querySelectorAll('input[type="checkbox"]:checked').forEach(checkbox => {
-            selectedArticleIds.push(checkbox.value);
+        const selectedArticlesData = [];
+        articlesListDiv.querySelectorAll('.article-item input[type="checkbox"]:checked').forEach(checkbox => {
+            const articleItem = checkbox.closest('.article-item');
+            const titleElement = articleItem.querySelector('h3');
+            const summaryElement = articleItem.querySelector('p');
+
+            selectedArticlesData.push({
+                articleId: checkbox.value,
+                title: titleElement ? titleElement.textContent : '',
+                summary: summaryElement ? summaryElement.textContent : '',
+            });
         });
 
-        if (selectedArticleIds.length === 0) {
+        if (selectedArticlesData.length === 0) {
             messageElement.textContent = '記事を選択してください。';
             messageElement.className = 'error';
             return;
@@ -92,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 body: JSON.stringify({
                     userId: userId,
-                    selectedArticleIds: selectedArticleIds,
+                    selectedArticles: selectedArticlesData, // 記事データの配列を送信
                 }),
             });
 
