@@ -265,8 +265,20 @@ export default {
 
 					logInfo(`Finished embedding generation and caching for user ${userId}. Processed ${articlesWithEmbeddings.length} articles with embeddings.`, { userId, processedCount: articlesWithEmbeddings.length });
 
+					// --- 7. Cache all articles with embeddings in KV ---
+					logInfo('Caching all articles with embeddings in KV...');
+					const articleCachePromises = articlesWithEmbeddings.map(article => {
+						const cacheKey = `article:${article.link}`;
+						// TODO: KVの容量制限を考慮し、有効期限を設定するなど
+						// 有効期限を30日（秒単位）に設定
+						const expirationTtl = 30 * 24 * 60 * 60; // 30 days in seconds
+						return env.ARTICLE_EMBEDDINGS.put(cacheKey, JSON.stringify(article), { expirationTtl });
+					});
+					await Promise.all(articleCachePromises);
+					logInfo(`Finished caching ${articlesWithEmbeddings.length} articles in KV.`, { cachedCount: articlesWithEmbeddings.length });
 
-					// --- 7. Second Selection (MMR + Bandit) ---
+
+					// --- 8. Second Selection (MMR + Bandit) ---
 					logInfo(`Starting second selection (MMR + Bandit) for user ${userId}...`, { userId });
 					// Durable Object (ClickLogger) のインスタンスを取得
 					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId); // ユーザーIDに対応するDO IDを取得
@@ -801,11 +813,59 @@ export default {
 				// --- Learn from User Education (Send to Durable Object) ---
 				logInfo(`Learning from user education for user ${userId}...`, { userId });
 
-				// 記事リストを再度取得してembeddingを抽出
-				const allArticles = await collectNews();
-				const selectedArticlesWithEmbeddings = allArticles
-					.filter(article => selectedArticleIds.includes(article.link) && article.embedding !== undefined)
-					.map(article => ({ articleId: article.link, embedding: article.embedding! }));
+				const articlesToEmbed: NewsArticle[] = [];
+				const articlesToEmbedTexts: string[] = [];
+				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
+
+				// 選択された記事ごとにKVから取得し、embeddingを確認
+				for (const articleId of selectedArticleIds) {
+					const cacheKey = `article:${articleId}`; // 記事IDはリンクと仮定
+					const cachedArticle = await env.ARTICLE_EMBEDDINGS.get(cacheKey, { type: 'json' }) as NewsArticle | null;
+
+					if (cachedArticle && cachedArticle.embedding) {
+						selectedArticlesWithEmbeddings.push({ articleId: cachedArticle.link, embedding: cachedArticle.embedding });
+					} else if (cachedArticle) {
+						// KVにはあるがembeddingがない場合
+						articlesToEmbed.push(cachedArticle);
+						articlesToEmbedTexts.push(`${cachedArticle.title} ${cachedArticle.link}`); // embedding生成用のテキスト
+					} else {
+						// KVにもない場合（古い記事など） - スキップまたは再収集を検討するが、今回はスキップ
+						logWarning(`Selected article not found in KV cache: ${articleId}. Skipping.`, { articleId });
+					}
+				}
+
+				// embeddingが必要な記事があればバッチで生成
+				if (articlesToEmbed.length > 0) {
+					logInfo(`Generating embeddings for ${articlesToEmbed.length} selected articles for education...`, { count: articlesToEmbed.length });
+					const embeddings = await getOpenAIEmbeddingsBatch(articlesToEmbedTexts, env);
+
+					if (embeddings && embeddings.length === articlesToEmbed.length) {
+						const articleCachePromises = [];
+						for (let i = 0; i < articlesToEmbed.length; i++) {
+							const article = articlesToEmbed[i];
+							const embedding = embeddings[i];
+							if (embedding) {
+								selectedArticlesWithEmbeddings.push({ articleId: article.link, embedding });
+								// 生成したembeddingをKVにキャッシュ（スケジュールタスクと同様のロジック）
+								const cacheKey = `article:${article.link}`; // 記事IDはリンクと仮定
+								const expirationTtl = 30 * 24 * 60 * 60; // 30 days in seconds
+								// 既存の記事データにembeddingを追加して保存
+								const updatedArticle = { ...article, embedding };
+								articleCachePromises.push(env.ARTICLE_EMBEDDINGS.put(cacheKey, JSON.stringify(updatedArticle), { expirationTtl }));
+								logInfo(`Cached generated embedding for article: "${article.title}"`, { articleTitle: article.title, articleLink: article.link });
+							} else {
+								logWarning(`Embedding generation failed for selected article: "${article.title}". Skipping.`, { articleTitle: article.title, articleLink: article.link });
+							}
+						}
+						await Promise.all(articleCachePromises);
+						logInfo(`Finished generating and caching embeddings for ${articlesToEmbed.length} selected articles.`, { count: articlesToEmbed.length });
+					} else {
+						logError(`Embedding generation failed for selected articles batch. Expected ${articlesToEmbed.length} embeddings, got ${embeddings?.length}.`, null, { expected: articlesToEmbed.length, received: embeddings?.length });
+					}
+				} else {
+					logInfo('No selected articles needed embedding generation (all had embeddings or were not found).');
+				}
+
 
 				if (selectedArticlesWithEmbeddings.length > 0) {
 					// Get the Durable Object for this user
@@ -823,7 +883,7 @@ export default {
 					if (learnResponse.ok) {
 						logInfo(`Successfully sent selected articles for learning to ClickLogger for user ${userId}.`, { userId, selectedCount: selectedArticlesWithEmbeddings.length });
 					} else {
-						logError(`Failed to send selected articles for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, status: logResponse.status, statusText: logResponse.statusText });
+						logError(`Failed to send selected articles for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, status: learnResponse.status, statusText: learnResponse.statusText });
 					}
 				} else {
 					logWarning(`No selected articles with embeddings to send for learning for user ${userId}.`, { userId });
