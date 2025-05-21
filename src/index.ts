@@ -95,10 +95,6 @@ export default {
 					}
 					logInfo(`Loaded user profile for ${userId}.`);
 
-                    // Durable Object (ClickLogger) のインスタンスを取得
-					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId); // ユーザーIDに対応するDO IDを取得
-					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId); // DO インスタンスを取得
-
                     // --- 4. Update Category Interest Scores ---
                     logInfo(`Updating category interest scores for user ${userId}...`, { userId });
                     // ClickLogger から教育プログラムログ、クリックログ、送信ログを取得
