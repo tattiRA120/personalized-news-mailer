@@ -257,7 +257,8 @@ export class ClickLogger implements DurableObject {
 
                 // クリックイベントをストレージに保存
                 // embedding と reward はここでは保存しない（バンディットモデル更新時に使用）
-                const eventKey = `click:${this.state.id.toString()}:${articleId}:${timestamp}`; // キーフォーマット例
+                // キーフォーマット: click:<timestamp>:<articleId>
+                const eventKey = `click:${timestamp}:${articleId}`;
                 await this.state.storage.put(eventKey, { articleId, timestamp });
 
                 logInfo(`Logged click for user ${this.state.id.toString()}, article ${articleId} at ${timestamp}`);
@@ -318,21 +319,27 @@ export class ClickLogger implements DurableObject {
                 logInfo(`Logging ${sentArticles.length} sent articles for user ${this.state.id.toString()}`);
 
                 if (this.banditModel) {
-                    // 送信した記事のembeddingをマップに保存
-                    sentArticles.forEach(article => {
+                    // 送信した記事のembeddingをマップに保存し、送信ログを保存
+                    const putPromises = sentArticles.map(async article => {
                         if (article.embedding) {
                             // 非nullアサーションを追加してTypeScriptのエラーを抑制
                             this.banditModel!.sentArticlesEmbeddings[article.articleId] = article.embedding;
+                            // 送信ログを保存
+                            // キーフォーマット: sent:<timestamp>:<articleId>
+                            const logKey = `sent:${article.timestamp}:${article.articleId}`;
+                            await this.state.storage.put(logKey, { articleId: article.articleId, timestamp: article.timestamp });
                         } else {
-                            logWarning(`Embedding missing for sent article ${article.articleId}. Cannot save embedding.`);
+                            logWarning(`Embedding missing for sent article ${article.articleId}. Cannot save embedding or log sent.`);
                         }
                     });
+                    await Promise.all(putPromises);
 
-                    // 状態全体を保存
+
+                    // 状態全体を保存 (sentArticlesEmbeddings の更新を含む)
                     await this.saveState();
                     logInfo(`Successfully logged sent articles and saved embeddings for user ${this.state.id.toString()}`);
                 } else {
-                    logWarning(`Bandit model not initialized. Cannot log sent articles embeddings for user ${this.state.id.toString()}`);
+                    logWarning(`Bandit model not initialized. Cannot log sent articles embeddings or sent logs for user ${this.state.id.toString()}`);
                 }
 
 
@@ -351,32 +358,31 @@ export class ClickLogger implements DurableObject {
                     return new Response('Bandit model not initialized', { status: 500 });
                 }
 
-                // 一定期間（例: 24時間）以上前の送信済み記事を取得
+                // 一定期間（例: 24時間）以上前の送信済み記事ログを取得
                 const decayThreshold = Date.now() - 24 * 60 * 60 * 1000; // 24時間前
                 // Durable Object のストレージから sent: プレフィックスで始まるキーをリストアップ
-                const sentArticleKeys = await this.state.storage.list({ prefix: 'sent:' });
+                const sentArticleLogKeys = await this.state.storage.list({ prefix: 'sent:' });
 
                 const articlesToDecay: { articleId: string, embedding: number[] }[] = [];
-                const keysToDelete: string[] = [];
+                const logKeysToDelete: string[] = [];
 
-                // sentArticleKeys は Map<string, any> なので、キーのみを処理
-                for (const key of sentArticleKeys.keys()) {
-                     // キーからタイムスタンプと articleId を抽出
+                // sentArticleLogKeys は Map<string, any> なので、キーのみを処理
+                for (const key of sentArticleLogKeys.keys()) {
+                     // キーからタイムスタンプと articleId を抽出 (フォーマット: sent:<timestamp>:<articleId>)
                     const parts = key.split(':');
-                    if (parts.length >= 3) { // キーフォーマット sent:<timestamp>:<articleId> を想定
+                    if (parts.length >= 3) {
                         const timestamp = parseInt(parts[1], 10);
                         const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
 
                         if (timestamp < decayThreshold) {
-                            // 減衰対象の記事
-                            // この記事に対応するクリックイベントがあるか確認
-                            // クリックイベントのキーは click:<userId>:<articleId>:<timestamp> の形式で保存されていると想定
-                            // 正確なキープレフィックスで検索するために、articleId と timestamp を使用
-                            const clickEventKeyPrefix = `click:${this.state.id.toString()}:${articleId}:${timestamp}`;
-                            const clickEvents = await this.state.storage.list({ prefix: clickEventKeyPrefix });
+                            // 減衰対象の送信ログ
+                            // この送信ログに対応するクリックログがあるか確認
+                            // クリックログのキーは click:<timestamp>:<articleId> の形式で保存されていると想定
+                            const clickLogKey = `click:${timestamp}:${articleId}`;
+                            const clickLog = await this.state.storage.get(clickLogKey);
 
-                            if (clickEvents.keys.length === 0) {
-                                // クリックイベントがない場合、報酬を減衰
+                            if (!clickLog) {
+                                // 対応するクリックログがない場合、報酬を減衰
                                 logInfo(`Decaying reward for article ${articleId} (sent at ${timestamp})`);
                                 // 保存済みのembeddingを取得
                                 const embedding = this.banditModel.sentArticlesEmbeddings[articleId];
@@ -386,6 +392,10 @@ export class ClickLogger implements DurableObject {
                                     this.updateBanditModel(embedding, 0.0); // 報酬ゼロ
                                     articlesToDecay.push({ articleId: articleId, embedding: embedding }); // ログ用
                                     // 減衰処理を行った記事のembeddingはマップから削除
+                                    // TODO: embedding の削除は慎重に行うべき。他のユーザーも同じ記事を送信している可能性がある。
+                                    // ユーザーごとの Durable Object なので、ここではそのユーザーに送信された記事のembeddingのみを管理していると仮定。
+                                    // ただし、同じ記事が複数回送信された場合の扱いは検討が必要。
+                                    // 今回はシンプルに、減衰対象となった記事のembeddingをマップから削除する。
                                     delete this.banditModel.sentArticlesEmbeddings[articleId];
                                 } else {
                                     logWarning(`Cannot decay reward for article ${articleId}: embedding not found in sentArticlesEmbeddings.`);
@@ -393,22 +403,30 @@ export class ClickLogger implements DurableObject {
                             } else {
                                 logInfo(`Article ${articleId} was clicked (sent at ${timestamp}). No decay needed.`);
                             }
-                            // 処理済みの送信済み記事キーを削除リストに追加
-                            keysToDelete.push(key);
+                            // 処理済みの送信ログキーを削除リストに追加
+                            logKeysToDelete.push(key);
                         }
                     } else {
-                        logWarning(`Invalid sent article key format: ${key}`);
+                        logWarning(`Invalid sent article log key format: ${key}`);
                     }
                 }
 
+                // 処理済みの送信ログを削除
+                if (logKeysToDelete.length > 0) {
+                    logInfo(`Deleting ${logKeysToDelete.length} processed sent article log keys.`);
+                    const deletePromises = logKeysToDelete.map(key => this.state.storage.delete(key));
+                    await Promise.all(deletePromises);
+                }
+
+
                 // 状態全体を保存 (バンディットモデルと更新されたsentArticlesEmbeddings)
-                if (articlesToDecay.length > 0 || keysToDelete.length > 0) {
+                if (articlesToDecay.length > 0 || logKeysToDelete.length > 0) {
                      await this.saveState();
                      if (articlesToDecay.length > 0) {
                         logInfo(`Saved Durable Object state after decaying rewards.`);
                      }
-                     if (keysToDelete.length > 0) {
-                        logInfo(`Deleted ${keysToDelete.length} processed sent article keys.`);
+                     if (logKeysToDelete.length > 0) {
+                        logInfo(`Deleted ${logKeysToDelete.length} processed sent article log keys.`);
                      }
                 } else {
                     logInfo(`No articles to decay or delete for user ${this.state.id.toString()}`);
@@ -441,24 +459,31 @@ export class ClickLogger implements DurableObject {
                 logInfo(`Learning from ${selectedArticles.length} selected articles for user ${this.state.id.toString()}`);
 
                 if (this.banditModel) {
-                    // 各選択された記事のembeddingでバンディットモデルを更新
-                    for (const article of selectedArticles) {
+                    // 各選択された記事のembeddingでバンディットモデルを更新し、教育プログラムログを保存
+                    const putPromises = selectedArticles.map(async article => {
                         if (article.embedding) {
                             // ユーザー教育による選択は報酬 1.0 として学習
                             this.updateBanditModel(article.embedding, 1.0);
                             logInfo(`Updated bandit model with education data for article ${article.articleId}`, { userId: this.state.id.toString(), articleId: article.articleId });
-                        } else {
-                            logWarning(`Cannot update bandit model with education data for article ${article.articleId}: embedding missing.`);
-                        }
-                    }
 
-                    // 状態全体を保存
+                            // 教育プログラムログを保存
+                            // キーフォーマット: education:<timestamp>:<articleId>
+                            const logKey = `education:${Date.now()}:${article.articleId}`;
+                            await this.state.storage.put(logKey, { articleId: article.articleId, timestamp: Date.now() });
+                        } else {
+                            logWarning(`Cannot update bandit model or log education data for article ${article.articleId}: embedding missing.`);
+                        }
+                    });
+                    await Promise.all(putPromises);
+
+
+                    // 状態全体を保存 (バンディットモデルの更新を含む)
                     if (selectedArticles.length > 0) {
                          await this.saveState();
                          logInfo(`Saved Durable Object state after learning from education.`);
                     }
                 } else {
-                    logWarning(`Bandit model not initialized. Cannot learn from education for user ${this.state.id.toString()}`);
+                    logWarning(`Bandit model not initialized. Cannot learn from education or log education data for user ${this.state.id.toString()}`);
                 }
 
 
@@ -474,6 +499,85 @@ export class ClickLogger implements DurableObject {
         // Handle other requests
         return new Response('Not Found', { status: 404 });
     }
+
+    // 教育プログラムログを取得するメソッド
+    async getEducationLogs(startTime?: number, endTime?: number): Promise<{ articleId: string; timestamp: number; }[]> {
+        logInfo(`Getting education logs for user ${this.state.id.toString()}`, { userId: this.state.id.toString(), startTime, endTime });
+        const logs: { articleId: string; timestamp: number; }[] = [];
+        // Durable Object のストレージから education: プレフィックスで始まるキーをリストアップ
+        // キーフォーマット: education:<timestamp>:<articleId>
+        const listResult = await this.state.storage.list({ prefix: 'education:' });
+
+        for (const [key, value] of listResult.entries()) {
+            // キーから articleId と timestamp を抽出
+            const parts = key.split(':');
+            if (parts.length >= 3) {
+                 const timestamp = parseInt(parts[1], 10);
+                 const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
+
+                 if ((startTime === undefined || timestamp >= startTime) && (endTime === undefined || timestamp <= endTime)) {
+                     logs.push({ articleId, timestamp });
+                 }
+            } else {
+                 logWarning(`Invalid education log key format: ${key}`);
+            }
+        }
+        logInfo(`Found ${logs.length} education logs.`, { userId: this.state.id.toString(), count: logs.length });
+        return logs;
+    }
+
+    // クリックログを取得するメソッド
+    async getClickLogs(startTime?: number, endTime?: number): Promise<{ articleId: string; timestamp: number; }[]> {
+        logInfo(`Getting click logs for user ${this.state.id.toString()}`, { userId: this.state.id.toString(), startTime, endTime });
+        const logs: { articleId: string; timestamp: number; }[] = [];
+        // Durable Object のストレージから click: プレフィックスで始まるキーをリストアップ
+        // キーフォーマット: click:<timestamp>:<articleId>
+        const listResult = await this.state.storage.list({ prefix: 'click:' });
+
+        for (const [key, value] of listResult.entries()) {
+            // キーから articleId と timestamp を抽出
+            const parts = key.split(':');
+            if (parts.length >= 3) {
+                 const timestamp = parseInt(parts[1], 10);
+                 const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
+
+                 if ((startTime === undefined || timestamp >= startTime) && (endTime === undefined || timestamp <= endTime)) {
+                     logs.push({ articleId, timestamp });
+                 }
+            } else {
+                 logWarning(`Invalid click log key format: ${key}`);
+            }
+        }
+        logInfo(`Found ${logs.length} click logs.`, { userId: this.state.id.toString(), count: logs.length });
+        return logs;
+    }
+
+    // 送信ログを取得するメソッド
+    async getSentLogs(startTime?: number, endTime?: number): Promise<{ articleId: string; timestamp: number; }[]> {
+        logInfo(`Getting sent logs for user ${this.state.id.toString()}`, { userId: this.state.id.toString(), startTime, endTime });
+        const logs: { articleId: string; timestamp: number; }[] = [];
+        // Durable Object のストレージから sent: プレフィックスで始まるキーをリストアップ
+        // キーフォーマット: sent:<timestamp>:<articleId>
+        const listResult = await this.state.storage.list({ prefix: 'sent:' });
+
+        for (const [key, value] of listResult.entries()) {
+            // キーから articleId と timestamp を抽出
+            const parts = key.split(':');
+            if (parts.length >= 3) {
+                 const timestamp = parseInt(parts[1], 10);
+                 const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
+
+                 if ((startTime === undefined || timestamp >= startTime) && (endTime === undefined || timestamp <= endTime)) {
+                     logs.push({ articleId, timestamp });
+                 }
+            } else {
+                 logWarning(`Invalid sent log key format: ${key}`);
+            }
+        }
+        logInfo(`Found ${logs.length} sent logs.`, { userId: this.state.id.toString(), count: logs.length });
+        return logs;
+    }
+
 
     // 記事リストに対して LinUCB の UCB 値を計算する
     private getUCBValues(articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {

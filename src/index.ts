@@ -1,11 +1,13 @@
 // @ts-nocheck
 import { collectNews } from './newsCollector';
 import { getOpenAIEmbeddingsBatch } from './openaiClient'; // Import OpenAI embeddings client
-import { getUserProfile, updateUserProfile, UserProfile, getAllUserIds, createUserProfile } from './userProfile'; // Assuming these functions are in userProfile.ts
+import { getUserProfile, updateUserProfile, UserProfile, getAllUserIds, createUserProfile, updateCategoryInterestScores } from './userProfile'; // Assuming these functions are in userProfile.ts
 import { selectTopArticles, selectPersonalizedArticles } from './articleSelector'; // Assuming these functions are in articleSelector.ts
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator'; // Assuming these functions are in emailGenerator.ts
 import { ClickLogger } from './clickLogger'; // Assuming this is your Durable Object class
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
+import { classifyArticles } from './categoryClassifier'; // Import classifyArticles
+import { ARTICLE_CATEGORIES } from './config'; // カテゴリーリストを取得するためにconfigをインポート
 
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
@@ -18,11 +20,31 @@ export interface Env {
 	GOOGLE_CLIENT_SECRET?: string; // Add Google Client Secret
 	GOOGLE_REDIRECT_URI?: string; // Add Google Redirect URI
 	'mail-news-gmail-tokens': KVNamespace; // KV Namespace for storing Gmail refresh tokens
+    ARTICLE_EMBEDDINGS: KVNamespace; // KV Namespace for caching article embeddings
 }
 
 interface EmailRecipient {
     email: string;
     name?: string;
+}
+
+interface NewsArticle {
+    title: string;
+    link: string;
+    // Add other fields as needed, including category, score and embedding
+    category?: string; // Add category field
+    score?: number; // Assuming a relevance score is added in the scoring step
+    embedding?: number[]; // Assuming embedding vector is added in the embedding step
+    ucb?: number; // UCB値を保持するためのフィールドを追加
+    finalScore?: number; // 最終スコアを保持するためのフィールドを追加
+}
+
+
+// KVにembeddingをキャッシュするためのキーを生成する関数
+function getEmbeddingCacheKey(articleLink: string): string {
+    // 記事リンクのハッシュなど、一意で安全なキーを生成する
+    // ここでは簡易的にリンクをそのまま使用（長いURLの場合はハッシュ化を検討）
+    return `embedding:${articleLink}`;
 }
 
 
@@ -41,7 +63,13 @@ export default {
 				return;
 			}
 
-			// --- 2. Get all users ---
+            // --- 2. Article Classification ---
+            logInfo('Starting article classification...');
+            const classifiedArticles = classifyArticles(articles);
+            logInfo(`Finished article classification.`, { classifiedCount: classifiedArticles.length });
+
+
+			// --- 3. Get all users ---
 			logInfo('Fetching all user IDs...');
 			// Pass the correct KV binding to userProfile functions
 			const userIds = await getAllUserIds({ 'mail-news-user-profiles': env['mail-news-user-profiles'] });
@@ -67,99 +95,199 @@ export default {
 					}
 					logInfo(`Loaded user profile for ${userId}.`);
 
-					// --- 3. Embedding & Scoring (per user, based on profile) ---
-					logInfo(`Generating embeddings and scoring articles for user ${userId}...`);
+                    // Durable Object (ClickLogger) のインスタンスを取得
+					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId); // ユーザーIDに対応するDO IDを取得
+					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId); // DO インスタンスを取得
 
-					const articlesWithScores: (typeof articles[0] & { score?: number, embedding?: number[] })[] = [];
-					const maxBatchTokenLength = 8000 * 2; // Approximate max characters for 8k tokens (assuming 1 token ~ 2 chars for Japanese)
-					const preferredBatchSize = 5; // Preferred batch size, further reduced
+                    // --- 4. Update Category Interest Scores ---
+                    logInfo(`Updating category interest scores for user ${userId}...`, { userId });
+                    // ClickLogger から教育プログラムログ、クリックログ、送信ログを取得
+                    // 過去7日間のログを取得する例
+                    const now = Date.now();
+                    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000; // 7日前 (ミリ秒)
 
-					let currentBatchTexts: string[] = [];
-					let currentBatchArticles: typeof articles[0][] = [];
-					let currentBatchTokenCount = 0;
-
-					const processBatch = async (batchTexts: string[], batchArticles: typeof articles[0][]) => {
-						if (batchTexts.length === 0) return;
-
-						try {
-							// Get embeddings in batch using OpenAI client
-							const embeddings = await getOpenAIEmbeddingsBatch(batchTexts, env);
-
-							if (!embeddings) {
-								logWarning(`Failed to get OpenAI embeddings for batch. Skipping batch.`, { batchSize: batchTexts.length });
-								return; // Skip this batch if embedding fails
-							}
-
-							// Process each article in the batch
-							for (let j = 0; j < batchTexts.length; j++) {
-								const article = batchArticles[j];
-								const embedding = embeddings[j];
-
-								if (!embedding) {
-									logWarning(`Article ${article.link} has invalid or missing embedding. Skipping.`, { articleTitle: article.title, articleLink: article.link });
-									continue; // Skip article if embedding is missing in batch result
-								}
-
-								// 教育プログラムのデータに基づいてスコアを計算するか、selectPersonalizedArticles 関数内で処理するように変更
-								let score = 0; // デフォルトスコアを設定するか、後続の処理で計算
-
-								articlesWithScores.push({ ...article, score, embedding });
-							}
-
-						} catch (batchProcessError) {
-							logError(`Error processing article batch:`, batchProcessError, { batchSize: batchTexts.length });
-							// Continue processing even if one batch fails
-						}
-					};
-
-					for (const article of articles) {
-						const articleText = `${article.title} ${article.link}`;
-						const articleTokenLength = articleText.length / 2; // Approximate token count
-
-						// Check if adding this article exceeds the max token length or preferred batch size
-						if (currentBatchTokenCount + articleTokenLength > maxBatchTokenLength || currentBatchTexts.length >= preferredBatchSize) {
-							// Process the current batch
-							await processBatch(currentBatchTexts, currentBatchArticles);
-
-							// Start a new batch
-							currentBatchTexts = [];
-							currentBatchArticles = [];
-							currentBatchTokenCount = 0;
-						}
-
-						// Add the current article to the batch
-						currentBatchTexts.push(articleText);
-						currentBatchArticles.push(article);
-						currentBatchTokenCount += articleTokenLength;
-					}
-
-					// Process the last batch if any
-					if (currentBatchTexts.length > 0) {
-						await processBatch(currentBatchTexts, currentBatchArticles);
-					}
+                    const educationLogs = await clickLogger.getEducationLogs(sevenDaysAgo, now);
+                    const clickLogs = await clickLogger.getClickLogs(sevenDaysAgo, now);
+                    const sentLogs = await clickLogger.getSentLogs(sevenDaysAgo, now);
 
 
-					logInfo(`Finished embedding and scoring for user ${userId}. Processed ${articlesWithScores.length} articles with scores and embeddings.`, { userId, processedCount: articlesWithScores.length });
+                    const updatedUserProfile = updateCategoryInterestScores(
+                        userProfile,
+                        educationLogs, // 取得したログデータを渡す
+                        clickLogs, // 取得したログデータを渡す
+                        sentLogs, // 取得したログデータを渡す
+                        classifiedArticles // カテゴリー情報付きの全記事リストを渡す
+                    );
+                    // 更新されたユーザープロファイルを保存
+                    await updateUserProfile(updatedUserProfile, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+                    logInfo(`Finished updating category interest scores for user ${userId}.`, { userId });
 
 
-					// --- 4. Diversity MMR + Bandit ---
-					logInfo(`Selecting personalized articles for user ${userId}...`, { userId });
+					// --- 5. First Selection (Category-based) ---
+					logInfo(`Starting first selection (category-based) for user ${userId}...`, { userId });
+                    const firstSelectedArticles: NewsArticle[] = []; // NewsArticle型を使用
+                    const articlesByCategory: { [category: string]: NewsArticle[] } = {}; // NewsArticle型を使用
+
+                    // 記事をカテゴリーごとにグループ化
+                    for (const article of classifiedArticles) {
+                        const category = article.category || 'その他';
+                        if (!articlesByCategory[category]) {
+                            articlesByCategory[category] = [];
+                        }
+                        articlesByCategory[category].push(article);
+                    }
+
+                    // カテゴリー興味関心スコアでカテゴリーをソート (降順)
+                    const sortedCategories = Object.keys(userProfile.categoryInterestScores).sort((a, b) =>
+                        (userProfile.categoryInterestScores[b] || 0) - (userProfile.categoryInterestScores[a] || 0)
+                    );
+
+                    const maxArticlesForEmbedding = 50; // Embeddingを行う記事数の上限 (調整可能)
+                    const minArticlesPerCategory = 1; // 各カテゴリーから最低限選択する記事数 (調整可能)
+                    let articlesCountForEmbedding = 0;
+
+                    // カテゴリーごとの合計興味関心スコアを計算
+                    let totalInterestScore = 0;
+                    for (const category in userProfile.categoryInterestScores) {
+                        totalInterestScore += userProfile.categoryInterestScores[category];
+                    }
+
+                    // 興味関心の高いカテゴリーから順に、配分された記事数を選択
+                    for (const category of sortedCategories) {
+                        const articlesInCategory = articlesByCategory[category] || [];
+                        if (articlesInCategory.length === 0) continue;
+
+                        // このカテゴリーから選択する記事数を計算
+                        let articlesToSelectFromCategory = minArticlesPerCategory; // まず最低数を確保
+
+                        // 残りの選択可能な記事数を、興味関心スコアに応じて比例配分
+                        const remainingArticlesPool = maxArticlesForEmbedding - (ARTICLE_CATEGORIES.length * minArticlesPerCategory);
+                        if (totalInterestScore > 0 && remainingArticlesPool > 0) {
+                            const categoryInterestRatio = userProfile.categoryInterestScores[category] / totalInterestScore;
+                            const proportionalAllocation = Math.floor(categoryInterestRatio * remainingArticlesPool);
+                            articlesToSelectFromCategory += proportionalAllocation;
+                        } else if (remainingArticlesPool > 0) {
+                            // 合計スコアが0の場合、残りを均等に配分
+                            const equalAllocation = Math.floor(remainingArticlesPool / ARTICLE_CATEGORIES.length);
+                            articlesToSelectFromCategory += equalAllocation;
+                        }
+
+
+                        // カテゴリー内の記事総数を超えないように調整
+                        articlesToSelectFromCategory = Math.min(articlesToSelectFromCategory, articlesInCategory.length);
+
+                        // Embeddingを行う記事数の上限を超えないように調整
+                        articlesToSelectFromCategory = Math.min(articlesToSelectFromCategory, maxArticlesForEmbedding - articlesCountForEmbedding);
+
+
+                        // カテゴリー内の記事を収集順（簡易的な新しさ）でソート
+                        const sortedArticlesInCategory = [...articlesInCategory]; // 収集順は元のarticlesリストの順序と仮定
+
+                        let selectedCountInCategory = 0;
+                        for (const article of sortedArticlesInCategory) {
+                            if (articlesCountForEmbedding < maxArticlesForEmbedding && selectedCountInCategory < articlesToSelectFromCategory) {
+                                firstSelectedArticles.push(article);
+                                articlesCountForEmbedding++;
+                                selectedCountInCategory++;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+
+                    // まだ上限に達していない場合、残りの記事を収集順に追加（多様性確保の最終手段）
+                    // このステップは、上記の配分ロジックで上限に達しなかった場合にのみ実行される
+                     if (articlesCountForEmbedding < maxArticlesForEmbedding) {
+                         const currentlySelectedLinks = new Set(firstSelectedArticles.map(a => a.link));
+                         for (const article of classifiedArticles) {
+                             if (articlesCountForEmbedding < maxArticlesForEmbedding && !currentlySelectedLinks.has(article.link)) {
+                                 firstSelectedArticles.push(article);
+                                 articlesCountForEmbedding++;
+                                 currentlySelectedLinks.add(article.link); // 重複防止
+                             } else if (articlesCountForEmbedding >= maxArticlesForEmbedding) {
+                                 break;
+                             }
+                         }
+                     }
+
+
+					logInfo(`Finished first selection. Selected ${firstSelectedArticles.length} articles for embedding.`, { userId, selectedCount: firstSelectedArticles.length });
+
+
+					// --- 6. Embedding Generation & Caching ---
+					logInfo(`Generating embeddings and checking cache for user ${userId}...`, { userId });
+
+					const articlesWithEmbeddings: NewsArticle[] = []; // NewsArticle型を使用
+                    const articlesToEmbed: NewsArticle[] = []; // NewsArticle型を使用
+                    const articlesToEmbedTexts: string[] = [];
+
+                    // キャッシュを確認し、キャッシュがない記事をembedding対象とする
+                    for (const article of firstSelectedArticles) {
+                        const cacheKey = getEmbeddingCacheKey(article.link);
+                        const cachedEmbedding = await env.ARTICLE_EMBEDDINGS.get(cacheKey, { type: 'json' });
+
+                        if (cachedEmbedding) {
+                            logInfo(`Embedding cache hit for article: "${article.title}"`, { articleTitle: article.title, articleLink: article.link });
+                            articlesWithEmbeddings.push({ ...article, embedding: cachedEmbedding as number[] });
+                        } else {
+                            logInfo(`Embedding cache miss for article: "${article.title}". Adding to embedding queue.`, { articleTitle: article.title, articleLink: article.link });
+                            articlesToEmbed.push(article);
+                            articlesToEmbedTexts.push(`${article.title} ${article.link}`);
+                        }
+                    }
+
+                    // キャッシュがない記事に対してバッチでembeddingを生成
+                    if (articlesToEmbed.length > 0) {
+                        logInfo(`Generating embeddings for ${articlesToEmbed.length} articles...`, { count: articlesToEmbed.length });
+                        const embeddings = await getOpenAIEmbeddingsBatch(articlesToEmbedTexts, env);
+
+                        if (embeddings && embeddings.length === articlesToEmbed.length) {
+                            for (let i = 0; i < articlesToEmbed.length; i++) {
+                                const article = articlesToEmbed[i];
+                                const embedding = embeddings[i];
+                                if (embedding) {
+                                    articlesWithEmbeddings.push({ ...article, embedding });
+                                    // Embedding 結果を KV にキャッシュ
+                                    const cacheKey = getEmbeddingCacheKey(article.link);
+                                    // TODO: KVの容量制限を考慮し、有効期限を設定するなど
+                                    // 有効期限を30日（秒単位）に設定
+                                    const expirationTtl = 30 * 24 * 60 * 60; // 30 days in seconds
+                                    await env.ARTICLE_EMBEDDINGS.put(cacheKey, JSON.stringify(embedding), { expirationTtl });
+                                    logInfo(`Cached embedding for article: "${article.title}" with TTL ${expirationTtl}s`, { articleTitle: article.title, articleLink: article.link, expirationTtl });
+                                } else {
+                                     logWarning(`Embedding generation failed for article: "${article.title}". Skipping.`, { articleTitle: article.title, articleLink: article.link });
+                                }
+                            }
+                             logInfo(`Finished generating and caching embeddings for ${articlesToEmbed.length} articles.`, { count: articlesToEmbed.length });
+                        } else {
+                            logError(`Embedding generation failed for batch. Expected ${articlesToEmbed.length} embeddings, got ${embeddings?.length}.`, null, { expected: articlesToEmbed.length, received: embeddings?.length });
+                        }
+                    } else {
+                         logInfo('No articles needed embedding generation (all were cached).');
+                    }
+
+
+					logInfo(`Finished embedding generation and caching for user ${userId}. Processed ${articlesWithEmbeddings.length} articles with embeddings.`, { userId, processedCount: articlesWithEmbeddings.length });
+
+
+					// --- 7. Second Selection (MMR + Bandit) ---
+					logInfo(`Starting second selection (MMR + Bandit) for user ${userId}...`, { userId });
 					// Durable Object (ClickLogger) のインスタンスを取得
 					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId); // ユーザーIDに対応するDO IDを取得
 					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId); // DO インスタンスを取得
 
-					// selectPersonalizedArticles 関数に Durable Object インスタンスを渡す
+					// selectPersonalizedArticles 関数に embedding が付与された記事リストを渡す
 					// @ts-ignore: Durable Object Stub の型に関するエラーを抑制
 					const numberOfArticlesToSend = 5; // Define how many articles to send
-					const selectedArticles = await selectPersonalizedArticles(articlesWithScores, userProfile, clickLogger, numberOfArticlesToSend);
-					logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
+					const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, numberOfArticlesToSend);
+					logInfo(`Selected ${selectedArticles.length} articles for user ${userId} after second selection.`, { userId, selectedCount: selectedArticles.length });
 
 					if (selectedArticles.length === 0) {
-						logInfo('No articles selected after scoring and filtering. Skipping email sending for this user.', { userId });
+						logInfo('No articles selected after second selection. Skipping email sending for this user.', { userId });
 						continue; // Skip to the next user
 					}
 
-					// --- 5. Email Generation & Sending ---
+					// --- 8. Email Generation & Sending ---
 					logInfo(`Generating and sending email for user ${userId}...`, { userId });
 					const emailSubject = 'Your Daily Personalized News Update';
 					// TODO: Use actual user email from userProfile or a separate mapping
@@ -184,10 +312,10 @@ export default {
 						logError(`Failed to send email to ${recipient.email} via Gmail API: ${emailResponse.statusText}`, null, { userId, email: recipient.email, status: emailResponse.status, statusText: emailResponse.statusText });
 					}
 
-					// --- Log Sent Articles to Durable Object ---
+					// --- 9. Log Sent Articles to Durable Object ---
 					logInfo(`Logging sent articles to ClickLogger for user ${userId}...`, { userId });
 					const sentArticlesData = selectedArticles.map(article => ({
-						articleId: article.articleId,
+						articleId: article.link, // articleId は link と仮定
 						timestamp: Date.now(), // 送信時のタイムスタンプ
 						embedding: article.embedding, // embedding も一緒に保存
 					}));
@@ -206,7 +334,7 @@ export default {
 					}
 
 
-					// --- Trigger Reward Decay in Durable Object ---
+					// --- 10. Trigger Reward Decay in Durable Object ---
 					logInfo(`Triggering reward decay in ClickLogger for user ${userId}...`, { userId });
 					// In scheduled task, request.url is not defined. Use relative path.
 					const decayResponse = await clickLogger.fetch(new Request('http://dummy-host/decay-rewards', {
@@ -224,9 +352,9 @@ export default {
 					// This could be done here or within the click logging process
 					// For now, let's add a placeholder for updating the profile with sent articles
 					if (userProfile.sentArticleIds) {
-						userProfile.sentArticleIds.push(...selectedArticles.map(a => a.articleId));
+						userProfile.sentArticleIds.push(...selectedArticles.map(a => a.link)); // articleId は link と仮定
 					} else {
-						userProfile.sentArticleIds = selectedArticles.map(a => a.articleId);
+						userProfile.sentArticleIds = selectedArticles.map(a => a.link); // articleId は link と仮定
 					}
 					// Pass the correct KV binding to userProfile functions
 					await updateUserProfile(userProfile, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
@@ -238,6 +366,33 @@ export default {
 					// Continue to the next user even if one user's process fails
 				}
 			} // End of user loop
+            // --- 11. Clean up old embeddings in KV ---
+            logInfo('Starting KV embedding cleanup...');
+            try {
+                const listResult = await env.ARTICLE_EMBEDDINGS.list({ prefix: 'embedding:' });
+                const embeddingKeys = listResult.keys;
+
+                const maxEmbeddingKeys = 5000; // KVに保持するembeddingキーの最大数 (調整可能)
+
+                if (embeddingKeys.length > maxEmbeddingKeys) {
+                    logWarning(`KV embedding keys exceed limit (${maxEmbeddingKeys}). Cleaning up old keys.`, { currentCount: embeddingKeys.length, limit: maxEmbeddingKeys });
+
+                    // 古いキーを削除 (簡易的にリストの先頭から削除)
+                    const keysToDelete = embeddingKeys.slice(0, embeddingKeys.length - maxEmbeddingKeys);
+                    logInfo(`Deleting ${keysToDelete.length} old embedding keys.`, { count: keysToDelete.length });
+
+                    const deletePromises = keysToDelete.map(key => env.ARTICLE_EMBEDDINGS.delete(key.name));
+                    await Promise.all(deletePromises);
+
+                    logInfo(`Finished KV embedding cleanup. Deleted ${keysToDelete.length} keys.`, { deletedCount: keysToDelete.length });
+                } else {
+                    logInfo(`KV embedding key count (${embeddingKeys.length}) is within limit. No cleanup needed.`, { currentCount: embeddingKeys.length, limit: maxEmbeddingKeys });
+                }
+
+            } catch (cleanupError) {
+                logError('Error during KV embedding cleanup:', cleanupError);
+            }
+
 					logInfo('Scheduled task finished.');
 
 		} catch (mainError) {
@@ -672,7 +827,7 @@ export default {
 					if (learnResponse.ok) {
 						logInfo(`Successfully sent selected articles for learning to ClickLogger for user ${userId}.`, { userId, selectedCount: selectedArticlesWithEmbeddings.length });
 					} else {
-						logError(`Failed to send selected articles for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, status: learnResponse.status, statusText: learnResponse.statusText });
+						logError(`Failed to send selected articles for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, status: logResponse.status, statusText: logResponse.statusText });
 					}
 				} else {
 					logWarning(`No selected articles with embeddings to send for learning for user ${userId}.`, { userId });
