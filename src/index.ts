@@ -1,6 +1,5 @@
 // @ts-nocheck
 import { collectNews } from './newsCollector';
-import { generateContent } from './geminiClient'; // Keep generateContent from geminiClient.ts
 import { getOpenAIEmbeddingsBatch } from './openaiClient'; // Import OpenAI embeddings client
 import { getUserProfile, updateUserProfile, UserProfile, getAllUserIds, createUserProfile } from './userProfile'; // Assuming these functions are in userProfile.ts
 import { selectTopArticles, selectPersonalizedArticles } from './articleSelector'; // Assuming these functions are in articleSelector.ts
@@ -101,37 +100,8 @@ export default {
 									continue; // Skip article if embedding is missing in batch result
 								}
 
-								// Calculate relevance score based on user profile keywords and article content/title
-								// Using Gemini to score based on keywords and article content/title
-								let score = 0;
-								// Ensure userProfile.keywords is not empty before creating prompt
-								const keywordsPrompt = userProfile.keywords && userProfile.keywords.length > 0 ?
-									`ユーザーの興味キーワード「${userProfile.keywords.join(', ')}」にどの程度関連しているか` :
-									'一般的なニュースとしてどの程度重要か'; // Fallback prompt if no keywords
-
-								const scoringPrompt = `以下の記事が、${keywordsPrompt}を0から100のスコアで評価してください。スコアのみを数値で回答してください。記事タイトル: "${article.title}"。記事リンク: "${article.link}"`;
-								const scoreResponse = await generateContent(scoringPrompt, env);
-
-								// Gemini APIのレート制限 (RPM 15) を考慮し、4秒の遅延を挿入
-								await new Promise(resolve => setTimeout(resolve, 4000)); // 4秒 (4000ms) の遅延
-
-								if (scoreResponse) {
-									try {
-										score = parseInt(scoreResponse.trim(), 10);
-										if (isNaN(score) || score < 0 || score > 100) {
-											logWarning(`Invalid score received from Gemini for article "${article.title}": ${scoreResponse}. Assigning default low score.`, { articleTitle: article.title, scoreResponse });
-											score = 10; // Default low score for invalid response
-										} else {
-											logInfo(`Scored article "${article.title}": ${score}`, { articleTitle: article.title, score });
-										}
-									} catch (e) {
-										logError(`Error parsing score response for article "${article.title}": ${scoreResponse}`, e, { articleTitle: article.title, scoreResponse });
-										score = 10; // Default low score on error
-									}
-								} else {
-									logWarning(`Could not get score response from Gemini for article: ${article.title}. Assigning default low score.`, { articleTitle: article.title });
-									score = 10; // Default low score
-								}
+								// 教育プログラムのデータに基づいてスコアを計算するか、selectPersonalizedArticles 関数内で処理するように変更
+								let score = 0; // デフォルトスコアを設定するか、後続の処理で計算
 
 								articlesWithScores.push({ ...article, score, embedding });
 							}
