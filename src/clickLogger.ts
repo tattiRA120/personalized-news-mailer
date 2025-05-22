@@ -20,8 +20,6 @@ interface BanditModelState {
     dimension: number; // 特徴量ベクトルの次元 (embedding の次元)
     // その他のバンディット関連パラメータ (例: alpha for UCB)
     alpha: number;
-    // ユーザーに送信された記事のembeddingを保存するマップ
-    sentArticlesEmbeddings: { [articleId: string]: number[] };
 }
 
 interface ClickEvent {
@@ -149,7 +147,6 @@ export class ClickLogger implements DurableObject {
 
     private banditModel: BanditModelState | null = null;
     private readonly banditStateKey = 'banditModelState';
-    private readonly sentArticlesKey = 'sentArticlesEmbeddings'; // 送信済み記事embeddingのストレージキー
 
     constructor(state: DurableObjectState, env: any) {
         this.state = state;
@@ -161,14 +158,12 @@ export class ClickLogger implements DurableObject {
         });
     }
 
-    // Durable Object の状態（バンディットモデルと送信済み記事embedding）をストレージから読み込む
+    // Durable Object の状態（バンディットモデル）をストレージから読み込む
     private async loadState(): Promise<void> {
-        const savedState = await this.state.storage.get<Map<string, any>>([this.banditStateKey, this.sentArticlesKey]);
+        const savedModel = await this.state.storage.get<BanditModelState>(this.banditStateKey);
 
-        const savedModel = savedState.get(this.banditStateKey);
-        // 取得した値を unknown にキャストしてから目的の型にキャスト
         if (savedModel !== undefined && savedModel !== null) {
-             this.banditModel = savedModel as unknown as BanditModelState;
+             this.banditModel = savedModel;
              logInfo(`Loaded bandit model state for ${this.state.id.toString()}`);
         } else {
             // モデルがまだ存在しない場合は初期化
@@ -179,41 +174,21 @@ export class ClickLogger implements DurableObject {
                 b: Array(dimension).fill(0),
                 dimension: dimension,
                 alpha: 0.1, // UCB パラメータ alpha
-                sentArticlesEmbeddings: {}, // 初期化時に空のオブジェクトを設定
             };
             // A を単位行列で初期化 (LinUCB の標準的な初期化)
             for (let i = 0; i < dimension; i++) {
                 this.banditModel.A[i][i] = 1.0;
             }
             logInfo(`Initialized new bandit model state with dimension ${dimension} for ${this.state.id.toString()}`);
-        }
-
-        const savedSentArticles = savedState.get(this.sentArticlesKey);
-        // 送信済み記事embeddingを読み込む
-        // 取得した値を unknown にキャストしてから目的の型にキャスト
-        if (savedSentArticles !== undefined && savedSentArticles !== null) {
-             if (this.banditModel) {
-                this.banditModel.sentArticlesEmbeddings = savedSentArticles as unknown as { [articleId: string]: number[] };
-                logInfo(`Loaded sent articles embeddings for ${this.state.id.toString()}`);
-             }
-        } else {
-             if (this.banditModel) {
-                this.banditModel.sentArticlesEmbeddings = {}; // 初期化
-                logInfo(`Initialized empty sent articles embeddings for ${this.state.id.toString()}`);
-             }
-        }
-
-        // 初期状態を保存 (モデルが初期化された場合のみ)
-        if (this.banditModel && (savedModel === undefined || savedModel === null)) { // savedModel が undefined または null の場合
-             await this.saveState();
+            // 初期状態を保存
+            await this.saveState();
         }
     }
 
-    // Durable Object の状態（バンディットモデルと送信済み記事embedding）をストレージに保存する
+    // Durable Object の状態（バンディットモデル）をストレージに保存する
     private async saveState(): Promise<void> {
         if (this.banditModel) {
             await this.state.storage.put(this.banditStateKey, this.banditModel);
-            await this.state.storage.put(this.sentArticlesKey, this.banditModel.sentArticlesEmbeddings);
             logInfo(`Saved Durable Object state for ${this.state.id.toString()}`);
         }
     }
@@ -230,18 +205,21 @@ export class ClickLogger implements DurableObject {
 
         // /log-sent-articles エンドポイントのリクエストボディの型定義
         interface LogSentArticlesRequestBody {
-            sentArticles: { articleId: string, timestamp: number, embedding: number[] }[];
+            sentArticles: { articleId: string, timestamp: number }[];
         }
 
         // /log-click エンドポイントのリクエストボディの型定義
         interface LogClickRequestBody {
             articleId: string;
             timestamp: number;
-            // embedding と reward は Durable Object 側で処理する
-            // embedding?: number[];
-            // reward?: number;
         }
 
+        // /update-bandit-from-click エンドポイントのリクエストボディの型定義
+        interface UpdateBanditFromClickRequestBody {
+            articleId: string;
+            embedding: number[];
+            reward: number;
+        }
 
         if (request.method === 'POST' && path === '/log-click') {
             try {
@@ -254,29 +232,13 @@ export class ClickLogger implements DurableObject {
                 }
 
                 // クリックイベントをストレージに保存
-                // embedding と reward はここでは保存しない（バンディットモデル更新時に使用）
                 // キーフォーマット: click:<timestamp>:<articleId>
                 const eventKey = `click:${timestamp}:${articleId}`;
                 await this.state.storage.put(eventKey, { articleId, timestamp });
 
                 logInfo(`Logged click for user ${this.state.id.toString()}, article ${articleId} at ${timestamp}`);
 
-                // クリックイベントに基づいてバンディットモデルを更新
-                if (this.banditModel && this.banditModel.sentArticlesEmbeddings) { // banditModel と sentArticlesEmbeddings が存在するか確認
-                    // 保存済みのembeddingを取得
-                    const embedding = this.banditModel.sentArticlesEmbeddings[articleId];
-                    const reward = 1.0; // クリックイベントなので報酬は 1.0
-
-                    if (embedding) {
-                        this.updateBanditModel(embedding, reward);
-                        await this.saveState(); // 状態全体を保存
-                        logInfo(`Updated bandit model for user ${this.state.id.toString()} with click on ${articleId} and reward ${reward}`);
-                    } else {
-                        logWarning(`Cannot update bandit model for user ${this.state.id.toString()}: embedding not found for article ${articleId}.`);
-                    }
-                } else {
-                    logWarning(`Cannot update bandit model for user ${this.state.id.toString()}: model not initialized or sentArticlesEmbeddings is missing.`);
-                }
+                // バンディットモデルの更新は定期バッチ処理で行うため、ここでは行わない
 
                 return new Response('Click logged', { status: 200 });
 
@@ -309,6 +271,7 @@ export class ClickLogger implements DurableObject {
             }
         } else if (request.method === 'POST' && path === '/log-sent-articles') {
             try {
+                // 送信ログを保存するのみで、embeddingは保存しない
                 const { sentArticles } = await request.json() as LogSentArticlesRequestBody;
                 if (!Array.isArray(sentArticles)) {
                     return new Response('Invalid input: sentArticles must be an array', { status: 400 });
@@ -316,30 +279,15 @@ export class ClickLogger implements DurableObject {
 
                 logInfo(`Logging ${sentArticles.length} sent articles for user ${this.state.id.toString()}`);
 
-                if (this.banditModel) {
-                    // 送信した記事のembeddingをマップに保存し、送信ログを保存
-                    const putPromises = sentArticles.map(async article => {
-                        if (article.embedding) {
-                            // 非nullアサーションを追加してTypeScriptのエラーを抑制
-                            this.banditModel!.sentArticlesEmbeddings[article.articleId] = article.embedding;
-                            // 送信ログを保存
-                            // キーフォーマット: sent:<timestamp>:<articleId>
-                            const logKey = `sent:${article.timestamp}:${article.articleId}`;
-                            await this.state.storage.put(logKey, { articleId: article.articleId, timestamp: article.timestamp });
-                        } else {
-                            logWarning(`Embedding missing for sent article ${article.articleId}. Cannot save embedding or log sent.`);
-                        }
-                    });
-                    await Promise.all(putPromises);
+                // 送信ログを保存
+                const putPromises = sentArticles.map(async article => {
+                    // キーフォーマット: sent:<timestamp>:<articleId>
+                    const logKey = `sent:${article.timestamp}:${article.articleId}`;
+                    await this.state.storage.put(logKey, { articleId: article.articleId, timestamp: article.timestamp });
+                });
+                await Promise.all(putPromises);
 
-
-                    // 状態全体を保存 (sentArticlesEmbeddings の更新を含む)
-                    await this.saveState();
-                    logInfo(`Successfully logged sent articles and saved embeddings for user ${this.state.id.toString()}`);
-                } else {
-                    logWarning(`Bandit model not initialized. Cannot log sent articles embeddings or sent logs for user ${this.state.id.toString()}`);
-                }
-
+                logInfo(`Successfully logged sent articles for user ${this.state.id.toString()}`);
 
                 return new Response('Sent articles logged', { status: 200 });
 
@@ -348,97 +296,9 @@ export class ClickLogger implements DurableObject {
                 return new Response('Error logging sent articles', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/decay-rewards') {
-            try {
-                logInfo(`Starting reward decay process for user ${this.state.id.toString()}`);
-
-                if (!this.banditModel) {
-                    logWarning(`Bandit model not initialized. Skipping reward decay for user ${this.state.id.toString()}`);
-                    return new Response('Bandit model not initialized', { status: 500 });
-                }
-
-                // 一定期間（例: 24時間）以上前の送信済み記事ログを取得
-                const decayThreshold = Date.now() - 24 * 60 * 60 * 1000; // 24時間前
-                // Durable Object のストレージから sent: プレフィックスで始まるキーをリストアップ
-                const sentArticleLogKeys = await this.state.storage.list({ prefix: 'sent:' });
-
-                const articlesToDecay: { articleId: string, embedding: number[] }[] = [];
-                const logKeysToDelete: string[] = [];
-
-                // sentArticleLogKeys は Map<string, any> なので、キーのみを処理
-                for (const key of sentArticleLogKeys.keys()) {
-                     // キーからタイムスタンプと articleId を抽出 (フォーマット: sent:<timestamp>:<articleId>)
-                    const parts = key.split(':');
-                    if (parts.length >= 3) {
-                        const timestamp = parseInt(parts[1], 10);
-                        const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
-
-                        if (timestamp < decayThreshold) {
-                            // 減衰対象の送信ログ
-                            // この送信ログに対応するクリックログがあるか確認
-                            // クリックログのキーは click:<timestamp>:<articleId> の形式で保存されていると想定
-                            const clickLogKey = `click:${timestamp}:${articleId}`;
-                            const clickLog = await this.state.storage.get(clickLogKey);
-
-                            if (!clickLog) {
-                                // 対応するクリックログがない場合、報酬を減衰
-                                logInfo(`Decaying reward for article ${articleId} (sent at ${timestamp})`);
-                                // 保存済みのembeddingを取得
-                                const embedding = this.banditModel.sentArticlesEmbeddings[articleId];
-
-                                if (embedding) {
-                                    // 報酬ゼロでモデルを更新
-                                    this.updateBanditModel(embedding, 0.0); // 報酬ゼロ
-                                    articlesToDecay.push({ articleId: articleId, embedding: embedding }); // ログ用
-                                    // 減衰処理を行った記事のembeddingはマップから削除
-                                    // TODO: embedding の削除は慎重に行うべき。他のユーザーも同じ記事を送信している可能性がある。
-                                    // ユーザーごとの Durable Object なので、ここではそのユーザーに送信された記事のembeddingのみを管理していると仮定。
-                                    // ただし、同じ記事が複数回送信された場合の扱いは検討が必要。
-                                    // 今回はシンプルに、減衰対象となった記事のembeddingをマップから削除する。
-                                    delete this.banditModel.sentArticlesEmbeddings[articleId];
-                                } else {
-                                    logWarning(`Cannot decay reward for article ${articleId}: embedding not found in sentArticlesEmbeddings.`);
-                                }
-                            } else {
-                                logInfo(`Article ${articleId} was clicked (sent at ${timestamp}). No decay needed.`);
-                            }
-                            // 処理済みの送信ログキーを削除リストに追加
-                            logKeysToDelete.push(key);
-                        }
-                    } else {
-                        logWarning(`Invalid sent article log key format: ${key}`);
-                    }
-                }
-
-                // 処理済みの送信ログを削除
-                if (logKeysToDelete.length > 0) {
-                    logInfo(`Deleting ${logKeysToDelete.length} processed sent article log keys.`);
-                    const deletePromises = logKeysToDelete.map(key => this.state.storage.delete(key));
-                    await Promise.all(deletePromises);
-                }
-
-
-                // 状態全体を保存 (バンディットモデルと更新されたsentArticlesEmbeddings)
-                if (articlesToDecay.length > 0 || logKeysToDelete.length > 0) {
-                     await this.saveState();
-                     if (articlesToDecay.length > 0) {
-                        logInfo(`Saved Durable Object state after decaying rewards.`);
-                     }
-                     if (logKeysToDelete.length > 0) {
-                        logInfo(`Deleted ${logKeysToDelete.length} processed sent article log keys.`);
-                     }
-                } else {
-                    logInfo(`No articles to decay or delete for user ${this.state.id.toString()}`);
-                }
-
-
-                logInfo(`Reward decay process finished for user ${this.state.id.toString()}`);
-
-                return new Response('Reward decay process completed', { status: 200 });
-
-            } catch (error) {
-                logError('Error during reward decay process:', error);
-                return new Response('Error during reward decay process', { status: 500 });
-            }
+            // このエンドポイントは定期バッチ処理に置き換えられるため、ここでは何もしないか、廃止する
+            logWarning('/decay-rewards endpoint is deprecated and will be replaced by a batch process.');
+            return new Response('Deprecated endpoint', { status: 405 }); // Method Not Allowed or similar
         } else if (request.method === 'POST' && path === '/learn-from-education') {
             try {
                 // /learn-from-education エンドポイントのリクエストボディの型定義
@@ -490,6 +350,58 @@ export class ClickLogger implements DurableObject {
             } catch (error) {
                 logError('Error learning from education:', error, { userId: this.state.id.toString(), requestUrl: request.url });
                 return new Response('Error learning from education', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
+             try {
+                const { articleId, embedding, reward } = await request.json() as UpdateBanditFromClickRequestBody;
+
+                if (!articleId || !embedding || reward === undefined) {
+                    logWarning('Update bandit from click failed: Missing parameters.');
+                    return new Response('Missing parameters', { status: 400 });
+                }
+
+                logInfo(`Updating bandit model from click for article ${articleId} with reward ${reward}`);
+
+                if (this.banditModel) {
+                    this.updateBanditModel(embedding, reward);
+                    await this.saveState();
+                    logInfo(`Successfully updated bandit model from click for article ${articleId}`);
+                } else {
+                    logWarning(`Bandit model not initialized. Cannot update bandit model from click for article ${articleId}.`);
+                    return new Response('Bandit model not initialized', { status: 500 });
+                }
+
+                return new Response('Bandit model updated from click', { status: 200 });
+
+            } catch (error) {
+                logError('Error updating bandit model from click:', error, { userId: this.state.id.toString(), requestUrl: request.url });
+                return new Response('Error updating bandit model from click', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
+             try {
+                const { articleId, embedding, reward } = await request.json() as UpdateBanditFromClickRequestBody;
+
+                if (!articleId || !embedding || reward === undefined) {
+                    logWarning('Update bandit from click failed: Missing parameters.');
+                    return new Response('Missing parameters', { status: 400 });
+                }
+
+                logInfo(`Updating bandit model from click for article ${articleId} with reward ${reward}`);
+
+                if (this.banditModel) {
+                    this.updateBanditModel(embedding, reward);
+                    await this.saveState();
+                    logInfo(`Successfully updated bandit model from click for article ${articleId}`);
+                } else {
+                    logWarning(`Bandit model not initialized. Cannot update bandit model from click for article ${articleId}.`);
+                    return new Response('Bandit model not initialized', { status: 500 });
+                }
+
+                return new Response('Bandit model updated from click', { status: 200 });
+
+            } catch (error) {
+                logError('Error updating bandit model from click:', error, { userId: this.state.id.toString(), requestUrl: request.url });
+                return new Response('Error updating bandit model from click', { status: 500 });
             }
         }
 
@@ -576,6 +488,41 @@ export class ClickLogger implements DurableObject {
         return logs;
     }
 
+    // 未処理のクリックログを取得し、ストレージから削除するメソッド
+    async getAndClearClickLogs(startTime?: number, endTime?: number): Promise<{ articleId: string; timestamp: number; }[]> {
+        logInfo(`Getting and clearing click logs for user ${this.state.id.toString()}`, { userId: this.state.id.toString(), startTime, endTime });
+        const logs: { articleId: string; timestamp: number; }[] = [];
+        const keysToDelete: string[] = [];
+
+        // Durable Object のストレージから click: プレフィックスで始まるキーをリストアップ
+        const listResult = await this.state.storage.list({ prefix: 'click:' });
+
+        for (const [key, value] of listResult.entries()) {
+            // キーから articleId と timestamp を抽出
+            const parts = key.split(':');
+            if (parts.length >= 3) {
+                 const timestamp = parseInt(parts[1], 10);
+                 const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
+
+                 if ((startTime === undefined || timestamp >= startTime) && (endTime === undefined || timestamp <= endTime)) {
+                     logs.push({ articleId, timestamp });
+                     keysToDelete.push(key); // 削除リストに追加
+                 }
+            } else {
+                 logWarning(`Invalid click log key format: ${key}`);
+            }
+        }
+
+        // 取得したログをストレージから削除
+        if (keysToDelete.length > 0) {
+            logInfo(`Deleting ${keysToDelete.length} processed click log keys.`);
+            await this.state.storage.delete(keysToDelete);
+        }
+
+        logInfo(`Found and cleared ${logs.length} click logs.`, { userId: this.state.id.toString(), count: logs.length });
+        return logs;
+    }
+
 
     // 記事リストに対して LinUCB の UCB 値を計算する
     private getUCBValues(articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {
@@ -633,7 +580,8 @@ export class ClickLogger implements DurableObject {
         return ucbResults;
     }
 
-    // クリックイベントに基づいてバンディットモデルを更新するメソッド
+    // バンディットモデルを更新するメソッド
+    // このメソッドは、教育プログラムからの学習時と、定期バッチ処理によるクリックログからの学習時に使用される
     private updateBanditModel(embedding: number[], reward: number): void {
         if (!this.banditModel || embedding.length !== this.banditModel.dimension) {
             logWarning("Cannot update bandit model: model not initialized or embedding dimension mismatch.");

@@ -325,7 +325,7 @@ export default {
 					const sentArticlesData = selectedArticles.map(article => ({
 						articleId: article.link, // articleId は link と仮定
 						timestamp: Date.now(), // 送信時のタイムスタンプ
-						embedding: article.embedding, // embedding も一緒に保存
+						// embedding は Durable Object に保存しない
 					}));
 
 					// In scheduled task, request.url is not defined. Use relative path.
@@ -342,17 +342,46 @@ export default {
 					}
 
 
-					// --- 10. Trigger Reward Decay in Durable Object ---
-					logInfo(`Triggering reward decay in ClickLogger for user ${userId}...`, { userId });
-					// In scheduled task, request.url is not defined. Use relative path.
-					const decayResponse = await clickLogger.fetch(new Request('http://dummy-host/decay-rewards', {
-						method: 'POST',
-					}));
+					// --- 10. Process Click Logs and Update Bandit Model ---
+					logInfo(`Processing click logs and updating bandit model for user ${userId}...`, { userId });
+					// Durable Object から未処理のクリックログを取得し、削除
+					const clickLogsToProcess = await clickLogger.getAndClearClickLogs();
+					logInfo(`Found ${clickLogsToProcess.length} click logs to process for user ${userId}.`, { userId, count: clickLogsToProcess.length });
 
-					if (decayResponse.ok) {
-						logInfo(`Successfully triggered reward decay for user ${userId}.`, { userId });
+					if (clickLogsToProcess.length > 0) {
+						const updatePromises = clickLogsToProcess.map(async clickLog => {
+							const articleId = clickLog.articleId;
+							const cacheKey = `article:${articleId}`; // 記事IDはリンクと仮定
+
+							try {
+								// KVから記事データ（embeddingを含む）を取得
+								const cachedArticle = await env.ARTICLE_EMBEDDINGS.get(cacheKey, { type: 'json' }) as NewsArticle | null;
+
+								if (cachedArticle && cachedArticle.embedding) {
+									// バンディットモデルを更新
+									const reward = 1.0; // クリックイベントなので報酬は 1.0
+									const updateResponse = await clickLogger.fetch(new Request('http://dummy-host/update-bandit-from-click', {
+										method: 'POST',
+										headers: { 'Content-Type': 'application/json' },
+										body: JSON.stringify({ articleId: articleId, embedding: cachedArticle.embedding, reward: reward }),
+									}));
+
+									if (updateResponse.ok) {
+										logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}.`, { userId, articleId });
+									} else {
+										logError(`Failed to update bandit model from click for article ${articleId} for user ${userId}: ${updateResponse.statusText}`, null, { userId, articleId, status: updateResponse.status, statusText: updateResponse.statusText });
+									}
+								} else {
+									logWarning(`Article data or embedding not found in KV for clicked article ${articleId} for user ${userId}. Cannot update bandit model.`, { userId, articleId });
+								}
+							} catch (updateError) {
+								logError(`Error processing click log for article ${articleId} for user ${userId}:`, updateError, { userId, articleId });
+							}
+						});
+						await Promise.all(updatePromises);
+						logInfo(`Finished processing click logs and updating bandit model for user ${userId}.`, { userId });
 					} else {
-						logError(`Failed to trigger reward decay for user ${userId}: ${decayResponse.statusText}`, null, { userId, status: decayResponse.status, statusText: decayResponse.statusText });
+						logInfo(`No click logs to process for user ${userId}.`, { userId });
 					}
 
 
@@ -875,19 +904,32 @@ export default {
 					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId);
 					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-					// Send a request to the Durable Object to learn from selected articles
-					// Use a relative path for the Durable Object fetch
-					const learnResponse = await clickLogger.fetch(new Request('http://dummy-host/learn-from-education', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ selectedArticles: selectedArticlesWithEmbeddings }),
-					}));
+					const batchSize = 10; // バッチサイズを定義 (調整可能)
+					logInfo(`Sending selected articles for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length, batchSize });
 
-					if (learnResponse.ok) {
-						logInfo(`Successfully sent selected articles for learning to ClickLogger for user ${userId}.`, { userId, selectedCount: selectedArticlesWithEmbeddings.length });
-					} else {
-						logError(`Failed to send selected articles for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, status: learnResponse.status, statusText: learnResponse.statusText });
+					for (let i = 0; i < selectedArticlesWithEmbeddings.length; i += batchSize) {
+						const batch = selectedArticlesWithEmbeddings.slice(i, i + batchSize);
+						logInfo(`Sending batch ${Math.floor(i / batchSize) + 1} with ${batch.length} articles for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1, batchCount: batch.length });
+
+						// Send a request to the Durable Object to learn from selected articles
+						// Use a relative path for the Durable Object fetch
+						const learnResponse = await clickLogger.fetch(new Request('http://dummy-host/learn-from-education', {
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							body: JSON.stringify({ selectedArticles: batch }),
+						}));
+
+						if (learnResponse.ok) {
+							logInfo(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
+						} else {
+							logError(`Failed to send batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, batchNumber: Math.floor(i / batchSize) + 1, status: learnResponse.status, statusText: learnResponse.statusText });
+							// エラーが発生した場合、後続のバッチ処理を中断するか継続するか検討
+							// ここではエラーをログに出力し、処理を継続します。
+						}
 					}
+
+					logInfo(`Finished sending all batches for learning to ClickLogger for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length });
+
 				} else {
 					logWarning(`No selected articles with embeddings to send for learning for user ${userId}.`, { userId });
 				}
