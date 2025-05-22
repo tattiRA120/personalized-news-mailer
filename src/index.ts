@@ -102,6 +102,10 @@ export default {
                     const now = Date.now();
                     const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000; // 7日前 (ミリ秒)
 
+					// Durable Object (ClickLogger) のインスタンスを取得
+					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId); // ユーザーIDに対応するDO IDを取得
+					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId); // DO インスタンスを取得
+
                     const educationLogs = await clickLogger.getEducationLogs(sevenDaysAgo, now);
                     const clickLogs = await clickLogger.getClickLogs(sevenDaysAgo, now);
                     const sentLogs = await clickLogger.getSentLogs(sevenDaysAgo, now);
