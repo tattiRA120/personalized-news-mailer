@@ -13,7 +13,6 @@ import { ARTICLE_CATEGORIES } from './config'; // カテゴリーリストを取
 export interface Env {
 	'mail-news-user-profiles': KVNamespace; // KV Namespace binding name from wrangler.jsonc
 	CLICK_LOGGER: DurableObjectNamespace;
-	GEMINI_API_KEY?: string; // Assuming GEMINI_API_KEY is set as a secret or var (for scoring)
 	OPENAI_API_KEY?: string; // Import OpenAI embeddings client
 	// Add other bindings as needed (e.g., R2, Queues)
 	GOOGLE_CLIENT_ID?: string; // Add Google Client ID
