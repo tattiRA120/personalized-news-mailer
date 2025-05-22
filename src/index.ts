@@ -284,9 +284,6 @@ export default {
 
 					// --- 8. Second Selection (MMR + Bandit) ---
 					logInfo(`Starting second selection (MMR + Bandit) for user ${userId}...`, { userId });
-					// Durable Object (ClickLogger) のインスタンスを取得
-					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId); // ユーザーIDに対応するDO IDを取得
-					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId); // DO インスタンスを取得
 
 					// selectPersonalizedArticles 関数に embedding が付与された記事リストを渡す
 					// @ts-ignore: Durable Object Stub の型に関するエラーを抑制
