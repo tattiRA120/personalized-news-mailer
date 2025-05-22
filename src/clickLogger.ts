@@ -143,12 +143,15 @@ function invertMatrix(matrix: number[][]): number[][] {
 // Durable Object class for managing click logs and bandit model per user
 export class ClickLogger implements DurableObject {
     state: DurableObjectState;
-    env: any; // TODO: Define a proper Env interface if needed
+    env: {
+        ARTICLE_EMBEDDINGS: KVNamespace; // KV Namespace binding
+    };
 
     private banditModel: BanditModelState | null = null;
-    private readonly banditStateKey = 'banditModelState';
+    // Durable Object ストレージにはバンディットモデル全体ではなく、KVのキーなどを保存する
+    // private readonly banditStateKey = 'banditModelState';
 
-    constructor(state: DurableObjectState, env: any) {
+    constructor(state: DurableObjectState, env: { ARTICLE_EMBEDDINGS: KVNamespace }) {
         this.state = state;
         this.env = env;
 
@@ -160,36 +163,77 @@ export class ClickLogger implements DurableObject {
 
     // Durable Object の状態（バンディットモデル）をストレージから読み込む
     private async loadState(): Promise<void> {
-        const savedModel = await this.state.storage.get<BanditModelState>(this.banditStateKey);
+        // Durable Object ストレージからバンディットモデルの状態を読み込む代わりに、KVから読み込む
+        const A_str = await this.env.ARTICLE_EMBEDDINGS.get(`${this.state.id.toString()}_A`);
+        const b_str = await this.env.ARTICLE_EMBEDDINGS.get(`${this.state.id.toString()}_b`);
+        const dimension_str = await this.env.ARTICLE_EMBEDDINGS.get(`${this.state.id.toString()}_dimension`);
+        const alpha_str = await this.env.ARTICLE_EMBEDDINGS.get(`${this.state.id.toString()}_alpha`);
 
-        if (savedModel !== undefined && savedModel !== null) {
-             this.banditModel = savedModel;
-             logInfo(`Loaded bandit model state for ${this.state.id.toString()}`);
+
+        if (A_str !== null && b_str !== null && dimension_str !== null && alpha_str !== null) {
+             try {
+                const A = JSON.parse(A_str);
+                const b = JSON.parse(b_str);
+                const dimension = parseInt(dimension_str, 10);
+                const alpha = parseFloat(alpha_str);
+
+                // 読み込んだデータが正しい形式か基本的なチェックを行う
+                if (Array.isArray(A) && Array.isArray(b) && typeof dimension === 'number' && typeof alpha === 'number') {
+                     this.banditModel = { A, b, dimension, alpha };
+                     logInfo(`Loaded bandit model state from KV for ${this.state.id.toString()}`);
+                } else {
+                     logWarning(`Invalid bandit model data format in KV for ${this.state.id.toString()}. Initializing new model.`);
+                     await this.initializeNewBanditModel();
+                }
+             } catch (error) {
+                 logError(`Error parsing bandit model state from KV for ${this.state.id.toString()}:`, error);
+                 logWarning(`Initializing new bandit model due to parsing error for ${this.state.id.toString()}.`);
+                 await this.initializeNewBanditModel();
+             }
         } else {
             // モデルがまだ存在しない場合は初期化
-            // OpenAI Embedding API (text-multilingual-embedding-002) の次元数 1536 で設定する。
-            const dimension = 1536; // OpenAI Embedding API の次元数
-            this.banditModel = {
-                A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
-                b: Array(dimension).fill(0),
-                dimension: dimension,
-                alpha: 0.1, // UCB パラメータ alpha
-            };
-            // A を単位行列で初期化 (LinUCB の標準的な初期化)
-            for (let i = 0; i < dimension; i++) {
-                this.banditModel.A[i][i] = 1.0;
-            }
-            logInfo(`Initialized new bandit model state with dimension ${dimension} for ${this.state.id.toString()}`);
-            // 初期状態を保存
-            await this.saveState();
+            logInfo(`Bandit model state not found in KV for ${this.state.id.toString()}. Initializing new model.`);
+            await this.initializeNewBanditModel();
         }
     }
+
+    // 新しいバンディットモデルを初期化するヘルパーメソッド
+    private async initializeNewBanditModel(): Promise<void> {
+        // OpenAI Embedding API (text-multilingual-embedding-002) の次元数 1536 で設定する。
+        const dimension = 1536; // OpenAI Embedding API の次元数
+        this.banditModel = {
+            A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
+            b: Array(dimension).fill(0),
+            dimension: dimension,
+            alpha: 0.1, // UCB パラメータ alpha
+        };
+        // A を単位行列で初期化 (LinUCB の標準的な初期化)
+        for (let i = 0; i < dimension; i++) {
+            this.banditModel.A[i][i] = 1.0;
+        }
+        logInfo(`Initialized new bandit model state with dimension ${dimension} for ${this.state.id.toString()}`);
+        // 初期状態を保存
+        await this.saveState();
+    }
+
 
     // Durable Object の状態（バンディットモデル）をストレージに保存する
     private async saveState(): Promise<void> {
         if (this.banditModel) {
-            await this.state.storage.put(this.banditStateKey, this.banditModel);
-            logInfo(`Saved Durable Object state for ${this.state.id.toString()}`);
+            // バンディットモデル全体ではなく、A, b, dimension, alpha を個別にKVに保存する
+            const { A, b, dimension, alpha } = this.banditModel;
+            const userId = this.state.id.toString();
+
+            try {
+                await this.env.ARTICLE_EMBEDDINGS.put(`${userId}_A`, JSON.stringify(A));
+                await this.env.ARTICLE_EMBEDDINGS.put(`${userId}_b`, JSON.stringify(b));
+                await this.env.ARTICLE_EMBEDDINGS.put(`${userId}_dimension`, dimension.toString());
+                await this.env.ARTICLE_EMBEDDINGS.put(`${userId}_alpha`, alpha.toString());
+                logInfo(`Saved bandit model state to KV for ${userId}`);
+            } catch (error) {
+                logError(`Error saving bandit model state to KV for ${userId}:`, error);
+                // エラーハンドリングを検討 (リトライ、アラートなど)
+            }
         }
     }
 
@@ -377,31 +421,15 @@ export class ClickLogger implements DurableObject {
                 logError('Error updating bandit model from click:', error, { userId: this.state.id.toString(), requestUrl: request.url });
                 return new Response('Error updating bandit model from click', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
-             try {
-                const { articleId, embedding, reward } = await request.json() as UpdateBanditFromClickRequestBody;
-
-                if (!articleId || !embedding || reward === undefined) {
-                    logWarning('Update bandit from click failed: Missing parameters.');
-                    return new Response('Missing parameters', { status: 400 });
-                }
-
-                logInfo(`Updating bandit model from click for article ${articleId} with reward ${reward}`);
-
-                if (this.banditModel) {
-                    this.updateBanditModel(embedding, reward);
-                    await this.saveState();
-                    logInfo(`Successfully updated bandit model from click for article ${articleId}`);
-                } else {
-                    logWarning(`Bandit model not initialized. Cannot update bandit model from click for article ${articleId}.`);
-                    return new Response('Bandit model not initialized', { status: 500 });
-                }
-
-                return new Response('Bandit model updated from click', { status: 200 });
-
+        }else if (request.method === 'POST' && path === '/delete-all-data') {
+            try {
+                logInfo(`Deleting all data for Durable Object ${this.state.id.toString()}`);
+                await this.state.storage.deleteAll();
+                logInfo(`All data deleted for Durable Object ${this.state.id.toString()}`);
+                return new Response('All data deleted', { status: 200 });
             } catch (error) {
-                logError('Error updating bandit model from click:', error, { userId: this.state.id.toString(), requestUrl: request.url });
-                return new Response('Error updating bandit model from click', { status: 500 });
+                logError('Error deleting all data:', error, { userId: this.state.id.toString(), requestUrl: request.url });
+                return new Response('Error deleting all data', { status: 500 });
             }
         }
 

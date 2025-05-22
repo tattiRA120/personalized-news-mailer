@@ -944,6 +944,60 @@ export default {
 				logError('Error submitting interests:', error, { requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
+		} else if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
+			logInfo('Request received to delete all Durable Object data');
+			try {
+				// Get all user IDs from KV
+				const userIds = await getAllUserIds({ 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+				logInfo(`Found ${userIds.length} users. Deleting data for each Durable Object.`, { userCount: userIds.length });
+
+				const deletePromises = userIds.map(async userId => {
+					try {
+						const clickLoggerId = env.CLICK_LOGGER.idFromName(userId);
+						const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+						// Send request to the Durable Object to delete its data
+						const deleteResponse = await clickLogger.fetch(new Request('http://dummy-host/delete-all-data', {
+							method: 'POST',
+						}));
+
+						if (deleteResponse.ok) {
+							logInfo(`Successfully deleted data for Durable Object for user ${userId}.`, { userId });
+						} else {
+							logError(`Failed to delete data for Durable Object for user ${userId}: ${deleteResponse.statusText}`, null, { userId, status: deleteResponse.status, statusText: deleteResponse.statusText });
+						}
+					} catch (error) {
+						logError(`Error processing Durable Object deletion for user ${userId}:`, error, { userId });
+					}
+				});
+
+				await Promise.all(deletePromises);
+
+				logInfo('Finished attempting to delete data for all Durable Objects.');
+				return new Response('Attempted to delete data for all Durable Objects', { status: 200 });
+
+			} catch (error) {
+				logError('Error during deletion of all Durable Object data:', error, { requestUrl: request.url });
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
+
+		// Handle Durable Object requests
+		if (path.startsWith('/do/')) {
+			const parts = path.split('/');
+			if (parts.length >= 4 && parts[3] === 'delete-all-data' && request.method === 'POST') {
+				const doId = parts[2]; // Assuming DO ID is the third part of the path
+				try {
+					const id = env.CLICK_LOGGER.idFromString(doId);
+					const clickLogger = env.CLICK_LOGGER.get(id);
+					// Forward the request to the Durable Object
+					return clickLogger.fetch(request);
+				} catch (error) {
+					logError(`Error fetching Durable Object ${doId}:`, error);
+					return new Response('Error fetching Durable Object', { status: 500 });
+				}
+			}
+			// Add other Durable Object endpoint routing here if needed
 		}
 
 
