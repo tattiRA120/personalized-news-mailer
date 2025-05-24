@@ -1,6 +1,7 @@
 // src/clickLogger.ts
 
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
+import { DurableObject } from 'cloudflare:workers'; // DurableObject をインポート
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -141,7 +142,7 @@ function invertMatrix(matrix: number[][]): number[][] {
 
 
 // Durable Object class for managing click logs and bandit model per user
-export class ClickLogger implements DurableObject {
+export class ClickLogger extends DurableObject {
     state: DurableObjectState;
     env: {
         ARTICLE_EMBEDDINGS: KVNamespace; // KV Namespace binding
@@ -152,6 +153,7 @@ export class ClickLogger implements DurableObject {
     // private readonly banditStateKey = 'banditModelState';
 
     constructor(state: DurableObjectState, env: { ARTICLE_EMBEDDINGS: KVNamespace }) {
+        super(state, env); // 親クラスのコンストラクターを呼び出す
         this.state = state;
         this.env = env;
 
