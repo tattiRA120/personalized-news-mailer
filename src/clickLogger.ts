@@ -145,14 +145,14 @@ function invertMatrix(matrix: number[][]): number[][] {
 export class ClickLogger extends DurableObject {
     state: DurableObjectState;
     env: {
-        ARTICLE_EMBEDDINGS: KVNamespace; // KV Namespace binding
+        ARTICLE_EMBEDDINGS: KVNamespace; // KV Namespace binding (ログ保存用など、バンディットモデル以外で使用)
+        BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
     };
 
     private banditModel: BanditModelState | null = null;
-    // Durable Object ストレージにはバンディットモデル全体ではなく、KVのキーなどを保存する
-    // private readonly banditStateKey = 'banditModelState';
+    private readonly banditStateKey = 'banditModelState.json'; // R2に保存するオブジェクトのキー
 
-    constructor(state: DurableObjectState, env: { ARTICLE_EMBEDDINGS: KVNamespace }) {
+    constructor(state: DurableObjectState, env: { ARTICLE_EMBEDDINGS: KVNamespace; BANDIT_MODELS: R2Bucket }) {
         super(state, env); // 親クラスのコンストラクターを呼び出す
         this.state = state;
         this.env = env;
@@ -163,38 +163,34 @@ export class ClickLogger extends DurableObject {
         });
     }
 
-    // Durable Object の状態（バンディットモデル）をストレージから読み込む
+    // Durable Object の状態（バンディットモデル）をR2から読み込む
     private async loadState(): Promise<void> {
-        // Durable Object ストレージからバンディットモデルの状態を読み込む代わりに、KVから読み込む
-        const A_str = await this.env.ARTICLE_EMBEDDINGS.get(`${this.state.id.toString()}_A`);
-        const b_str = await this.env.ARTICLE_EMBEDDINGS.get(`${this.state.id.toString()}_b`);
-        const dimension_str = await this.env.ARTICLE_EMBEDDINGS.get(`${this.state.id.toString()}_dimension`);
-        const alpha_str = await this.env.ARTICLE_EMBEDDINGS.get(`${this.state.id.toString()}_alpha`);
+        const userId = this.state.id.toString();
+        const objectKey = `${userId}/${this.banditStateKey}`; // ユーザーIDごとにフォルダ分け
 
+        try {
+            const object = await this.env.BANDIT_MODELS.get(objectKey);
 
-        if (A_str !== null && b_str !== null && dimension_str !== null && alpha_str !== null) {
-             try {
-                const A = JSON.parse(A_str);
-                const b = JSON.parse(b_str);
-                const dimension = parseInt(dimension_str, 10);
-                const alpha = parseFloat(alpha_str);
+            if (object !== null) {
+                const stateText = await object.text();
+                const loadedState = JSON.parse(stateText) as BanditModelState;
 
                 // 読み込んだデータが正しい形式か基本的なチェックを行う
-                if (Array.isArray(A) && Array.isArray(b) && typeof dimension === 'number' && typeof alpha === 'number') {
-                     this.banditModel = { A, b, dimension, alpha };
-                     logInfo(`Loaded bandit model state from KV for ${this.state.id.toString()}`);
+                if (Array.isArray(loadedState.A) && Array.isArray(loadedState.b) && typeof loadedState.dimension === 'number' && typeof loadedState.alpha === 'number') {
+                    this.banditModel = loadedState;
+                    logInfo(`Loaded bandit model state from R2 for ${userId}`);
                 } else {
-                     logWarning(`Invalid bandit model data format in KV for ${this.state.id.toString()}. Initializing new model.`);
-                     await this.initializeNewBanditModel();
+                    logWarning(`Invalid bandit model data format in R2 for ${userId}. Initializing new model.`);
+                    await this.initializeNewBanditModel();
                 }
-             } catch (error) {
-                 logError(`Error parsing bandit model state from KV for ${this.state.id.toString()}:`, error);
-                 logWarning(`Initializing new bandit model due to parsing error for ${this.state.id.toString()}.`);
-                 await this.initializeNewBanditModel();
-             }
-        } else {
-            // モデルがまだ存在しない場合は初期化
-            logInfo(`Bandit model state not found in KV for ${this.state.id.toString()}. Initializing new model.`);
+            } else {
+                // モデルがまだR2に存在しない場合は初期化
+                logInfo(`Bandit model state not found in R2 for ${userId}. Initializing new model.`);
+                await this.initializeNewBanditModel();
+            }
+        } catch (error) {
+            logError(`Error loading bandit model state from R2 for ${userId}:`, error);
+            logWarning(`Initializing new bandit model due to loading error for ${userId}.`);
             await this.initializeNewBanditModel();
         }
     }
@@ -219,21 +215,19 @@ export class ClickLogger extends DurableObject {
     }
 
 
-    // Durable Object の状態（バンディットモデル）をストレージに保存する
+    // Durable Object の状態（バンディットモデル）をR2に保存する
     private async saveState(): Promise<void> {
         if (this.banditModel) {
-            // バンディットモデル全体ではなく、A, b, dimension, alpha を個別にKVに保存する
-            const { A, b, dimension, alpha } = this.banditModel;
             const userId = this.state.id.toString();
+            const objectKey = `${userId}/${this.banditStateKey}`; // ユーザーIDごとにフォルダ分け
 
             try {
-                await this.env.ARTICLE_EMBEDDINGS.put(`${userId}_A`, JSON.stringify(A));
-                await this.env.ARTICLE_EMBEDDINGS.put(`${userId}_b`, JSON.stringify(b));
-                await this.env.ARTICLE_EMBEDDINGS.put(`${userId}_dimension`, dimension.toString());
-                await this.env.ARTICLE_EMBEDDINGS.put(`${userId}_alpha`, alpha.toString());
-                logInfo(`Saved bandit model state to KV for ${userId}`);
+                // JSON形式で保存
+                const stateJson = JSON.stringify(this.banditModel);
+                await this.env.BANDIT_MODELS.put(objectKey, stateJson);
+                logInfo(`Saved bandit model state to R2 for ${userId}`);
             } catch (error) {
-                logError(`Error saving bandit model state to KV for ${userId}:`, error);
+                logError(`Error saving bandit model state to R2 for ${userId}:`, error);
                 // エラーハンドリングを検討 (リトライ、アラートなど)
             }
         }
@@ -550,13 +544,45 @@ export class ClickLogger extends DurableObject {
         }
 
         logInfo(`Found and cleared ${logs.length} click logs.`, { userId: this.state.id.toString(), count: logs.length });
-        return logs;
+    return logs;
+}
+
+    // 指定した期間よりも古いログを削除するメソッド
+    async cleanupOldLogs(daysToKeep: number): Promise<void> {
+        logInfo(`Starting cleanup of logs older than ${daysToKeep} days for user ${this.state.id.toString()}`);
+        const cutoffTimestamp = Date.now() - daysToKeep * 24 * 60 * 60 * 1000; // 指定日数より前のタイムスタンプ
+
+        const prefixes = ['click:', 'sent:', 'education:'];
+        const keysToDelete: string[] = [];
+
+        for (const prefix of prefixes) {
+            const listResult = await this.state.storage.list({ prefix: prefix });
+            for (const [key, value] of listResult.entries()) {
+                const parts = key.split(':');
+                if (parts.length >= 3) {
+                    const timestamp = parseInt(parts[1], 10);
+                    if (timestamp < cutoffTimestamp) {
+                        keysToDelete.push(key);
+                    }
+                } else {
+                    logWarning(`Invalid log key format during cleanup: ${key}`);
+                }
+            }
+        }
+
+        if (keysToDelete.length > 0) {
+            logInfo(`Deleting ${keysToDelete.length} old log keys for user ${this.state.id.toString()}`);
+            await this.state.storage.delete(keysToDelete);
+            logInfo(`Finished deleting old log keys for user ${this.state.id.toString()}`);
+        } else {
+            logInfo(`No old log keys found for deletion for user ${this.state.id.toString()}`);
+        }
     }
 
 
-    // 記事リストに対して LinUCB の UCB 値を計算する
-    private getUCBValues(articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {
-        if (!this.banditModel || this.banditModel.dimension === 0) {
+// 記事リストに対して LinUCB の UCB 値を計算する
+private getUCBValues(articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {
+    if (!this.banditModel || this.banditModel.dimension === 0) {
             logWarning("Bandit model not initialized or dimension is zero. Cannot calculate UCB values.");
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 })); // UCB値ゼロを返す
         }

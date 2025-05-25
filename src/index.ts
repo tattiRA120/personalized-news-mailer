@@ -384,6 +384,12 @@ export default {
 						logInfo(`No click logs to process for user ${userId}.`, { userId });
 					}
 
+                    // --- 11. Clean up old logs in Durable Object ---
+                    logInfo(`Starting cleanup of old logs for user ${userId}...`, { userId });
+                    const daysToKeepLogs = 30; // ログを保持する日数 (調整可能)
+                    await clickLogger.cleanupOldLogs(daysToKeepLogs);
+                    logInfo(`Finished cleanup of old logs for user ${userId}.`, { userId });
+
 
 					// TODO: Update user profile with sent article IDs for future reference/negative feedback
 					// This could be done here or within the click logging process
@@ -403,7 +409,7 @@ export default {
 					// Continue to the next user even if one user's process fails
 				}
 			} // End of user loop
-            // --- 11. Clean up old embeddings in KV ---
+            // --- 12. Clean up old embeddings in KV ---
             logInfo('Starting KV embedding cleanup...');
             try {
                 const listResult = await env.ARTICLE_EMBEDDINGS.list({ prefix: 'embedding:' });
@@ -573,139 +579,6 @@ export default {
 
 			} catch (error) {
 				logError('Error during click tracking:', error, { userId, articleId, redirectUrl, requestUrl: request.url });
-				return new Response('Internal Server Error', { status: 500 });
-			}
-		}
-
-
-		// --- Webhook Handler (for Brevo click events) ---
-		if (request.method === 'POST' && path === '/webhook/brevo') {
-			logInfo('Brevo webhook received');
-
-			try {
-				// Brevo webhook signature verification
-				// Brevo の署名ヘッダー名と検証方法に合わせて修正
-				const signature = request.headers.get('X-Sib-Webhook-Signature'); // 仮のヘッダー名
-				const rawBody = await request.text(); // 検証には生のボディが必要
-
-				if (!signature || !env.BREVO_WEBHOOK_SECRET) {
-					logWarning('Missing signature or webhook secret.');
-					return new Response('Unauthorized', { status: 401 });
-				}
-
-				try {
-					const encoder = new TextEncoder();
-					const key = await crypto.subtle.importKey(
-						'raw',
-						encoder.encode(env.BREVO_WEBHOOK_SECRET),
-						{ name: 'HMAC', hash: 'SHA-256' },
-						false,
-						['sign']
-					);
-
-					// Brevo の署名検証に使用するデータ形式に合わせて修正
-					// ドキュメントによると、検証にはリクエストボディ自体を使用するようです。
-					const data = rawBody;
-					const signatureBytes = await crypto.subtle.sign(
-						'HMAC',
-						key,
-						encoder.encode(data)
-					);
-
-					const expectedSignature = Array.from(new Uint8Array(signatureBytes))
-						.map(b => b.toString(16).padStart(2, '0'))
-						.join('');
-
-					if (expectedSignature !== signature) {
-						logWarning('Webhook signature mismatch.');
-						return new Response('Unauthorized', { status: 401 });
-					}
-
-					logInfo('Webhook signature verified successfully.');
-
-					// Process events (parse JSON from rawBody after verification)
-					const event = JSON.parse(rawBody); // Brevo のペイロードは単一のイベントオブジェクトのようです
-					logInfo('Received webhook event:', { event });
-
-					if (event.event === 'clicked') {
-						logInfo('Click event received:', { event });
-						// Brevo のペイロードから必要な情報を抽出
-						const clickedUrl = event.url; // クリックされたURL
-						const email = event.email; // クリックしたユーザーのメールアドレス
-						const customData = event['X-Mailin-Custom']; // カスタムデータ
-
-						if (clickedUrl && email) {
-							try {
-								// カスタムデータから userId と articleId を抽出することを想定
-								// メール生成時に X-Mailin-Custom ヘッダーに JSON 文字列などで含める必要があるかもしれません。
-								// 例: {"userId": "...", "articleId": "..."}
-								let userId = null;
-								let articleId = null;
-
-								if (customData) {
-									try {
-										const parsedCustomData = JSON.parse(customData);
-										userId = parsedCustomData.userId;
-										articleId = parsedCustomData.articleId;
-									} catch (e) {
-										logError('Error parsing X-Mailin-Custom:', e, { customData });
-									}
-								}
-
-								if (userId && articleId) {
-									logInfo(`Processing click for user ${userId}, article ${articleId}`, { userId, articleId });
-									// Get the Durable Object for this user
-									const id = env.CLICK_LOGGER.idFromName(userId);
-									const obj = env.CLICK_LOGGER.get(id);
-
-									// Send a request to the Durable Object to log the click
-									// TODO: Determine the actual reward based on event data if available (e.g., time spent on page via another webhook/pixel)
-									// For now, sending a default reward (e.g., 1.0 for a click)
-									const reward = 1.0; // Default reward for a click
-									const logClickResponse = await obj.fetch(new Request(new URL('/log-click', request.url), {
-										method: 'POST',
-										headers: { 'Content-Type': 'application/json' },
-										body: JSON.stringify({ articleId: articleId, timestamp: event.ts_epoch, embedding: null, reward: reward }), // embedding はDO側で取得する必要があるかも
-									}));
-
-									if (logClickResponse.ok) {
-										logInfo(`Click logged successfully for user ${userId}, article ${articleId}`, { userId, articleId });
-									} else {
-										logError(`Failed to log click for user ${userId}, article ${articleId}: ${logClickResponse.statusText}`, null, { userId, articleId, status: logClickResponse.status, statusText: logClickResponse.statusText });
-									}
-
-									// TODO: Update user profile in KV with clicked article ID
-									// Pass the correct KV binding to userProfile functions
-									const userProfile = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
-									if (userProfile && !userProfile.clickedArticleIds.includes(articleId)) {
-										await updateUserProfile({ ...userProfile, clickedArticleIds: [...userProfile.clickedArticleIds, articleId] }, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
-										logInfo(`Updated user profile for ${userId} with clicked article ${articleId}.`, { userId, articleId });
-									}
-
-								} else {
-									logWarning('Could not extract userId or articleId from Brevo webhook payload or X-Mailin-Custom.', { event });
-									// メールアドレスからユーザーIDを検索して処理を続行することも検討
-									// const userProfile = await getUserByEmail(email, { 'mail-news-user-profiles': env['mail-news-user-profiles'] }); // getUserByEmail 関数が必要
-									// if (userProfile) { ... }
-								}
-
-							} catch (e) {
-								logError(`Error processing click event from Brevo webhook:`, e, { event });
-							}
-						} else {
-							logWarning('Missing clickedUrl or email in Brevo webhook payload.', { event });
-						}
-					}
-					// TODO: Handle other event types (e.g., opened, bounced, etc.)
-
-					return new Response('Webhook processed', { status: 200 });
-
-				} catch (error) {
-					logError('Error processing webhook signature or event:', error, { requestUrl: request.url });
-					return new Response('Error processing webhook', { status: 500 });
-				}
-			} catch (mainFetchError) {
-				logError('Error during fetch handler execution:', mainFetchError, { requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		}

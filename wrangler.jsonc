@@ -49,6 +49,13 @@
 		}
 	],
 
+	"r2_buckets": [
+		{
+			"binding": "BANDIT_MODELS",
+			"bucket_name": "mail-news-bandit-models"
+		}
+	],
+
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
