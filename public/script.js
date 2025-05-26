@@ -17,7 +17,6 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchArticlesForEducation() {
         try {
             // Workerの新しいエンドポイントから記事リストを取得
-            // TODO: エンドポイントのURLを適切に設定する
             const response = await fetch('/get-articles-for-education');
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
@@ -71,6 +70,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 選択された記事をWorkerに送信する関数
     async function submitSelectedArticles() {
+        // 送信開始時にボタンを無効化し、ローディングアニメーションを表示
+        submitButton.disabled = true;
+        submitButton.classList.add('loading');
+        messageElement.textContent = '送信中...';
+        messageElement.className = ''; // メッセージをリセット
+
         const selectedArticlesData = [];
         articlesListDiv.querySelectorAll('.article-item input[type="checkbox"]:checked').forEach(checkbox => {
             const articleItem = checkbox.closest('.article-item');
@@ -87,12 +92,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (selectedArticlesData.length === 0) {
             messageElement.textContent = '記事を選択してください。';
             messageElement.className = 'error';
+            submitButton.disabled = false; // 記事が選択されていない場合はボタンを再度有効化
+            submitButton.classList.remove('loading'); // ローディングを停止
             return;
         }
 
         try {
             // Workerの新しいエンドポイントに選択結果を送信
-            // TODO: エンドポイントのURLを適切に設定する
             const response = await fetch('/submit-interests', {
                 method: 'POST',
                 headers: {
@@ -109,7 +115,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (response.ok) {
                 messageElement.textContent = result.message || '選択結果が送信されました。';
                 messageElement.className = ''; // 成功時はエラークラスを削除
-                submitButton.disabled = true; // 送信後はボタンを無効化
+                // submitButton.disabled = true; // 送信後はボタンを無効化 (成功時は再送信不要のため)
             } else {
                 throw new Error(result.message || `HTTP error! status: ${response.status}`);
             }
@@ -117,6 +123,15 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Error submitting selected articles:', error);
             messageElement.textContent = `送信に失敗しました: ${error.message}`;
             messageElement.className = 'error';
+        } finally {
+            // 処理完了後にローディングアニメーションを停止し、ボタンを有効化
+            submitButton.classList.remove('loading');
+            // エラー時のみボタンを再有効化。成功時は無効のまま。
+            if (messageElement.className === 'error') {
+                submitButton.disabled = false;
+            } else {
+                submitButton.disabled = true; // 成功時はボタンを無効化
+            }
         }
     }
 
