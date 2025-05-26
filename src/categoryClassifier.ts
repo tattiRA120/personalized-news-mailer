@@ -99,7 +99,7 @@ export async function classifyArticle(article: NewsArticle, env: Env): Promise<N
 
         try {
             // Cloudflare Workers AI を使用してカテゴリーを判定
-            const prompt = `以下の記事タイトルを、指定されたカテゴリーの中から最も適切なものに分類してください。カテゴリーは一つだけ選んでください。\n\nカテゴリーリスト:\n${ARTICLE_CATEGORIES.filter(cat => cat !== 'その他').map(cat => `- ${cat}`).join('\n')}\n\n記事タイトル: ${article.title}\n\n**重要:** 回答は必ず上記のカテゴリーリストの中から、日本語のカテゴリー名のみを返してください。それ以外の言語や情報（記事タイトル、説明、番号など）は一切含めないでください。`;
+            const prompt = `以下の記事タイトルを、指定されたカテゴリーの中から最も適切なものに分類してください。カテゴリーは一つだけ選んでください。\n\nカテゴリーリスト:\n${ARTICLE_CATEGORIES.filter(cat => cat !== 'その他').map(cat => `- ${cat}`).join('\n')}\n\n記事タイトル: ${article.title}\n\n**重要:** 回答は必ず上記のカテゴリーリストの中から、日本語のカテゴリー名のみを返してください。**他のテキスト、説明、番号、記号、句読点、または記事タイトルの一部を一切含めないでください。**`;
 
             const response = await env.AI.run(
                 '@cf/meta/llama-3.2-1b-instruct', // 選択したモデル
@@ -111,14 +111,30 @@ export async function classifyArticle(article: NewsArticle, env: Env): Promise<N
             // 型定義との不一致を解消するため、any 型にキャスト
             const llmResponseText = (response as any).response.trim();
             // LLMの応答から不要な文字をさらに厳密に取り除く
-            const cleanedLlmResponse = llmResponseText.replace(/[^a-zA-Z0-9ぁ-んァ-ヶー一-龠]/g, '');
             article.llmResponse = llmResponseText; // LLMの応答を保存（デバッグ用）
 
-            if (ARTICLE_CATEGORIES.includes(cleanedLlmResponse)) {
-                bestMatchCategory = cleanedLlmResponse; // LLMの分類結果を優先
+            let matchedLlmCategory: string | null = null;
+            let maxMatchLength = 0;
+
+            // LLMの応答がARTICLE_CATEGORIESのいずれかのカテゴリ名と部分的に一致するかを確認
+            for (const category of ARTICLE_CATEGORIES) {
+                // LLMの応答がカテゴリ名を完全に含む場合を優先
+                if (llmResponseText === category) {
+                    matchedLlmCategory = category;
+                    break;
+                }
+                // 部分一致の場合（例: LLMが「政治に関するニュース」と返した場合に「政治」を抽出）
+                if (llmResponseText.includes(category) && category.length > maxMatchLength) {
+                    matchedLlmCategory = category;
+                    maxMatchLength = category.length;
+                }
+            }
+
+            if (matchedLlmCategory) {
+                bestMatchCategory = matchedLlmCategory; // LLMの分類結果を優先
                 logInfo(`Article "${article.title}" classified by LLM as '${bestMatchCategory}'.`, { articleTitle: article.title, category: bestMatchCategory });
             } else {
-                logWarning(`LLM returned an invalid category "${llmResponseText}" (cleaned: "${cleanedLlmResponse}") for article "${article.title}". Falling back to keyword match or 'その他'.`, { articleTitle: article.title, llmCategory: llmResponseText, cleanedLlmCategory: cleanedLlmResponse });
+                logWarning(`LLM returned an invalid category "${llmResponseText}" for article "${article.title}". Falling back to keyword match or 'その他'.`, { articleTitle: article.title, llmCategory: llmResponseText });
                 // LLMが無効なカテゴリーを返した場合のフォールバック
                 if (maxMatchCount > 0) {
                     // キーワードマッチがあった場合は、最もマッチしたカテゴリーを使用

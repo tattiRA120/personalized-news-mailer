@@ -28,6 +28,10 @@
 		{
 			"binding": "ARTICLE_EMBEDDINGS",
 			"id": "ef51fc8f1e594207a18b413264fa5d5f"
+		},
+		{
+			"binding": "CATEGORY_KEYWORDS_KV",
+			"id": "972a97b318b746e5892e259204f8b7ca"
 		}
 	],
 
