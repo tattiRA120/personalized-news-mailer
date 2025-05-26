@@ -15,21 +15,34 @@ interface NewsArticle {
 }
 
 /**
+ * 全角英数字を半角に変換するヘルパー関数
+ * @param str 変換する文字列
+ * @returns 半角に変換された文字列
+ */
+function normalizeText(str: string): string {
+    if (!str) return '';
+    return str.replace(/[Ａ-Ｚａ-ｚ０-９]/g, function(s) {
+        return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+    });
+}
+
+/**
  * 記事のタイトルとキーワードに基づいてカテゴリーを分類する（ハイブリッドアプローチ）
  * @param article 分類する記事オブジェクト
  * @param env Workers AI バインディングを含む環境変数
  * @returns カテゴリー情報が付与された記事オブジェクト
  */
 export async function classifyArticle(article: NewsArticle, env: Env): Promise<NewsArticle> {
-    const title = article.title.toLowerCase(); // タイトルを小文字に変換してマッチング
-    const summary = article.summary ? article.summary.toLowerCase() : ''; // サマリーを小文字に変換してマッチング (存在する場合)
+    // タイトルとサマリーを正規化し、小文字に変換してマッチング
+    const normalizedTitle = normalizeText(article.title).toLowerCase();
+    const normalizedSummary = normalizeText(article.summary || '').toLowerCase();
 
     // --- ルールベースの分類 (Rule-based Classification) ---
     // 特定のキーワードがタイトルに含まれる場合に強制的に分類
-    if (title.includes('速報') || title.includes('緊急')) {
+    if (normalizedTitle.includes('速報') || normalizedTitle.includes('緊急')) {
         // より詳細な分類が必要な場合は、ここでさらにロジックを追加
-        // 例: summaryに「国際」関連のキーワードがあれば「国際」、なければ「国内」
-        if (summary.includes('国際') || summary.includes('海外')) {
+        // 例: normalizedSummaryに「国際」関連のキーワードがあれば「国際」、なければ「国内」
+        if (normalizedSummary.includes('国際') || normalizedSummary.includes('海外')) {
             logInfo(`Article "${article.title}" classified by rule as '国際' (breaking news).`, { articleTitle: article.title, category: '国際' });
             return { ...article, category: '国際' };
         } else {
@@ -37,19 +50,19 @@ export async function classifyArticle(article: NewsArticle, env: Env): Promise<N
             return { ...article, category: '国内' };
         }
     }
-    if (title.includes('株価') || title.includes('為替') || title.includes('日銀') || title.includes('決算')) {
+    if (normalizedTitle.includes('株価') || normalizedTitle.includes('為替') || normalizedTitle.includes('日銀') || normalizedTitle.includes('決算')) {
         logInfo(`Article "${article.title}" classified by rule as '経済'.`, { articleTitle: article.title, category: '経済' });
         return { ...article, category: '経済' };
     }
-    if (title.includes('ai') || title.includes('人工知能') || title.includes('chatgpt') || title.includes('メタバース') || title.includes('web3')) {
+    if (normalizedTitle.includes('ai') || normalizedTitle.includes('人工知能') || normalizedTitle.includes('chatgpt') || normalizedTitle.includes('メタバース') || normalizedTitle.includes('web3')) {
         logInfo(`Article "${article.title}" classified by rule as 'テクノロジー'.`, { articleTitle: article.title, category: 'テクノロジー' });
         return { ...article, category: 'テクノロジー' };
     }
-    if (title.includes('選挙') || title.includes('国会') || title.includes('首相') || title.includes('政党')) {
+    if (normalizedTitle.includes('選挙') || normalizedTitle.includes('国会') || normalizedTitle.includes('首相') || normalizedTitle.includes('政党')) {
         logInfo(`Article "${article.title}" classified by rule as '政治'.`, { articleTitle: article.title, category: '政治' });
         return { ...article, category: '政治' };
     }
-    if (title.includes('オリンピック') || title.includes('W杯') || title.includes('プロ野球') || title.includes('Jリーグ')) {
+    if (normalizedTitle.includes('オリンピック') || normalizedTitle.includes('W杯') || normalizedTitle.includes('プロ野球') || normalizedTitle.includes('Jリーグ')) {
         logInfo(`Article "${article.title}" classified by rule as 'スポーツ'.`, { articleTitle: article.title, category: 'スポーツ' });
         return { ...article, category: 'スポーツ' };
     }
@@ -72,7 +85,7 @@ export async function classifyArticle(article: NewsArticle, env: Env): Promise<N
         for (const keyword of keywords) {
             const lowerKeyword = keyword.toLowerCase();
             // キーワードがタイトルまたはサマリーに含まれているか判定
-            if (title.includes(lowerKeyword) || summary.includes(lowerKeyword)) {
+            if (normalizedTitle.includes(lowerKeyword) || normalizedSummary.includes(lowerKeyword)) {
                 currentMatchCount++;
             }
         }

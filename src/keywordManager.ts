@@ -20,11 +20,11 @@ const DEFAULT_CATEGORY_KEYWORDS: CategoryKeywords = {
         '日米関係', '日中関係', '日韓関係', '防衛費', '少子化対策', '社会保障費',
         'デジタル庁', '規制改革', '地方創生', '財政健全化', '国際情勢', '国際会議',
         '政権', 'トランプ', 'ロシア', '武器輸出', '大統領', 'DOGE', '米政府',
-        '中国', '北朝鮮', '拘束', 'ウクライナ'
+        '中国', '北朝鮮', '拘束', 'ウクライナ', '政権当局', '関税'
     ],
     '経済': [
         '経済', '景気', '金融', '財政', '市場', '投資', '企業', '産業',
-        '買収', '関税', '国内製造',
+        '買収', '国内製造', '大幅高',
         '雇用', 'インフレ', 'デフレ', 'GDP', '経済成長', '株価', '為替',
         '為替相場', '金利', '証券', 'FX', 'リセッション', 'リストラ',
         '経常収支', '債務', '公債', '投資信託', '不動産', '資産', 'バブル',
@@ -263,15 +263,30 @@ export async function updateCategoryKeywords(category: string, newKeywords: stri
 }
 
 /**
+ * 全角英数字を半角に変換するヘルパー関数
+ * @param str 変換する文字列
+ * @returns 半角に変換された文字列
+ */
+function normalizeText(str: string): string {
+    if (!str) return '';
+    return str.replace(/[Ａ-Ｚａ-ｚ０-９]/g, function(s) {
+        return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+    });
+}
+
+/**
  * 記事のタイトルとサマリーからキーワード候補を抽出する（簡易版）
  * TODO: より高度なキーワード抽出（TF-IDF, N-gram, 形態素解析など）を検討
  * @param text 記事のタイトルまたはサマリー
  * @returns 抽出されたキーワード候補の配列
  */
 export function extractKeywordsFromText(text: string): string[] {
+    // テキストを正規化し、小文字に変換
+    const normalizedText = normalizeText(text).toLowerCase();
+
     // 日本語の簡易的なキーワード抽出
     // 現状はスペース区切りで単語を抽出し、短い単語や一般的な単語を除外
-    const words = text.toLowerCase().split(/[\s.,;!?"'()\[\]{}<>“”‘’—\-ー、。「」『』（）？！]/).filter(Boolean);
+    const words = normalizedText.split(/[\s.,;!?"'()\[\]{}<>“”‘’—\-ー、。「」『』（）？！]/).filter(Boolean);
     const stopWords = new Set([
         'の', 'に', 'を', 'が', 'は', 'と', 'へ', 'から', 'まで', 'で', 'も', 'や', 'など', 'こと', 'もの', 'ため',
         'れる', 'する', 'いる', 'ある', 'なる', 'よう', 'これ', 'それ', 'あれ', 'この', 'その', 'あの', 'です', 'ます',
