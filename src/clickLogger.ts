@@ -3,6 +3,15 @@
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
 import { DurableObject } from 'cloudflare:workers'; // DurableObject をインポート
 
+interface NewsArticle {
+    title: string;
+    link: string;
+    summary?: string;
+    category?: string;
+    embedding?: number[];
+    llmResponse?: string;
+}
+
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
     // LinUCB のパラメータ
@@ -26,6 +35,7 @@ interface BanditModelState {
 interface ClickEvent {
     articleId: string;
     timestamp: number; // Using Unix timestamp
+    category?: string; // クリックされた記事のカテゴリを追加
     // Add other event data as needed
     // クリックイベント発生時の記事の特徴量（embedding）はDO側で取得する
     // embedding?: number[];
@@ -252,6 +262,7 @@ export class ClickLogger extends DurableObject {
         interface LogClickRequestBody {
             articleId: string;
             timestamp: number;
+            category?: string; // category を追加
         }
 
         // /update-bandit-from-click エンドポイントのリクエストボディの型定義
@@ -259,24 +270,30 @@ export class ClickLogger extends DurableObject {
             articleId: string;
             embedding: number[];
             reward: number;
+            category?: string; // category を追加
         }
 
         if (request.method === 'POST' && path === '/log-click') {
             try {
                 // リクエストボディからクリック情報を取得
-                const { articleId, timestamp } = await request.json() as LogClickRequestBody;
+                const { articleId, timestamp } = await request.json() as LogClickRequestBody; // category はここでは受け取らない
 
                 if (!articleId || timestamp === undefined) {
                     logWarning('Log click failed: Missing articleId or timestamp in request body.');
                     return new Response('Missing parameters', { status: 400 });
                 }
 
+                // KVから記事データ（カテゴリ情報を含む）を取得
+                const cacheKey = `article:${articleId}`; // 記事IDはリンクと仮定
+                const cachedArticle = await this.env.ARTICLE_EMBEDDINGS.get(cacheKey, { type: 'json' }) as NewsArticle | null;
+                const articleCategory = cachedArticle?.category || '不明'; // 記事のカテゴリを取得、なければ「不明」
+
                 // クリックイベントをストレージに保存
                 // キーフォーマット: click:<timestamp>:<articleId>
                 const eventKey = `click:${timestamp}:${articleId}`;
-                await this.state.storage.put(eventKey, { articleId, timestamp });
+                await this.state.storage.put(eventKey, { articleId, timestamp, category: articleCategory }); // category も保存
 
-                logInfo(`Logged click for user ${this.state.id.toString()}, article ${articleId} at ${timestamp}`);
+                logInfo(`Logged click for user ${this.state.id.toString()}, article ${articleId}, category ${articleCategory} at ${timestamp}`);
 
                 // バンディットモデルの更新は定期バッチ処理で行うため、ここでは行わない
 

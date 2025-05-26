@@ -8,6 +8,7 @@ import { ClickLogger } from './clickLogger'; // Assuming this is your Durable Ob
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
 import { classifyArticles } from './categoryClassifier'; // Import classifyArticles
 import { ARTICLE_CATEGORIES } from './config'; // カテゴリーリストを取得するためにconfigをインポート
+import { extractKeywordsFromText, updateCategoryKeywords } from './keywordManager'; // キーワード抽出と更新関数をインポート
 
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
@@ -20,6 +21,8 @@ export interface Env {
 	GOOGLE_REDIRECT_URI?: string; // Add Google Redirect URI
 	'mail-news-gmail-tokens': KVNamespace; // KV Namespace for storing Gmail refresh tokens
     ARTICLE_EMBEDDINGS: KVNamespace; // KV Namespace for caching article embeddings
+	AI: Ai; // Add AI binding
+    CATEGORY_KEYWORDS_KV: KVNamespace; // Add KV Namespace for category keywords
 }
 
 interface EmailRecipient {
@@ -36,6 +39,7 @@ interface NewsArticle {
     embedding?: number[]; // Assuming embedding vector is added in the embedding step
     ucb?: number; // UCB値を保持するためのフィールドを追加
     finalScore?: number; // 最終スコアを保持するためのフィールドを追加
+    llmResponse?: string; // Add field to store LLM response for debugging
 }
 
 
@@ -342,8 +346,8 @@ export default {
 					}
 
 
-					// --- 10. Process Click Logs and Update Bandit Model ---
-					logInfo(`Processing click logs and updating bandit model for user ${userId}...`, { userId });
+					// --- 10. Process Click Logs and Update Bandit Model & Keyword Optimization ---
+					logInfo(`Processing click logs and updating bandit model & optimizing keywords for user ${userId}...`, { userId });
 					// Durable Object から未処理のクリックログを取得し、削除
 					const clickLogsToProcess = await clickLogger.getAndClearClickLogs();
 					logInfo(`Found ${clickLogsToProcess.length} click logs to process for user ${userId}.`, { userId, count: clickLogsToProcess.length });
@@ -351,6 +355,7 @@ export default {
 					if (clickLogsToProcess.length > 0) {
 						const updatePromises = clickLogsToProcess.map(async clickLog => {
 							const articleId = clickLog.articleId;
+							const clickedCategory = clickLog.category; // クリックされた記事のカテゴリ
 							const cacheKey = `article:${articleId}`; // 記事IDはリンクと仮定
 
 							try {
@@ -363,23 +368,52 @@ export default {
 									const updateResponse = await clickLogger.fetch(new Request('http://dummy-host/update-bandit-from-click', {
 										method: 'POST',
 										headers: { 'Content-Type': 'application/json' },
-										body: JSON.stringify({ articleId: articleId, embedding: cachedArticle.embedding, reward: reward }),
+										body: JSON.stringify({ articleId: articleId, embedding: cachedArticle.embedding, reward: reward, category: clickedCategory }),
 									}));
 
 									if (updateResponse.ok) {
-										logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}.`, { userId, articleId });
+										logInfo(`Successfully updated bandit model from click for article ${articleId} (category: ${clickedCategory}) for user ${userId}.`, { userId, articleId, category: clickedCategory });
 									} else {
-										logError(`Failed to update bandit model from click for article ${articleId} for user ${userId}: ${updateResponse.statusText}`, null, { userId, articleId, status: updateResponse.status, statusText: updateResponse.statusText });
+										logError(`Failed to update bandit model from click for article ${articleId} (category: ${clickedCategory}) for user ${userId}: ${updateResponse.statusText}`, null, { userId, articleId, category: clickedCategory, status: updateResponse.status, statusText: updateResponse.statusText });
 									}
+
+									// TODO: キーワード最適化ロジックをここに追加
+									// ユーザーの興味関心カテゴリとクリックされた記事のカテゴリを比較し、
+									// 不一致があった場合に、記事のタイトルやサマリーから新しいキーワードを抽出し、
+									// 関連するカテゴリのキーワード辞書に追加する。
+									// これは、userProfile.ts の updateUserProfile を呼び出す形になるか、
+									// または新しい Durable Object を導入してキーワード辞書を管理するか検討。
+									// キーワード最適化ロジック
+									// クリックされた記事のカテゴリとユーザーの興味関心カテゴリを比較
+									const userInterestCategory = userProfile.categoryInterestScores ? Object.keys(userProfile.categoryInterestScores).reduce((a, b) => (userProfile.categoryInterestScores[a] || 0) > (userProfile.categoryInterestScores[b] || 0) ? a : b, 'その他') : 'その他';
+
+									if (clickedCategory && clickedCategory !== userInterestCategory) {
+										logInfo(`User clicked article in category '${clickedCategory}' but primary interest is '${userInterestCategory}'. Analyzing for keyword optimization.`, { userId, clickedCategory, userInterestCategory });
+
+										// 記事のタイトルとサマリーからキーワードを抽出
+										const articleText = `${cachedArticle.title} ${cachedArticle.summary || ''}`;
+										const extractedKeywords = extractKeywordsFromText(articleText);
+
+										if (extractedKeywords.length > 0) {
+											logInfo(`Extracted ${extractedKeywords.length} keywords from clicked article for category '${clickedCategory}'.`, { userId, articleId, extractedKeywords });
+											// 抽出されたキーワードを該当カテゴリの辞書に追加
+											await updateCategoryKeywords(clickedCategory, extractedKeywords, env);
+										} else {
+											logInfo(`No new keywords extracted from clicked article for category '${clickedCategory}'.`, { userId, articleId });
+										}
+									} else {
+										logInfo(`Clicked article category '${clickedCategory}' matches user's primary interest or no category found. No keyword optimization needed.`, { userId, clickedCategory, userInterestCategory });
+									}
+
 								} else {
-									logWarning(`Article data or embedding not found in KV for clicked article ${articleId} for user ${userId}. Cannot update bandit model.`, { userId, articleId });
+									logWarning(`Article data or embedding not found in KV for clicked article ${articleId} for user ${userId}. Cannot update bandit model or optimize keywords.`, { userId, articleId });
 								}
 							} catch (updateError) {
 								logError(`Error processing click log for article ${articleId} for user ${userId}:`, updateError, { userId, articleId });
 							}
 						});
 						await Promise.all(updatePromises);
-						logInfo(`Finished processing click logs and updating bandit model for user ${userId}.`, { userId });
+						logInfo(`Finished processing click logs and updating bandit model & optimizing keywords for user ${userId}.`, { userId });
 					} else {
 						logInfo(`No click logs to process for user ${userId}.`, { userId });
 					}
@@ -657,15 +691,22 @@ export default {
 				const articles = await collectNews();
 				logInfo(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
-				// 記事のタイトル、リンク、サマリーのみを返す（必要に応じて他の情報も追加）
-				const simplifiedArticles = articles.map(article => ({
+                // 記事を分類
+                const classifiedArticles = await classifyArticles(articles, env);
+                logInfo(`Classified ${classifiedArticles.length} articles for education.`, { classifiedCount: classifiedArticles.length });
+
+
+				// 分類結果を含む記事オブジェクトを返す
+				const articlesWithClassification = classifiedArticles.map(article => ({
 					articleId: article.link, // 記事IDとしてリンクを使用
 					title: article.title,
 					summary: article.summary,
+					category: article.category, // 分類されたカテゴリーを追加
+					llmResponse: article.llmResponse, // LLMの応答を追加 (LLMが使用された場合)
 					// link: article.link, // 必要であれば追加
 				}));
 
-				return new Response(JSON.stringify(simplifiedArticles), {
+				return new Response(JSON.stringify(articlesWithClassification), {
 					headers: { 'Content-Type': 'application/json' },
 					status: 200,
 				});
