@@ -7,22 +7,24 @@ import { generateNewsEmail, sendNewsEmail } from './emailGenerator'; // Assuming
 import { ClickLogger } from './clickLogger'; // Assuming this is your Durable Object class
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
 import { classifyArticles } from './categoryClassifier'; // Import classifyArticles
-import { ARTICLE_CATEGORIES } from './config'; // カテゴリーリストを取得するためにconfigをインポート
-import { extractKeywordsFromText, updateCategoryKeywords } from './keywordManager'; // キーワード抽出と更新関数をインポート
+import { extractKeywordsFromText, updateCategoryKeywords, getCategoryList, EnvWithKeywordsKV } from './keywordManager'; // キーワード抽出と更新関数、カテゴリーリスト関連関数をインポート
+
+// EnvWithKeywordsKV を拡張して AI バインディングも含むようにする
+interface EnvWithAIAndKeywordsKV extends EnvWithKeywordsKV {
+    AI: Ai;
+}
 
 // Define the Env interface with bindings from wrangler.jsonc
-export interface Env {
-	'mail-news-user-profiles': KVNamespace; // KV Namespace binding name from wrangler.jsonc
+// EnvWithAIAndKeywordsKV を継承し、その他のバインディングを追加
+export interface Env extends EnvWithAIAndKeywordsKV {
+	'mail-news-user-profiles': KVNamespace;
 	CLICK_LOGGER: DurableObjectNamespace;
-	OPENAI_API_KEY?: string; // Import OpenAI embeddings client
-	// Add other bindings as needed (e.g., R2, Queues)
-	GOOGLE_CLIENT_ID?: string; // Add Google Client ID
-	GOOGLE_CLIENT_SECRET?: string; // Add Google Client Secret
-	GOOGLE_REDIRECT_URI?: string; // Add Google Redirect URI
-	'mail-news-gmail-tokens': KVNamespace; // KV Namespace for storing Gmail refresh tokens
-    ARTICLE_EMBEDDINGS: KVNamespace; // KV Namespace for caching article embeddings
-	AI: Ai; // Add AI binding
-    CATEGORY_KEYWORDS_KV: KVNamespace; // Add KV Namespace for category keywords
+	OPENAI_API_KEY?: string;
+	GOOGLE_CLIENT_ID?: string;
+	GOOGLE_CLIENT_SECRET?: string;
+	GOOGLE_REDIRECT_URI?: string;
+	'mail-news-gmail-tokens': KVNamespace;
+    ARTICLE_EMBEDDINGS: KVNamespace;
 }
 
 interface EmailRecipient {
@@ -68,7 +70,8 @@ export default {
 
             // --- 2. Article Classification ---
             logInfo('Starting article classification...');
-            const classifiedArticles = classifyArticles(articles);
+            // classifyArticles 関数に EnvWithAIAndKeywordsKV 型として env を渡す
+            const classifiedArticles = await classifyArticles(articles, env);
             logInfo(`Finished article classification.`, { classifiedCount: classifiedArticles.length });
 
 
@@ -149,6 +152,10 @@ export default {
                     const minArticlesPerCategory = 1; // 各カテゴリーから最低限選択する記事数 (調整可能)
                     let articlesCountForEmbedding = 0;
 
+                    // 動的に取得したカテゴリーリストを使用
+                    const currentCategoryList = await getCategoryList(env);
+                    const numberOfCategories = currentCategoryList.length > 0 ? currentCategoryList.length : 1; // カテゴリーがない場合は1として計算
+
                     // カテゴリーごとの合計興味関心スコアを計算
                     let totalInterestScore = 0;
                     for (const category in userProfile.categoryInterestScores) {
@@ -164,14 +171,14 @@ export default {
                         let articlesToSelectFromCategory = minArticlesPerCategory; // まず最低数を確保
 
                         // 残りの選択可能な記事数を、興味関心スコアに応じて比例配分
-                        const remainingArticlesPool = maxArticlesForEmbedding - (ARTICLE_CATEGORIES.length * minArticlesPerCategory);
+                        const remainingArticlesPool = maxArticlesForEmbedding - (numberOfCategories * minArticlesPerCategory);
                         if (totalInterestScore > 0 && remainingArticlesPool > 0) {
-                            const categoryInterestRatio = userProfile.categoryInterestScores[category] / totalInterestScore;
+                            const categoryInterestRatio = (userProfile.categoryInterestScores[category] || 0) / totalInterestScore; // 0の場合を考慮
                             const proportionalAllocation = Math.floor(categoryInterestRatio * remainingArticlesPool);
                             articlesToSelectFromCategory += proportionalAllocation;
                         } else if (remainingArticlesPool > 0) {
                             // 合計スコアが0の場合、残りを均等に配分
-                            const equalAllocation = Math.floor(remainingArticlesPool / ARTICLE_CATEGORIES.length);
+                            const equalAllocation = Math.floor(remainingArticlesPool / numberOfCategories);
                             articlesToSelectFromCategory += equalAllocation;
                         }
 
@@ -691,7 +698,7 @@ export default {
 				const articles = await collectNews();
 				logInfo(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
-                // 記事を分類
+                // 記事を分類 (EnvWithAIAndKeywordsKV 型として env を渡す)
                 const classifiedArticles = await classifyArticles(articles, env);
                 logInfo(`Classified ${classifiedArticles.length} articles for education.`, { classifiedCount: classifiedArticles.length });
 

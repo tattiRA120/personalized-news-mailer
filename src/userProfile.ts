@@ -1,14 +1,18 @@
 // src/userProfile.ts
 
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
-import { ARTICLE_CATEGORIES } from './config'; // カテゴリーリストを取得するためにconfigをインポート
+import { getCategoryList, EnvWithKeywordsKV } from './keywordManager'; // getCategoryList と EnvWithKeywordsKV をインポート
 
 // NewsArticleWithCategory インターフェースの定義
 interface NewsArticleWithCategory {
     title: string;
     link: string;
-    category?: string; // カテゴリー情報を含む
-    // Add other fields as needed
+    category?: string;
+}
+
+// EnvWithKeywordsKV を拡張して user-profiles KV も含むようにする
+interface EnvWithUserProfilesAndKeywordsKV extends EnvWithKeywordsKV {
+    'mail-news-user-profiles': KVNamespace;
 }
 
 
@@ -31,13 +35,13 @@ export interface UserProfile {
 // binding = "mail-news-user-profiles"
 // id = "<your_kv_namespace_id>"
 
-export async function getUserProfile(userId: string, env: { 'mail-news-user-profiles': KVNamespace }): Promise<UserProfile | null> {
+export async function getUserProfile(userId: string, env: EnvWithUserProfilesAndKeywordsKV): Promise<UserProfile | null> {
     try {
         const profile = await env['mail-news-user-profiles'].get(userId, { type: 'json' });
         if (profile) {
             logInfo(`Retrieved user profile for ${userId}.`, { userId });
-            // profile が UserProfile 型であることを確認し、categoryInterestScores や categoryLastUpdated が存在しない場合に初期化
-            const userProfile = profile as UserProfile; // 明示的にキャスト
+            const userProfile = profile as UserProfile;
+            // categoryInterestScores や categoryLastUpdated が存在しない場合に初期化
             if (!userProfile.categoryInterestScores) {
                  userProfile.categoryInterestScores = {};
                  logInfo(`Initialized categoryInterestScores for user ${userId}.`, { userId });
@@ -46,7 +50,7 @@ export async function getUserProfile(userId: string, env: { 'mail-news-user-prof
                 userProfile.categoryLastUpdated = {};
                 logInfo(`Initialized categoryLastUpdated for user ${userId}.`, { userId });
             }
-            return userProfile; // キャストしたオブジェクトを返す
+            return userProfile;
         } else {
             logInfo(`User profile not found for ${userId}.`, { userId });
             return null;
@@ -57,7 +61,7 @@ export async function getUserProfile(userId: string, env: { 'mail-news-user-prof
     }
 }
 
-export async function updateUserProfile(profile: UserProfile, env: { 'mail-news-user-profiles': KVNamespace }): Promise<void> {
+export async function updateUserProfile(profile: UserProfile, env: EnvWithUserProfilesAndKeywordsKV): Promise<void> {
     try {
         await env['mail-news-user-profiles'].put(profile.userId, JSON.stringify(profile));
         logInfo(`Updated user profile for ${profile.userId}.`, { userId: profile.userId });
@@ -66,17 +70,15 @@ export async function updateUserProfile(profile: UserProfile, env: { 'mail-news-
     }
 }
 
-// Create a new user profile and store email-to-userId mapping
-export async function createUserProfile(userId: string, email: string, env: { 'mail-news-user-profiles': KVNamespace }): Promise<UserProfile> {
+export async function createUserProfile(userId: string, email: string, env: EnvWithUserProfilesAndKeywordsKV): Promise<UserProfile> {
     const newUserProfile: UserProfile = {
         userId: userId,
-        email: email, // Store email in profile
-        interests: [], // Initial empty click history (教育プログラム)
-        clickedArticleIds: [], // Initial empty click history (メールクリック)
-        sentArticleIds: [], // Initialize sent articles array
-        categoryInterestScores: {}, // カテゴリーごとの興味関心スコアを初期化
-        categoryLastUpdated: {}, // カテゴリーごとの最終更新タイムスタンプを初期化
-        // Initialize other profile data as needed
+        email: email,
+        interests: [],
+        clickedArticleIds: [],
+        sentArticleIds: [],
+        categoryInterestScores: {}, // 空のオブジェクトとして初期化
+        categoryLastUpdated: {}, // 空のオブジェクトとして初期化
     };
 
     try {
@@ -109,22 +111,18 @@ export async function getUserIdByEmail(email: string, env: { 'mail-news-user-pro
 }
 
 // Get all user IDs
-export async function getAllUserIds(env: { 'mail-news-user-profiles': KVNamespace }): Promise<string[]> {
+export async function getAllUserIds(env: EnvWithUserProfilesAndKeywordsKV): Promise<string[]> {
     try {
-        // List all keys with no prefix to get user IDs directly,
-        // or list keys with a specific prefix if user IDs are stored with one.
-        // Assuming user IDs are stored as top-level keys for now.
-        // Need to filter out email_to_userId keys.
         const listResult = await env['mail-news-user-profiles'].list();
         const userIds = listResult.keys
             .map(key => key.name)
-            .filter(keyName => !keyName.startsWith('email_to_userId:')); // Filter out mapping keys
+            .filter(keyName => !keyName.startsWith('email_to_userId:'));
 
         logInfo(`Retrieved ${userIds.length} user IDs.`, { userCount: userIds.length });
         return userIds;
     } catch (error) {
         logError('Error getting all user IDs:', error);
-        return []; // Return empty array on error
+        return [];
     }
 }
 
@@ -135,23 +133,27 @@ export async function getAllUserIds(env: { 'mail-news-user-profiles': KVNamespac
  * @param clickLogs メールで新しくクリックされた記事のログリスト（記事IDとタイムスタンプを含む）
  * @param sentLogs メールで送信された記事のログリスト（記事IDとタイムスタンプを含む）
  * @param classifiedArticles カテゴリー情報付きの全記事リスト（ログに含まれる記事IDに対応するカテゴリーを取得するため）
+ * @param env KV Namespace バインディングを含む環境変数 (getCategoryListのため)
  * @returns 更新されたユーザープロファイル
  */
-export function updateCategoryInterestScores(
+export async function updateCategoryInterestScores(
     userProfile: UserProfile,
     educationLogs: { articleId: string; timestamp: number; }[],
     clickLogs: { articleId: string; timestamp: number; }[],
     sentLogs: { articleId: string; timestamp: number; }[],
-    classifiedArticles: NewsArticleWithCategory[] // カテゴリー情報付き記事リスト
-): UserProfile {
+    classifiedArticles: NewsArticleWithCategory[],
+    env: EnvWithUserProfilesAndKeywordsKV // env を追加
+): Promise<UserProfile> {
     logInfo(`Updating category interest scores for user ${userProfile.userId}.`, { userId: userProfile.userId });
 
-    // 現在のスコアと最終更新タイムスタンプをコピー
     const updatedScores = { ...userProfile.categoryInterestScores };
     const updatedLastUpdated = { ...userProfile.categoryLastUpdated };
 
+    // 動的に取得したカテゴリーリストを使用
+    const currentCategoryList = await getCategoryList(env);
+
     // 各カテゴリーの初期スコアを0とする（まだスコアがないカテゴリーの場合）
-    for (const category of ARTICLE_CATEGORIES) {
+    for (const category of currentCategoryList) {
         if (updatedScores[category] === undefined) {
             updatedScores[category] = 0;
         }
@@ -225,8 +227,8 @@ export function updateCategoryInterestScores(
         }
     }
 
-    for (const category of ARTICLE_CATEGORIES) {
-        if (category === 'その他') continue;
+    for (const category of currentCategoryList) {
+        if (category === 'その他' && currentCategoryList.length > 1) continue; // 他のカテゴリーがある場合は「その他」をスキップ
 
         const sentCount = categorySentCounts[category] || 0;
         const clickCount = categoryClickCounts[category] || 0;
@@ -294,7 +296,7 @@ export function updateCategoryInterestScores(
 
 
     userProfile.categoryInterestScores = updatedScores;
-    userProfile.categoryLastUpdated = updatedLastUpdated; // 最終更新タイムスタンプをプロファイルに保存
+    userProfile.categoryLastUpdated = updatedLastUpdated;
     logInfo(`Finished updating category interest scores for user ${userProfile.userId}.`, { userId: userProfile.userId, scores: updatedScores, lastUpdated: updatedLastUpdated });
 
     return userProfile;

@@ -32,6 +32,10 @@
 		{
 			"binding": "CATEGORY_KEYWORDS_KV",
 			"id": "972a97b318b746e5892e259204f8b7ca"
+		},
+		{
+			"binding": "CATEGORY_LIST_KV",
+			"id": "a97de6adb673408c88489bd0671c8ed9" // TODO: Replace with your actual KV Namespace ID for category list
 		}
 	],
 

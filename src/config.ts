@@ -6,19 +6,3 @@ export const NEWS_RSS_URLS: string[] = [
 
 // You can add other configuration variables here, like API keys (though better to use Workers Secrets for sensitive info)
 // export const NEWS_API_KEY: string | undefined = undefined;
-
-export const ARTICLE_CATEGORIES: string[] = [
-    '政治',
-    '経済',
-    'テクノロジー',
-    'ビジネス',
-    '科学',
-    '環境',
-    '社会',
-    '文化',
-    'エンタメ',
-    'スポーツ',
-    '国際',
-    '国内',
-    'その他' // どのカテゴリーにも属さない場合
-];

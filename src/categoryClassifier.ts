@@ -1,17 +1,20 @@
 // src/categoryClassifier.ts
 
-import { ARTICLE_CATEGORIES } from './config';
-import { logInfo, logWarning } from './logger';
+import { logInfo, logWarning, logError } from './logger';
 import { Env } from '.'; // Env 型をインポート
-import { getCategoryKeywords, EnvWithKeywordsKV } from './keywordManager'; // getCategoryKeywords と EnvWithKeywordsKV をインポート
+import { getCategoryKeywords, EnvWithKeywordsKV, getCategoryList, addCategory } from './keywordManager'; // getCategoryKeywords, EnvWithKeywordsKV, getCategoryList, addCategory をインポート
+
+// EnvWithKeywordsKV を拡張して AI バインディングも含むようにする
+interface EnvWithAIAndKeywordsKV extends EnvWithKeywordsKV {
+    AI: Ai;
+}
 
 interface NewsArticle {
     title: string;
     link: string;
-    summary?: string; // Add summary field
-    // Add other fields as needed
-    category?: string; // Add category field
-    llmResponse?: string; // Add field to store LLM response for debugging
+    summary?: string;
+    category?: string;
+    llmResponse?: string;
 }
 
 /**
@@ -29,19 +32,24 @@ function normalizeText(str: string): string {
 /**
  * 記事のタイトルとキーワードに基づいてカテゴリーを分類する（ハイブリッドアプローチ）
  * @param article 分類する記事オブジェクト
- * @param env Workers AI バインディングを含む環境変数
+ * @param env Workers AI バインディングとKVバインディングを含む環境変数
  * @returns カテゴリー情報が付与された記事オブジェクト
  */
-export async function classifyArticle(article: NewsArticle, env: Env): Promise<NewsArticle> {
+export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKeywordsKV): Promise<NewsArticle> {
     // タイトルとサマリーを正規化し、小文字に変換してマッチング
     const normalizedTitle = normalizeText(article.title).toLowerCase();
     const normalizedSummary = normalizeText(article.summary || '').toLowerCase();
 
+    // 動的に取得したカテゴリーリストを使用
+    const currentCategoryList = await getCategoryList(env);
+    const categoriesForClassification = currentCategoryList.length > 0 ? currentCategoryList : ['その他']; // カテゴリーがまだない場合は「その他」のみで開始
+
     // --- ルールベースの分類 (Rule-based Classification) ---
     // 特定のキーワードがタイトルに含まれる場合に強制的に分類
+    // ここでは、既存のカテゴリーリストに依存しない汎用的なルールのみを残すか、
+    // 動的に取得したカテゴリーリストに含まれるカテゴリー名にマッチするように調整する
+    // 例: '政治', '経済' などのカテゴリーが動的に追加されることを前提とする
     if (normalizedTitle.includes('速報') || normalizedTitle.includes('緊急')) {
-        // より詳細な分類が必要な場合は、ここでさらにロジックを追加
-        // 例: normalizedSummaryに「国際」関連のキーワードがあれば「国際」、なければ「国内」
         if (normalizedSummary.includes('国際') || normalizedSummary.includes('海外')) {
             logInfo(`Article "${article.title}" classified by rule as '国際' (breaking news).`, { articleTitle: article.title, category: '国際' });
             return { ...article, category: '国際' };
@@ -50,126 +58,88 @@ export async function classifyArticle(article: NewsArticle, env: Env): Promise<N
             return { ...article, category: '国内' };
         }
     }
-    if (normalizedTitle.includes('株価') || normalizedTitle.includes('為替') || normalizedTitle.includes('日銀') || normalizedTitle.includes('決算')) {
-        logInfo(`Article "${article.title}" classified by rule as '経済'.`, { articleTitle: article.title, category: '経済' });
-        return { ...article, category: '経済' };
-    }
-    if (normalizedTitle.includes('ai') || normalizedTitle.includes('人工知能') || normalizedTitle.includes('chatgpt') || normalizedTitle.includes('メタバース') || normalizedTitle.includes('web3')) {
-        logInfo(`Article "${article.title}" classified by rule as 'テクノロジー'.`, { articleTitle: article.title, category: 'テクノロジー' });
-        return { ...article, category: 'テクノロジー' };
-    }
-    if (normalizedTitle.includes('選挙') || normalizedTitle.includes('国会') || normalizedTitle.includes('首相') || normalizedTitle.includes('政党')) {
-        logInfo(`Article "${article.title}" classified by rule as '政治'.`, { articleTitle: article.title, category: '政治' });
-        return { ...article, category: '政治' };
-    }
-    if (normalizedTitle.includes('オリンピック') || normalizedTitle.includes('W杯') || normalizedTitle.includes('プロ野球') || normalizedTitle.includes('Jリーグ')) {
-        logInfo(`Article "${article.title}" classified by rule as 'スポーツ'.`, { articleTitle: article.title, category: 'スポーツ' });
-        return { ...article, category: 'スポーツ' };
-    }
-    // 他の強力なルールをここに追加
+    // 他の強力なルールをここに追加（動的カテゴリーに対応させるか、汎用的なものに限定）
 
     // --- キーワードマッチング (Keyword Matching) ---
-    let bestMatchCategory: string = 'その他';
+    let bestMatchCategory: string | null = null;
     let maxMatchCount: number = 0;
     const matchedCategories: string[] = [];
 
-    const categoryKeywords = await getCategoryKeywords(env as EnvWithKeywordsKV); // KVからキーワード辞書を取得
+    const categoryKeywords = await getCategoryKeywords(env); // KVからキーワード辞書を取得
 
-    for (const category of ARTICLE_CATEGORIES) {
-        if (category === 'その他') continue; // 'その他' カテゴリーはキーワードマッチングの対象外
+    for (const category of categoriesForClassification) {
+        if (category === 'その他' && categoriesForClassification.length > 1) continue; // 他のカテゴリーがある場合は「その他」をスキップ
 
-        const keywords = categoryKeywords[category]; // KVから取得したキーワード辞書を使用
+        const keywords = categoryKeywords[category];
         if (!keywords) continue;
 
         let currentMatchCount = 0;
         for (const keyword of keywords) {
             const lowerKeyword = keyword.toLowerCase();
-            // キーワードがタイトルまたはサマリーに含まれているか判定
             if (normalizedTitle.includes(lowerKeyword) || normalizedSummary.includes(lowerKeyword)) {
                 currentMatchCount++;
             }
         }
 
-        // より多くのキーワードにマッチしたカテゴリーを優先
         if (currentMatchCount > maxMatchCount) {
             maxMatchCount = currentMatchCount;
             bestMatchCategory = category;
-            matchedCategories.length = 0; // リセット
+            matchedCategories.length = 0;
             matchedCategories.push(category);
         } else if (currentMatchCount > 0 && currentMatchCount === maxMatchCount) {
-             // 同じ数のキーワードにマッチした場合
              matchedCategories.push(category);
         }
     }
 
-    // マッチするキーワードが閾値（例: 1）以下の場合、または複数のカテゴリーにマッチした場合にLLMを使用
-    // TODO: 閾値はconfig等で設定可能にする
     const keywordMatchThreshold = 1;
-    if (maxMatchCount <= keywordMatchThreshold || matchedCategories.length > 1) {
+    if (bestMatchCategory === null || maxMatchCount <= keywordMatchThreshold || matchedCategories.length > 1) {
         logInfo(`Article "${article.title}" requires LLM classification (keyword match count: ${maxMatchCount}, matched categories: ${matchedCategories.join(', ')}).`, { articleTitle: article.title });
 
-        // TODO: LLMの利用回数を制限するロジックを追加
-
         try {
-            // Cloudflare Workers AI を使用してカテゴリーを判定
-            const prompt = `以下の記事タイトルを、指定されたカテゴリーの中から最も適切なものに分類してください。カテゴリーは一つだけ選んでください。\n\nカテゴリーリスト:\n${ARTICLE_CATEGORIES.filter(cat => cat !== 'その他').map(cat => `- ${cat}`).join('\n')}\n\n記事タイトル: ${article.title}\n\n**重要:** 回答は必ず上記のカテゴリーリストの中から、日本語のカテゴリー名のみを返してください。**他のテキスト、説明、番号、記号、句読点、または記事タイトルの一部を一切含めないでください。**`;
+            // LLMにカテゴリーを提案させるプロンプトを調整
+            // 既存のカテゴリーリストを参考にしつつ、新しいカテゴリーも提案できるようにする
+            const prompt = `以下の記事タイトルを、最も適切なカテゴリーに分類してください。既存のカテゴリーリストを参考にしても構いませんが、記事の内容に最も合致する新しいカテゴリー名を提案しても構いません。カテゴリーは一つだけ選んでください。\n\n既存のカテゴリーリスト（参考）:\n${currentCategoryList.map(cat => `- ${cat}`).join('\n')}\n\n記事タイトル: ${article.title}\n\n**重要:** 回答は必ず日本語のカテゴリー名のみを返してください。**他のテキスト、説明、番号、記号、句読点、または記事タイトルの一部を一切含めないでください。**`;
 
             const response = await env.AI.run(
-                '@cf/meta/llama-3.2-1b-instruct', // 選択したモデル
+                '@cf/meta/llama-3.2-1b-instruct',
                 { prompt: prompt }
             );
 
-            // LLMの応答からカテゴリー名を抽出するロジック
-            // Cloudflare Workers AIのテキスト生成モデルの応答は 'response' プロパティに含まれる
-            // 型定義との不一致を解消するため、any 型にキャスト
             const llmResponseText = (response as any).response.trim();
-            // LLMの応答から不要な文字をさらに厳密に取り除く
-            article.llmResponse = llmResponseText; // LLMの応答を保存（デバッグ用）
+            article.llmResponse = llmResponseText;
 
-            let matchedLlmCategory: string | null = null;
-            let maxMatchLength = 0;
+            let classifiedLlmCategory: string = 'その他'; // LLMが分類できなかった場合のデフォルト
 
-            // LLMの応答がARTICLE_CATEGORIESのいずれかのカテゴリ名と部分的に一致するかを確認
-            for (const category of ARTICLE_CATEGORIES) {
-                // LLMの応答がカテゴリ名を完全に含む場合を優先
-                if (llmResponseText === category) {
-                    matchedLlmCategory = category;
-                    break;
-                }
-                // 部分一致の場合（例: LLMが「政治に関するニュース」と返した場合に「政治」を抽出）
-                if (llmResponseText.includes(category) && category.length > maxMatchLength) {
-                    matchedLlmCategory = category;
-                    maxMatchLength = category.length;
-                }
-            }
+            // LLMの応答が既存のカテゴリーリストに含まれるか確認
+            const normalizedLlmResponse = normalizeText(llmResponseText).toLowerCase();
+            const existingNormalizedCategories = currentCategoryList.map(c => normalizeText(c).toLowerCase());
 
-            if (matchedLlmCategory) {
-                bestMatchCategory = matchedLlmCategory; // LLMの分類結果を優先
-                logInfo(`Article "${article.title}" classified by LLM as '${bestMatchCategory}'.`, { articleTitle: article.title, category: bestMatchCategory });
+            if (existingNormalizedCategories.includes(normalizedLlmResponse)) {
+                // 既存のカテゴリーにマッチした場合
+                classifiedLlmCategory = currentCategoryList[existingNormalizedCategories.indexOf(normalizedLlmResponse)];
+                logInfo(`Article "${article.title}" classified by LLM as existing category '${classifiedLlmCategory}'.`, { articleTitle: article.title, category: classifiedLlmCategory });
             } else {
-                logWarning(`LLM returned an invalid category "${llmResponseText}" for article "${article.title}". Falling back to keyword match or 'その他'.`, { articleTitle: article.title, llmCategory: llmResponseText });
-                // LLMが無効なカテゴリーを返した場合のフォールバック
-                if (maxMatchCount > 0) {
-                    // キーワードマッチがあった場合は、最もマッチしたカテゴリーを使用
-                    bestMatchCategory = matchedCategories[0]; // 最初のマッチカテゴリーを使用（改善の余地あり）
-                    logInfo(`Falling back to keyword match category '${bestMatchCategory}'.`, { articleTitle: article.title, category: bestMatchCategory });
+                // 新しいカテゴリーの場合、リストに追加
+                const added = await addCategory(llmResponseText, env);
+                if (added) {
+                    classifiedLlmCategory = llmResponseText;
+                    logInfo(`Article "${article.title}" classified by LLM as new category '${classifiedLlmCategory}' and added to list.`, { articleTitle: article.title, category: classifiedLlmCategory });
                 } else {
-                    // キーワードマッチがない場合は 'その他'
-                    bestMatchCategory = 'その他';
-                    logInfo(`Falling back to 'その他' category.`, { articleTitle: article.title });
+                    // 追加に失敗した場合（既に存在する場合など）
+                    classifiedLlmCategory = llmResponseText; // とりあえずLLMの応答を使用
+                    logWarning(`LLM suggested category "${llmResponseText}" for article "${article.title}" but it could not be added (might already exist).`, { articleTitle: article.title, llmCategory: llmResponseText });
                 }
             }
+            bestMatchCategory = classifiedLlmCategory;
 
-        } catch (error: any) { // エラー型をanyにキャストして簡易的に対応
-            logWarning(`Error during LLM classification for article "${article.title}": ${error}`, { articleTitle: article.title, error: error });
-            article.llmResponse = `Error: ${error.message || String(error)}`; // エラー情報を保存 (String(error)でunknown型にも対応)
+        } catch (error: any) {
+            logError(`Error during LLM classification for article "${article.title}": ${error}`, { articleTitle: article.title, error: error });
+            article.llmResponse = `Error: ${error.message || String(error)}`;
             // LLM呼び出しでエラーが発生した場合のフォールバック
-            if (maxMatchCount > 0) {
-                // キーワードマッチがあった場合は、最もマッチしたカテゴリーを使用
-                bestMatchCategory = matchedCategories[0]; // 最初のマッチカテゴリーを使用（改善の余地あり）
+            if (maxMatchCount > 0 && bestMatchCategory !== null) {
+                bestMatchCategory = matchedCategories[0];
                 logInfo(`Falling back to keyword match category '${bestMatchCategory}' due to LLM error.`, { articleTitle: article.title, category: bestMatchCategory });
             } else {
-                // キーワードマッチがない場合は 'その他'
                 bestMatchCategory = 'その他';
                 logInfo(`Falling back to 'その他' category due to LLM error.`, { articleTitle: article.title });
             }
@@ -180,23 +150,23 @@ export async function classifyArticle(article: NewsArticle, env: Env): Promise<N
         logInfo(`Article "${article.title}" classified by keyword match as '${bestMatchCategory}' (matched ${maxMatchCount} keywords).`, { articleTitle: article.title, category: bestMatchCategory, matchCount: maxMatchCount });
     }
 
-
-    // TODO: RSS フィードのカテゴリー情報も考慮に入れるロジックを追加
+    // bestMatchCategory が null の場合、'その他' にフォールバック
+    const finalCategory = bestMatchCategory || 'その他';
 
     return {
         ...article,
-        category: bestMatchCategory,
-        llmResponse: article.llmResponse, // LLMの応答を返すオブジェクトに含める
+        category: finalCategory,
+        llmResponse: article.llmResponse,
     };
 }
 
 /**
  * 記事リスト全体をカテゴリー分類する（ハイブリッドアプローチ）
  * @param articles 分類する記事オブジェクトのリスト
- * @param env Workers AI バインディングを含む環境変数
+ * @param env Workers AI バインディングとKVバインディングを含む環境変数
  * @returns カテゴリー情報が付与された記事オブジェクトのリスト
  */
-export async function classifyArticles(articles: NewsArticle[], env: Env): Promise<NewsArticle[]> {
+export async function classifyArticles(articles: NewsArticle[], env: EnvWithAIAndKeywordsKV): Promise<NewsArticle[]> {
     logInfo(`Starting article classification for ${articles.length} articles using hybrid approach.`);
     const classifiedArticles: NewsArticle[] = [];
     for (const article of articles) {
