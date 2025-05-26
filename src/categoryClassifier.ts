@@ -89,9 +89,9 @@ export async function classifyArticle(article: NewsArticle, env: Env): Promise<N
         }
     }
 
-    // マッチするキーワードが閾値（例: 2）以下の場合、または複数のカテゴリーにマッチした場合にLLMを使用
+    // マッチするキーワードが閾値（例: 1）以下の場合、または複数のカテゴリーにマッチした場合にLLMを使用
     // TODO: 閾値はconfig等で設定可能にする
-    const keywordMatchThreshold = 2;
+    const keywordMatchThreshold = 1;
     if (maxMatchCount <= keywordMatchThreshold || matchedCategories.length > 1) {
         logInfo(`Article "${article.title}" requires LLM classification (keyword match count: ${maxMatchCount}, matched categories: ${matchedCategories.join(', ')}).`, { articleTitle: article.title });
 
