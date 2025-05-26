@@ -156,7 +156,7 @@ export async function updateCategoryKeywords(category: string, newKeywords: stri
  * @param str 変換する文字列
  * @returns 半角に変換された文字列
  */
-function normalizeText(str: string): string {
+export function normalizeText(str: string): string {
     if (!str) return '';
     return str.replace(/[Ａ-Ｚａ-ｚ０-９]/g, function(s) {
         return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
