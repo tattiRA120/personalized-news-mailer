@@ -39,6 +39,7 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
     // タイトルとサマリーを正規化し、小文字に変換してマッチング
     const normalizedTitle = normalizeText(article.title).toLowerCase();
     const normalizedSummary = normalizeText(article.summary || '').toLowerCase();
+    const combinedText = `${normalizedTitle} ${normalizedSummary}`; // タイトルとサマリーを結合
 
     // 動的に取得したカテゴリーリストを使用
     const currentCategoryList = await getCategoryList(env);
@@ -46,9 +47,6 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
 
     // --- ルールベースの分類 (Rule-based Classification) ---
     // 特定のキーワードがタイトルに含まれる場合に強制的に分類
-    // ここでは、既存のカテゴリーリストに依存しない汎用的なルールのみを残すか、
-    // 動的に取得したカテゴリーリストに含まれるカテゴリー名にマッチするように調整する
-    // 例: '政治', '経済' などのカテゴリーが動的に追加されることを前提とする
     if (normalizedTitle.includes('速報') || normalizedTitle.includes('緊急')) {
         if (normalizedSummary.includes('国際') || normalizedSummary.includes('海外')) {
             logInfo(`Article "${article.title}" classified by rule as '国際' (breaking news).`, { articleTitle: article.title, category: '国際' });
@@ -58,7 +56,6 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
             return { ...article, category: '国内' };
         }
     }
-    // 他の強力なルールをここに追加（動的カテゴリーに対応させるか、汎用的なものに限定）
 
     // --- キーワードマッチング (Keyword Matching) ---
     let bestMatchCategory: string | null = null;
@@ -76,7 +73,8 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
         let currentMatchCount = 0;
         for (const keyword of keywords) {
             const lowerKeyword = keyword.toLowerCase();
-            if (normalizedTitle.includes(lowerKeyword) || normalizedSummary.includes(lowerKeyword)) {
+            // 結合されたテキストに対してキーワードマッチングを行う
+            if (combinedText.includes(lowerKeyword)) {
                 currentMatchCount++;
             }
         }
@@ -91,13 +89,13 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
         }
     }
 
-    const keywordMatchThreshold = 1;
+    const keywordMatchThreshold = 1; // キーワードマッチングの閾値
+    // キーワードマッチングで明確な分類ができない場合（マッチしない、または複数カテゴリーにマッチする場合）にLLMを使用
     if (bestMatchCategory === null || maxMatchCount <= keywordMatchThreshold || matchedCategories.length > 1) {
-        logInfo(`Article "${article.title}" requires LLM classification (keyword match count: ${maxMatchCount}, matched categories: ${matchedCategories.join(', ')}).`, { articleTitle: article.title });
+        // LLM分類が必要な場合のみログを出力
+        // logInfo(`Article "${article.title}" requires LLM classification (keyword match count: ${maxMatchCount}, matched categories: ${matchedCategories.join(', ')}).`, { articleTitle: article.title });
 
         try {
-            // LLMにカテゴリーを提案させるプロンプトを調整
-            // 既存のカテゴリーリストを参考にしつつ、新しいカテゴリーも提案できるようにする
             const prompt = `以下の記事タイトルを、最も適切なカテゴリーに分類してください。既存のカテゴリーリストを参考にしても構いませんが、記事の内容に最も合致する新しいカテゴリー名を提案しても構いません。カテゴリーは一つだけ選んでください。\n\n既存のカテゴリーリスト（参考）:\n${currentCategoryList.map(cat => `- ${cat}`).join('\n')}\n\n記事タイトル: ${article.title}\n\n**重要:** 回答は必ず日本語のカテゴリー名のみを返してください。**他のテキスト、説明、番号、記号、句読点、または記事タイトルの一部を一切含めないでください。**`;
 
             const response = await env.AI.run(
@@ -110,23 +108,21 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
 
             let classifiedLlmCategory: string = 'その他'; // LLMが分類できなかった場合のデフォルト
 
-            // LLMの応答が既存のカテゴリーリストに含まれるか確認
             const normalizedLlmResponse = normalizeText(llmResponseText).toLowerCase();
             const existingNormalizedCategories = currentCategoryList.map(c => normalizeText(c).toLowerCase());
 
             if (existingNormalizedCategories.includes(normalizedLlmResponse)) {
-                // 既存のカテゴリーにマッチした場合
                 classifiedLlmCategory = currentCategoryList[existingNormalizedCategories.indexOf(normalizedLlmResponse)];
-                logInfo(`Article "${article.title}" classified by LLM as existing category '${classifiedLlmCategory}'.`, { articleTitle: article.title, category: classifiedLlmCategory });
+                // LLMが既存カテゴリーに分類した場合のみログを出力
+                // logInfo(`Article "${article.title}" classified by LLM as existing category '${classifiedLlmCategory}'.`, { articleTitle: article.title, category: classifiedLlmCategory });
             } else {
-                // 新しいカテゴリーの場合、リストに追加
                 const added = await addCategory(llmResponseText, env);
                 if (added) {
                     classifiedLlmCategory = llmResponseText;
-                    logInfo(`Article "${article.title}" classified by LLM as new category '${classifiedLlmCategory}' and added to list.`, { articleTitle: article.title, category: classifiedLlmCategory });
+                    // LLMが新しいカテゴリーを提案し、追加した場合のみログを出力
+                    // logInfo(`Article "${article.title}" classified by LLM as new category '${classifiedLlmCategory}' and added to list.`, { articleTitle: article.title, category: classifiedLlmCategory });
                 } else {
-                    // 追加に失敗した場合（既に存在する場合など）
-                    classifiedLlmCategory = llmResponseText; // とりあえずLLMの応答を使用
+                    classifiedLlmCategory = llmResponseText;
                     logWarning(`LLM suggested category "${llmResponseText}" for article "${article.title}" but it could not be added (might already exist).`, { articleTitle: article.title, llmCategory: llmResponseText });
                 }
             }
@@ -135,7 +131,6 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
         } catch (error: any) {
             logError(`Error during LLM classification for article "${article.title}": ${error}`, { articleTitle: article.title, error: error });
             article.llmResponse = `Error: ${error.message || String(error)}`;
-            // LLM呼び出しでエラーが発生した場合のフォールバック
             if (maxMatchCount > 0 && bestMatchCategory !== null) {
                 bestMatchCategory = matchedCategories[0];
                 logInfo(`Falling back to keyword match category '${bestMatchCategory}' due to LLM error.`, { articleTitle: article.title, category: bestMatchCategory });
@@ -146,11 +141,10 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
         }
 
     } else {
-        // キーワードマッチングで単一のカテゴリーに明確に分類された場合
-        logInfo(`Article "${article.title}" classified by keyword match as '${bestMatchCategory}' (matched ${maxMatchCount} keywords).`, { articleTitle: article.title, category: bestMatchCategory, matchCount: maxMatchCount });
+        // キーワードマッチングで単一のカテゴリーに明確に分類された場合のみログを出力
+        // logInfo(`Article "${article.title}" classified by keyword match as '${bestMatchCategory}' (matched ${maxMatchCount} keywords).`, { articleTitle: article.title, category: bestMatchCategory, matchCount: maxMatchCount });
     }
 
-    // bestMatchCategory が null の場合、'その他' にフォールバック
     const finalCategory = bestMatchCategory || 'その他';
 
     return {

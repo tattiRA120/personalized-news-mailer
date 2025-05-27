@@ -36,21 +36,22 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
     const parser = new XMLParser(options);
     const jsonObj = parser.parse(xml);
 
-    if (jsonObj.rss && jsonObj.rss.channel && jsonObj.rss.channel.item) {
-        // RSSフィード
-        const items = Array.isArray(jsonObj.rss.channel.item) ? jsonObj.rss.channel.item : [jsonObj.rss.channel.item];
+    // RSS 2.0 / 0.92 / 0.91
+    if (jsonObj.rss && jsonObj.rss.channel) {
+        const items = Array.isArray(jsonObj.rss.channel.item) ? jsonObj.rss.channel.item : (jsonObj.rss.channel.item ? [jsonObj.rss.channel.item] : []);
         for (const item of items) {
             if (item.title && item.link) {
                 articles.push({
-                    title: item.title.__cdata || item.title, // CDATAがあればそれを使用
+                    title: item.title.__cdata || item.title,
                     link: item.link,
-                    sourceName: '' // 後でcollectNewsで設定
+                    sourceName: ''
                 });
             }
         }
-    } else if (jsonObj.feed && jsonObj.feed.entry) {
-        // Atomフィード
-        const entries = Array.isArray(jsonObj.feed.entry) ? jsonObj.feed.entry : [jsonObj.feed.entry];
+    }
+    // Atom 1.0
+    else if (jsonObj.feed && jsonObj.feed.entry) {
+        const entries = Array.isArray(jsonObj.feed.entry) ? jsonObj.feed.entry : (jsonObj.feed.entry ? [jsonObj.feed.entry] : []);
         for (const entry of entries) {
             const title = entry.title ? (entry.title.__cdata || entry.title) : '';
             let link = '';
@@ -62,7 +63,7 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                     }
                 } else if (entry.link['@_rel'] === 'alternate' && entry.link['@_href']) {
                     link = entry.link['@_href'];
-                } else if (entry.link['@_href']) { // Fallback for simple link
+                } else if (entry.link['@_href']) {
                     link = entry.link['@_href'];
                 }
             }
@@ -71,11 +72,27 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                 articles.push({
                     title: title,
                     link: link,
-                    sourceName: '' // 後でcollectNewsで設定
+                    sourceName: ''
                 });
             }
         }
-    } else {
+    }
+    // RSS 1.0 (RDF)
+    else if (jsonObj['rdf:RDF'] && jsonObj['rdf:RDF'].item) {
+        const items = Array.isArray(jsonObj['rdf:RDF'].item) ? jsonObj['rdf:RDF'].item : (jsonObj['rdf:RDF'].item ? [jsonObj['rdf:RDF'].item] : []);
+        for (const item of items) {
+            const title = item['dc:title'] || item.title;
+            const link = item['link'] || item['@_rdf:about']; // linkまたはrdf:aboutを使用
+            if (title && link) {
+                articles.push({
+                    title: title.__cdata || title,
+                    link: link,
+                    sourceName: ''
+                });
+            }
+        }
+    }
+    else {
         logError('Unknown feed format or no items/entries found.', null, { url });
     }
 
