@@ -117,12 +117,13 @@ export default {
                     const sentLogs = await clickLogger.getSentLogs(sevenDaysAgo, now);
 
 
-                    const updatedUserProfile = updateCategoryInterestScores(
+                    const updatedUserProfile = await updateCategoryInterestScores(
                         userProfile,
                         educationLogs, // 取得したログデータを渡す
                         clickLogs, // 取得したログデータを渡す
                         sentLogs, // 取得したログデータを渡す
-                        classifiedArticles // カテゴリー情報付きの全記事リストを渡す
+                        classifiedArticles, // カテゴリー情報付きの全記事リストを渡す
+                        env // env オブジェクトを渡す
                     );
                     // 更新されたユーザープロファイルを保存
                     await updateUserProfile(updatedUserProfile, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
