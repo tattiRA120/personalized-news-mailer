@@ -196,7 +196,6 @@ export async function updateCategoryInterestScores(
             const timeDecay = Math.exp(-daysAgo / 30); // 例: 30日で約1/eに減衰
             updatedScores[category] = (updatedScores[category] || 0) + timeDecay * educationWeight;
             updatedLastUpdated[category] = now; // スコアが更新されたカテゴリーの最終更新タイムスタンプを更新
-            logInfo(`Education selection in category '${category}' added score (decayed: ${timeDecay.toFixed(2)}).`, { userId: userProfile.userId, category: category, timeDecay });
         }
     }
 
@@ -207,7 +206,7 @@ export async function updateCategoryInterestScores(
     // カテゴリーごとの送信数とクリック数を集計
     const categorySentCounts: { [category: string]: number } = {};
     const categoryClickCounts: { [category: string]: number } = {};
-    const categoryClickTimestamps: { [category: string]: number[] } = {}; // 時間減衰用タイムスタンプ
+    const categoryClickTimestamps: { [category: string]: number[] } = {};
 
     for (const log of sentLogs) {
         const category = articleCategoryMap.get(log.articleId);
@@ -240,58 +239,48 @@ export async function updateCategoryInterestScores(
             // クリック率が高いほどスコア貢献大
             updatedScores[category] = (updatedScores[category] || 0) + clickRate * clickWeight;
             updatedLastUpdated[category] = now; // スコアが更新されたカテゴリーの最終更新タイムスタンプを更新
-             logInfo(`Category '${category}' added score based on click rate (${clickRate.toFixed(2)}).`, { userId: userProfile.userId, category: category, clickRate });
         } else if (clickCount > 0) {
-             // 送信数が0だがクリックがある場合（理論上は少ないはずだが）
-             updatedScores[category] = (updatedScores[category] || 0) + clickCount * clickWeight;
-             updatedLastUpdated[category] = now; // スコアが更新されたカテゴリーの最終更新タイムスタンプを更新
-             logWarning(`Category '${category}' has clicks but 0 sent count. Adding score based on click count.`, { userId: userProfile.userId, category: category, clickCount });
+            // 送信数が0だがクリックがある場合（理論上は少ないはずだが）
+            updatedScores[category] = (updatedScores[category] || 0) + clickCount * clickWeight;
+            updatedLastUpdated[category] = now; // スコアが更新されたカテゴリーの最終更新タイムスタンプを更新
         }
 
 
         // 時間減衰を考慮したクリック頻度に基づくスコア加算
         let timeDecayedClickScore = 0;
         for (const timestamp of clickTimestamps) {
-             const daysAgo = (now - timestamp) / millisecondsPerDay;
-             const timeDecay = Math.exp(-daysAgo / 30); // 例: 30日で約1/eに減衰
-             timeDecayedClickScore += timeDecay;
+            const daysAgo = (now - timestamp) / millisecondsPerDay;
+            const timeDecay = Math.exp(-daysAgo / 30); // 例: 30日で約1/eに減衰
+            timeDecayedClickScore += timeDecay;
         }
          updatedScores[category] = (updatedScores[category] || 0) + timeDecayedClickScore * clickWeight;
          if (timeDecayedClickScore > 0) {
-             updatedLastUpdated[category] = now; // スコアが更新されたカテゴリーの最終更新タイムスタンプを更新
+            updatedLastUpdated[category] = now; // スコアが更新されたカテゴリーの最終更新タイムスタンプを更新
          }
-         logInfo(`Category '${category}' added score based on time-decayed clicks (${timeDecayedClickScore.toFixed(2)}).`, { userId: userProfile.userId, category: category, timeDecayedClickScore });
 
 
-        // クリックされなかった場合の減点 (インプレッションに基づく)
-        // 送信されたがクリックされなかった記事が多いカテゴリーはスコアを減らす
         const notClickedCount = sentCount - clickCount;
         if (notClickedCount > 0) {
-             // 簡易的に、クリックされなかった数に負の重みをつける
-             updatedScores[category] = (updatedScores[category] || 0) - notClickedCount * impressionWeight;
-             // 減点の場合も最終更新タイムスタンプを更新するかは検討の余地あり。今回は更新しないでおく。
-             logInfo(`Category '${category}' deducted score based on not clicked count (${notClickedCount}).`, { userId: userProfile.userId, category: category, notClickedCount });
+            updatedScores[category] = (updatedScores[category] || 0) - notClickedCount * impressionWeight;
+            // 減点の場合も最終更新タイムスタンプを更新するかは検討の余地あり。今回は更新しないでおく。
         }
     }
 
     // --- スコアの正規化 ---
     let totalScore = 0;
     for (const category in updatedScores) {
-        // スコアが負にならないようにする
         updatedScores[category] = Math.max(0, updatedScores[category]);
         totalScore += updatedScores[category];
     }
 
-    // 合計が1になるように正規化
     if (totalScore > 0) {
         for (const category in updatedScores) {
             updatedScores[category] /= totalScore;
         }
-         logInfo(`Normalized category interest scores. Total score: ${totalScore.toFixed(2)}.`, { userId: userProfile.userId, totalScore });
     } else {
          logInfo('Total category interest score is 0. Skipping normalization.', { userId: userProfile.userId });
-         // 全てのスコアが0の場合、均等に興味があるとするか、全て0のままにするか検討
-         // ここでは全て0のままにする
+        // 全てのスコアが0の場合、均等に興味があるとするか、全て0のままにするか検討
+        // ここでは全て0のままにする
     }
 
 

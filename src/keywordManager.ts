@@ -30,7 +30,6 @@ export async function getCategoryKeywords(env: EnvWithKeywordsKV): Promise<Categ
     try {
         const cachedKeywords = await env.CATEGORY_KEYWORDS_KV.get(KEYWORDS_KV_KEY, { type: 'json' });
         if (cachedKeywords) {
-            logInfo('Loaded category keywords from KV.');
             return cachedKeywords as CategoryKeywords;
         }
     } catch (error) {
@@ -53,7 +52,6 @@ export async function getCategoryKeywords(env: EnvWithKeywordsKV): Promise<Categ
 export async function saveCategoryKeywords(keywords: CategoryKeywords, env: EnvWithKeywordsKV): Promise<void> {
     try {
         await env.CATEGORY_KEYWORDS_KV.put(KEYWORDS_KV_KEY, JSON.stringify(keywords));
-        logInfo('Saved category keywords to KV.');
     } catch (error) {
         logError('Error saving category keywords to KV.', error);
     }
@@ -68,7 +66,6 @@ export async function getCategoryList(env: EnvWithKeywordsKV): Promise<CategoryL
     try {
         const cachedList = await env.CATEGORY_LIST_KV.get(CATEGORY_LIST_KV_KEY, { type: 'json' });
         if (cachedList) {
-            logInfo('Loaded category list from KV.');
             return cachedList as CategoryList;
         }
     } catch (error) {
@@ -90,7 +87,6 @@ export async function getCategoryList(env: EnvWithKeywordsKV): Promise<CategoryL
 export async function saveCategoryList(categoryList: CategoryList, env: EnvWithKeywordsKV): Promise<void> {
     try {
         await env.CATEGORY_LIST_KV.put(CATEGORY_LIST_KV_KEY, JSON.stringify(categoryList));
-        logInfo('Saved category list to KV.');
     } catch (error) {
         logError('Error saving category list to KV.', error);
     }
