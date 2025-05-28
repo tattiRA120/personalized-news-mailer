@@ -116,6 +116,19 @@ export default {
                     const clickLogs = await clickLogger.getClickLogs(sevenDaysAgo, now);
                     const sentLogs = await clickLogger.getSentLogs(sevenDaysAgo, now);
 
+                    // 過去に送信された記事のログを取得し、NewsArticle[] 形式に変換
+                    const allSentArticles: NewsArticle[] = sentLogs.map(log => ({
+                        title: '', // タイトルはログに含まれないので空文字列
+                        link: log.articleId, // articleId を link として使用
+                        summary: '', // サマリーも空文字列
+                        category: undefined, // カテゴリーも不明
+                        score: undefined,
+                        embedding: undefined, // embedding はログに含まれないので undefined
+                        ucb: undefined,
+                        finalScore: undefined,
+                        llmResponse: undefined,
+                    }));
+
 
                     const updatedUserProfile = await updateCategoryInterestScores(
                         userProfile,
@@ -299,7 +312,7 @@ export default {
 					// selectPersonalizedArticles 関数に embedding が付与された記事リストを渡す
 					// @ts-ignore: Durable Object Stub の型に関するエラーを抑制
 					const numberOfArticlesToSend = 5; // Define how many articles to send
-					const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, numberOfArticlesToSend);
+					const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, numberOfArticlesToSend, 0.5, allSentArticles);
 					logInfo(`Selected ${selectedArticles.length} articles for user ${userId} after second selection.`, { userId, selectedCount: selectedArticles.length });
 
 					if (selectedArticles.length === 0) {
