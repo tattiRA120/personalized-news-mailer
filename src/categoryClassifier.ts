@@ -91,14 +91,16 @@ export async function classifyArticle(article: NewsArticle, env: EnvWithAIAndKey
     // キーワードマッチングで明確な分類ができない場合（マッチしない、または複数カテゴリーにマッチする場合）にLLMを使用
     if (bestMatchCategory === null || maxMatchCount <= keywordMatchThreshold || matchedCategories.length > 1) {
         try {
-            const prompt = `以下の記事タイトルを、最も適切なカテゴリーに分類してください。既存のカテゴリーリストを参考にしても構いませんが、記事の内容に最も合致する新しいカテゴリー名を提案しても構いません。カテゴリーは一つだけ選んでください。\n\n既存のカテゴリーリスト（参考）:\n${currentCategoryList.map(cat => `- ${cat}`).join('\n')}\n\n記事タイトル: ${article.title}\n\n**重要:** 回答は必ず日本語のカテゴリー名のみを返してください。**他のテキスト、説明、番号、記号、句読点、または記事タイトルの一部を一切含めないでください。**`;
+            const prompt = `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\nあなたは記事をカテゴリーに分類するアシスタントです。回答は必ず日本語のカテゴリー名のみを返してください。他のテキスト、説明、番号、記号、句読点、または記事タイトルの一部を一切含めないでください。既存のカテゴリーリストを参考にしても構いませんが、記事の内容に最も合致する新しいカテゴリー名を提案しても構いません。\n<|eot_id|><|start_header_id|>user<|end_header_id|>\n以下の記事タイトルを、最も適切なカテゴリーに分類してください。カテゴリーは一つだけ選んでください。\n\n既存のカテゴリーリスト（参考）:\n${currentCategoryList.map(cat => `- ${cat}`).join('\n')}\n\n記事タイトル: ${article.title}\n<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n`;
 
             const response = await env.AI.run(
                 '@cf/meta/llama-3.2-1b-instruct',
                 { prompt: prompt }
             );
 
-            const llmResponseText = (response as any).response.trim();
+            // LLMのレスポンスから不要なトークンを削除
+            let llmResponseText = (response as any).response.trim();
+            llmResponseText = llmResponseText.replace(/<\|eot_id\|>/g, '').trim(); // <|eot_id|>を削除
             article.llmResponse = llmResponseText;
 
             let classifiedLlmCategory: string = 'その他'; // LLMが分類できなかった場合のデフォルト
@@ -223,7 +225,7 @@ export async function classifyArticles(articles: NewsArticle[], env: EnvWithAIAn
         logInfo(`Attempting LLM batch classification for ${articlesNeedingLlm.length} articles.`);
         const currentCategoryList = await getCategoryList(env); // 最新のカテゴリーリストを再取得
 
-        const prompt = `以下の記事タイトルを、最も適切なカテゴリーに分類してください。各記事の分類結果は、元の記事タイトルの後に「: [カテゴリー名]」の形式で記述し、各行を改行で区切ってください。既存のカテゴリーリストを参考にしても構いませんが、記事の内容に最も合致する新しいカテゴリー名を提案しても構いません。カテゴリーは一つだけ選んでください。\n\n既存のカテゴリーリスト（参考）:\n${currentCategoryList.map(cat => `- ${cat}`).join('\n')}\n\n記事タイトルと分類結果の例:\n記事タイトル1: カテゴリーA\n記事タイトル2: カテゴリーB\n\n分類する記事タイトル:\n${articlesNeedingLlm.map(item => item.article.title).join('\n')}`;
+        const prompt = `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\nあなたは記事をカテゴリーに分類するアシスタントです。各記事の分類結果は、元の記事タイトルの後に「: [カテゴリー名]」の形式で記述し、各行を改行で区切ってください。回答は必ず日本語のカテゴリー名のみを返してください。他のテキスト、説明、番号、記号、句読点、または記事タイトルの一部を一切含めないでください。既存のカテゴリーリストを参考にしても構いませんが、記事の内容に最も合致する新しいカテゴリー名を提案しても構いません。\n<|eot_id|><|start_header_id|>user<|end_header_id|>\n以下の記事タイトルを、最も適切なカテゴリーに分類してください。カテゴリーは一つだけ選んでください。\n\n既存のカテゴリーリスト（参考）:\n${currentCategoryList.map(cat => `- ${cat}`).join('\n')}\n\n記事タイトルと分類結果の例:\n記事タイトル1: カテゴリーA\n記事タイトル2: カテゴリーB\n\n分類する記事タイトル:\n${articlesNeedingLlm.map(item => item.article.title).join('\n')}\n<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n`;
 
         try {
             const response = await env.AI.run(
@@ -231,7 +233,10 @@ export async function classifyArticles(articles: NewsArticle[], env: EnvWithAIAn
                 { prompt: prompt }
             );
 
-            const llmResponseText = (response as any).response.trim();
+            // LLMのレスポンスから不要なトークンを削除
+            let llmResponseText = (response as any).response.trim();
+            llmResponseText = llmResponseText.replace(/<\|eot_id\|>/g, '').trim(); // <|eot_id|>を削除
+
             const llmResults = llmResponseText.split('\n').map((line: string) => {
                 const parts = line.split(': ');
                 if (parts.length >= 2) {
