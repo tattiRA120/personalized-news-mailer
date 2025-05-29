@@ -4,24 +4,8 @@
 import { UserProfile } from './userProfile';
 import { ClickLogger } from './clickLogger'; // ClickLogger型が必要なのでimport
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
-import { extractKeywordsFromText, normalizeText } from './keywordManager'; // キーワード抽出と正規化関数をインポート
-import { classifyArticle } from './categoryClassifier'; // カテゴリ分類関数をインポート (記事にカテゴリが付与されていることを前提とする)
-
 
 import { NewsArticle } from './newsCollector'; // Import NewsArticle from newsCollector.ts
-
-// 興味なし記事に対する減点重み
-const DISLIKE_PENALTY_WEIGHT = 0.3;
-// キーワード類似度による減点重み
-const KEYWORD_PENALTY_WEIGHT = 0.5;
-// カテゴリ類似度による減点重み
-const CATEGORY_PENALTY_WEIGHT = 0.5;
-
-// キーワード多様性によるMMRペナルティ重み
-const KEYWORD_DIVERSITY_WEIGHT = 0.5;
-// カテゴリ多様性によるMMRペナルティ重み
-const CATEGORY_DIVERSITY_WEIGHT = 0.5;
-
 
 // コサイン類似度を計算するヘルパー関数
 function cosineSimilarity(vec1: number[], vec2: number[]): number {
@@ -48,46 +32,6 @@ function cosineSimilarity(vec1: number[], vec2: number[]): number {
     return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
 }
 
-// ユーザーに送信されたが選択されなかった記事を特定するヘルパー関数
-function getUnselectedArticles(userProfile: UserProfile, allSentArticles: NewsArticle[]): NewsArticle[] {
-    const sentArticleIds = new Set(userProfile.sentArticleIds || []);
-    const interestedArticleIds = new Set(userProfile.interests || []);
-
-    const unselected: NewsArticle[] = [];
-    for (const article of allSentArticles) {
-        // 送信されたが、興味関心リストにはない記事
-        if (sentArticleIds.has(article.link) && !interestedArticleIds.has(article.link)) {
-            unselected.push(article);
-        }
-    }
-    logInfo(`Found ${unselected.length} unselected articles for user ${userProfile.userId}.`, { userId: userProfile.userId, unselectedCount: unselected.length });
-    return unselected;
-}
-
-// 2つの記事のキーワード類似度を計算するヘルパー関数
-function calculateKeywordSimilarity(article1: NewsArticle, article2: NewsArticle): number {
-    const keywords1 = extractKeywordsFromText(article1.title + (article1.summary || ''));
-    const keywords2 = extractKeywordsFromText(article2.title + (article2.summary || ''));
-
-    if (keywords1.length === 0 || keywords2.length === 0) {
-        return 0;
-    }
-
-    const commonKeywords = keywords1.filter(kw1 => keywords2.some(kw2 => normalizeText(kw1) === normalizeText(kw2)));
-    // 共通キーワードの数を基に類似度を計算（正規化）
-    return commonKeywords.length / Math.min(keywords1.length, keywords2.length);
-}
-
-// 2つの記事のカテゴリ類似度を計算するヘルパー関数
-function calculateCategorySimilarity(article1: NewsArticle, article2: NewsArticle): number {
-    // 記事にカテゴリが付与されていることを前提とする
-    if (article1.category && article2.category && article1.category === article2.category) {
-        return 1.0; // カテゴリが一致すれば高い類似度
-    }
-    return 0.0; // カテゴリが一致しなければ低い類似度
-}
-
-
 // MMR (Maximal Marginal Relevance) と Contextual Bandit を組み合わせて記事を選択する関数
 // ClickLogger Durable Object を引数として受け取り、バンディットモデルからUCB値を取得する
 // @ts-ignore: Durable Object Stub の型に関するエラーを抑制
@@ -97,7 +41,7 @@ export async function selectPersonalizedArticles(
     clickLogger: DurableObjectStub<any>, // Durable Object インスタンスを受け取る (型エラー回避のためanyを使用)
     count: number,
     lambda: number = 0.5, // MMR パラメータ
-    allSentArticles: NewsArticle[] // ユーザーに送信された全記事のリストを追加
+    allSentArticles: NewsArticle[] // ユーザーに送信された全記事のリストを追加 (現在は使用しないが引数として残す)
 ): Promise<NewsArticle[]> {
     if (articles.length === 0 || count <= 0) {
         logInfo("No articles or count is zero, returning empty selection.", { articleCount: articles.length, count });
@@ -106,13 +50,10 @@ export async function selectPersonalizedArticles(
 
     logInfo(`Selecting personalized articles for user ${userProfile.userId}`, { userId: userProfile.userId, articleCount: articles.length, count });
 
-    // 「興味なし」記事のリストを取得
-    const unselectedArticles = getUnselectedArticles(userProfile, allSentArticles);
-
     // Durable Object から記事のUCB値を取得
     const articlesWithEmbeddings = articles
         .filter(article => article.embedding !== undefined) // embedding が存在する記事のみ
-        .map(article => ({ articleId: article.link, embedding: article.embedding! })); // articleId として link を使用（要検討）
+        .map(article => ({ articleId: article.link, embedding: article.embedding! })); // articleId として link を使用
 
     let ucbValues: { articleId: string, ucb: number }[] = [];
     if (articlesWithEmbeddings.length > 0) {
@@ -173,23 +114,12 @@ export async function selectPersonalizedArticles(
             interestRelevance = cosineSimilarity(averageInterestedEmbedding, article.embedding);
         }
 
-        // 「興味なし」記事との類似度に基づく減点
-        let dislikePenalty = 0;
-        for (const unselectedArticle of unselectedArticles) {
-            const keywordSim = calculateKeywordSimilarity(article, unselectedArticle);
-            const categorySim = calculateCategorySimilarity(article, unselectedArticle);
-            // どちらかの類似度が高い場合にペナルティを適用
-            if (keywordSim > 0.1 || categorySim > 0) { // 閾値は調整可能
-                dislikePenalty = Math.max(dislikePenalty, (keywordSim * KEYWORD_PENALTY_WEIGHT) + (categorySim * CATEGORY_PENALTY_WEIGHT));
-            }
-        }
-
         // 最終的な関連度スコアを計算
         // 興味関心との関連度と UCB 値を組み合わせます。
         // TODO: これらの重みは調整可能なハイパーパラメータとすることができます。
         const interestWeight = 1.0;
         const ucbWeight = 0.5;
-        const finalScore = interestRelevance * interestWeight + ucb * ucbWeight - (dislikePenalty * DISLIKE_PENALTY_WEIGHT);
+        const finalScore = interestRelevance * interestWeight + ucb * ucbWeight;
 
         return {
             ...article,
@@ -231,13 +161,8 @@ export async function selectPersonalizedArticles(
                     }
                 }
             } else {
-                // 埋め込みがない場合、キーワードとカテゴリの類似度で多様性を評価
-                for (const selectedArticle of selected) {
-                    const keywordSim = calculateKeywordSimilarity(currentArticle, selectedArticle);
-                    const categorySim = calculateCategorySimilarity(currentArticle, selectedArticle);
-                    // 類似度が高いほど多様性が低いと見なす
-                    maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, (keywordSim * KEYWORD_DIVERSITY_WEIGHT) + (categorySim * CATEGORY_DIVERSITY_WEIGHT));
-                }
+                // 埋め込みがない場合はスキップ
+                continue;
             }
 
             // MMR スコアの計算: lambda * Relevance - (1 - lambda) * Similarity
