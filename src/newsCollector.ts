@@ -41,15 +41,16 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
     const jsonObj = parser.parse(xml);
 
     // RSS 2.0 / 0.92 / 0.91
-    if (jsonObj.rss && jsonObj.rss.channel) {
-        const items = Array.isArray(jsonObj.rss.channel.item) ? jsonObj.rss.channel.item : (jsonObj.rss.channel.item ? [jsonObj.rss.channel.item] : []);
+    if ((jsonObj as any).rss && (jsonObj as any).rss.channel) {
+        const rssChannel = (jsonObj as any).rss.channel;
+        const items = Array.isArray(rssChannel.item) ? rssChannel.item : (rssChannel.item ? [rssChannel.item] : []);
         for (const item of items) {
             if (item.title && item.link) {
                 const summary = item.description?.__cdata || item.description || item['content:encoded']?.__cdata || item['content:encoded'] || '';
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
                 articles.push({
                     articleId: crypto.randomUUID(), // Generate UUID
-                    title: item.title.__cdata || item.title,
+                    title: (item.title as any).__cdata || item.title,
                     link: item.link,
                     sourceName: '', // Will be filled later
                     summary: summary.trim(),
@@ -59,10 +60,11 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
         }
     }
     // Atom 1.0
-    else if (jsonObj.feed && jsonObj.feed.entry) {
-        const entries = Array.isArray(jsonObj.feed.entry) ? jsonObj.feed.entry : (jsonObj.feed.entry ? [jsonObj.feed.entry] : []);
+    else if ((jsonObj as any).feed && (jsonObj as any).feed.entry) {
+        const atomFeed = (jsonObj as any).feed;
+        const entries = Array.isArray(atomFeed.entry) ? atomFeed.entry : (atomFeed.entry ? [atomFeed.entry] : []);
         for (const entry of entries) {
-            const title = entry.title ? (entry.title.__cdata || entry.title) : '';
+            const title = entry.title ? ((entry.title as any).__cdata || entry.title) : '';
             let link = '';
             if (entry.link) {
                 if (Array.isArray(entry.link)) {
@@ -70,10 +72,10 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                     if (alternateLink) {
                         link = alternateLink['@_href'];
                     }
-                } else if (entry.link['@_rel'] === 'alternate' && entry.link['@_href']) {
-                    link = entry.link['@_href'];
-                } else if (entry.link['@_href']) {
-                    link = entry.link['@_href'];
+                } else if ((entry.link as any)['@_rel'] === 'alternate' && (entry.link as any)['@_href']) {
+                    link = (entry.link as any)['@_href'];
+                } else if ((entry.link as any)['@_href']) {
+                    link = (entry.link as any)['@_href'];
                 }
             }
             const summary = entry.summary?.__cdata || entry.summary || entry.content?.__cdata || entry.content || '';
@@ -92,10 +94,11 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
         }
     }
     // RSS 1.0 (RDF)
-    else if (jsonObj['rdf:RDF'] && jsonObj['rdf:RDF'].item) {
-        const items = Array.isArray(jsonObj['rdf:RDF'].item) ? jsonObj['rdf:RDF'].item : (jsonObj['rdf:RDF'].item ? [jsonObj['rdf:RDF'].item] : []);
+    else if ((jsonObj as any)['rdf:RDF'] && (jsonObj as any)['rdf:RDF'].item) {
+        const rdfFeed = (jsonObj as any)['rdf:RDF'];
+        const items = Array.isArray(rdfFeed.item) ? rdfFeed.item : (rdfFeed.item ? [rdfFeed.item] : []);
         for (const item of items) {
-            const title = item['dc:title']?.__cdata || item['dc:title'] || item.title?.__cdata || item.title;
+            const title = (item['dc:title'] as any)?.__cdata || item['dc:title'] || (item.title as any)?.__cdata || item.title;
             const link = item['link'] || item['@_rdf:about']; // linkまたはrdf:aboutを使用
             const summary = item.description?.__cdata || item.description || '';
             const pubDate = item['dc:date'] || item.date || new Date().toUTCString(); // Fallback to current date
