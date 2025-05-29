@@ -9,14 +9,14 @@ import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResul
 
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
-	'mail-news-user-profiles': KVNamespace;
+	USER_DB: D1Database; // D1 Database binding for user profiles and logs
 	CLICK_LOGGER: DurableObjectNamespace;
 	OPENAI_API_KEY?: string;
 	GOOGLE_CLIENT_ID?: string;
 	GOOGLE_CLIENT_SECRET?: string;
 	GOOGLE_REDIRECT_URI?: string;
 	'mail-news-gmail-tokens': KVNamespace;
-    DB: D1Database; // D1 Database binding
+    DB: D1Database; // D1 Database binding for articles
     WORKER_BASE_URL?: string; // Add WORKER_BASE_URL for callback URL construction
 }
 
@@ -24,8 +24,6 @@ interface EmailRecipient {
     email: string;
     name?: string;
 }
-
-
 
 export default {
 	async scheduled(controller: ScheduledController, env: Env): Promise<void> {
@@ -102,8 +100,7 @@ export default {
 
 			// --- 2. Get all users ---
 			logInfo('Fetching all user IDs...');
-			// Pass the correct KV binding to userProfile functions
-			const userIds = await getAllUserIds({ 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+			const userIds = await getAllUserIds(env); // env を直接渡す
 			logInfo(`Found ${userIds.length} users to process.`, { userCount: userIds.length });
 
 			if (userIds.length === 0) {
@@ -117,8 +114,7 @@ export default {
 				try {
 					logInfo(`Processing user: ${userId}`);
 
-					// Pass the correct KV binding to userProfile functions
-					const userProfile = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+					const userProfile = await getUserProfile(userId, env); // env を直接渡す
 
 					if (!userProfile) {
 						logError(`User profile not found for ${userId}. Skipping email sending for this user.`, null, { userId });
@@ -171,6 +167,7 @@ export default {
 					const sentArticlesData = selectedArticles.map(article => ({
 						articleId: article.link, // articleId は link と仮定
 						timestamp: Date.now(), // 送信時のタイムスタンプ
+                        embedding: JSON.parse(article.embedding as string), // embedding を含める
 					}));
 
 					// In scheduled task, request.url is not defined. Use relative path.
@@ -189,13 +186,17 @@ export default {
 
 					// --- 6. Process Click Logs and Update Bandit Model ---
 					logInfo(`Processing click logs and updating bandit model for user ${userId}...`, { userId });
-					// Durable Object から未処理のクリックログを取得し、削除
-					const clickLogsToProcess = await clickLogger.getAndClearClickLogs();
-					logInfo(`Found ${clickLogsToProcess.length} click logs to process for user ${userId}.`, { userId, count: clickLogsToProcess.length });
+					
+                    // D1から未処理のクリックログを取得
+                    const { results: clickLogs } = await env.USER_DB.prepare(
+                        `SELECT article_id, timestamp FROM click_logs WHERE user_id = ?`
+                    ).bind(userId).all<{ article_id: string, timestamp: number }>();
 
-					if (clickLogsToProcess.length > 0) {
-						const updatePromises = clickLogsToProcess.map(async clickLog => {
-							const articleId = clickLog.articleId;
+                    logInfo(`Found ${clickLogs.length} click logs to process for user ${userId}.`, { userId, count: clickLogs.length });
+
+					if (clickLogs.length > 0) {
+						const updatePromises = clickLogs.map(async clickLog => {
+							const articleId = clickLog.article_id;
 
 							// D1から記事データ（embeddingを含む）を取得
 							const { results } = await env.DB.prepare("SELECT embedding FROM articles WHERE id = ?").bind(articleId).all();
@@ -221,28 +222,51 @@ export default {
 						});
 						await Promise.all(updatePromises);
 						logInfo(`Finished processing click logs and updating bandit model for user ${userId}.`, { userId });
+
+                        // 処理済みのクリックログをD1から削除
+                        const clickLogIdsToDelete = clickLogs.map(log => log.article_id); // Assuming article_id is unique enough for deletion or need a primary key from click_logs table
+                        if (clickLogIdsToDelete.length > 0) {
+                            // D1のclick_logsテーブルにPRIMARY KEYのidがあるため、それを使って削除する
+                            // SELECT id FROM click_logs WHERE user_id = ? AND article_id IN (...)
+                            const { results: idsToDelete } = await env.USER_DB.prepare(
+                                `SELECT id FROM click_logs WHERE user_id = ? AND article_id IN (${clickLogIdsToDelete.map(() => '?').join(',')})`
+                            ).bind(userId, ...clickLogIdsToDelete).all<{ id: number }>();
+
+                            if (idsToDelete && idsToDelete.length > 0) {
+                                const deleteStmt = env.USER_DB.prepare(
+                                    `DELETE FROM click_logs WHERE id IN (${idsToDelete.map(() => '?').join(',')})`
+                                );
+                                await deleteStmt.bind(...idsToDelete.map(row => row.id)).run();
+                                logInfo(`Deleted ${idsToDelete.length} processed click logs from D1 for user ${userId}.`, { userId, deletedCount: idsToDelete.length });
+                            }
+                        }
+
 					} else {
 						logInfo(`No click logs to process for user ${userId}.`, { userId });
 					}
 
-                    // --- 7. Clean up old logs in Durable Object ---
+                    // --- 7. Clean up old logs in D1 ---
                     logInfo(`Starting cleanup of old logs for user ${userId}...`, { userId });
                     const daysToKeepLogs = 30; // ログを保持する日数 (調整可能)
-                    await clickLogger.cleanupOldLogs(daysToKeepLogs);
-                    logInfo(`Finished cleanup of old logs for user ${userId}.`, { userId });
+                    const cutoffTimestamp = Date.now() - daysToKeepLogs * 24 * 60 * 60 * 1000; // 指定日数より前のタイムスタンプ
+
+                    // click_logs, sent_articles, education_logs から古いデータを削除
+                    const cleanupPromises = [
+                        env.USER_DB.prepare(`DELETE FROM click_logs WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run(),
+                        env.USER_DB.prepare(`DELETE FROM sent_articles WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run(),
+                        env.USER_DB.prepare(`DELETE FROM education_logs WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run(),
+                    ];
+                    await Promise.all(cleanupPromises);
+                    logInfo(`Finished cleanup of old logs for user ${userId} in D1.`, { userId });
 
 
 					// TODO: Update user profile with sent article IDs for future reference/negative feedback
 					// This could be done here or within the click logging process
 					// For now, let's add a placeholder for updating the profile with sent articles
-					if (userProfile.sentArticleIds) {
-						userProfile.sentArticleIds.push(...selectedArticles.map(a => a.link)); // articleId は link と仮定
-					} else {
-						userProfile.sentArticleIds = selectedArticles.map(a => a.link); // articleId は link と仮定
-					}
-					// Pass the correct KV binding to userProfile functions
-					await updateUserProfile(userProfile, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
-					logInfo(`Updated user profile for ${userId} with sent article IDs.`, { userId });
+					// userProfile.sentArticleIds は userProfile から削除されたため、このロジックは不要
+					// userProfile.interests は教育プログラムで更新されるため、ここでは更新しない
+					await updateUserProfile(userProfile, env); // env を直接渡す
+					logInfo(`Updated user profile for ${userId}.`, { userId });
 
 
 				} catch (userProcessError) {
@@ -326,16 +350,14 @@ export default {
 					.join('');
 
 				// Check if user already exists
-				// Pass the correct KV binding to userProfile functions
-				const existingUser = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+				const existingUser = await getUserProfile(userId, env); // env を直接渡す
 				if (existingUser) {
 					logWarning(`Registration failed: User with email ${email} already exists.`, { email, userId });
 					return new Response('User already exists', { status: 409 });
 				}
 
 				// Create user profile
-				// Pass the correct KV binding to userProfile functions
-				const newUserProfile = await createUserProfile(userId, email, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+				const newUserProfile = await createUserProfile(userId, email, env); // env を直接渡す
 
 				logInfo(`User registered successfully: ${userId}`, { userId, email });
 
@@ -487,8 +509,8 @@ export default {
 					articleId: article.link, // 記事IDとしてリンクを使用
 					title: article.title,
 					summary: article.summary,
-					// category: article.category, // 分類されたカテゴリーを追加
-					// llmResponse: article.llmResponse, // LLMの応答を追加 (LLMが使用された場合)
+					category: article.category, // 分類されたカテゴリーを追加
+					llmResponse: article.llmResponse, // LLMの応答を追加 (LLMが使用された場合)
 					// link: article.link, // 必要であれば追加
 				}));
 
@@ -515,9 +537,8 @@ export default {
 					return new Response('Missing parameters', { status: 400 });
 				}
 
-				// Get user profile from KV
-				// Pass the correct KV binding to userProfile functions
-				const userProfile = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+				// Get user profile from D1
+				const userProfile = await getUserProfile(userId, env);
 
 				if (!userProfile) {
 					logWarning(`Submit interests failed: User profile not found for ${userId}.`, { userId });
@@ -525,19 +546,14 @@ export default {
 				}
 
 				// Update user profile with selected article IDs
-				// 既存の興味関心データがあればそれに追加
+				// userProfile.interests は教育プログラムで選択された記事ID (リンク) を保持
 				const selectedArticleIds = selectedArticles.map(article => article.articleId);
-				if (userProfile.interests) {
-					userProfile.interests.push(...selectedArticleIds);
-					// 重複を排除
-					userProfile.interests = [...new Set(userProfile.interests)];
-				} else {
-					userProfile.interests = selectedArticleIds;
-				}
+				userProfile.interests.push(...selectedArticleIds);
+				// 重複を排除
+				userProfile.interests = [...new Set(userProfile.interests)];
 
-				// Save updated user profile to KV
-				// Pass the correct KV binding to userProfile functions
-				await updateUserProfile(userProfile, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+				// Save updated user profile to D1
+				await updateUserProfile(userProfile, env);
 
 				logInfo(`User interests updated successfully for user ${userId}.`, { userId, selectedArticleIds });
 
@@ -698,8 +714,8 @@ export default {
 		} else if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
 			logInfo('Request received to delete all Durable Object data');
 			try {
-				// Get all user IDs from KV
-				const userIds = await getAllUserIds({ 'mail-news-user-profiles': env['mail-news-user-profiles'] });
+				// Get all user IDs from D1
+				const userIds = await getAllUserIds(env);
 				logInfo(`Found ${userIds.length} users. Deleting data for each Durable Object.`, { userCount: userIds.length });
 
 				const deletePromises = userIds.map(async userId => {

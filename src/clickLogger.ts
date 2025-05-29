@@ -4,12 +4,12 @@ import { logError, logInfo, logWarning } from './logger'; // Import logging help
 import { DurableObject } from 'cloudflare:workers'; // DurableObject をインポート
 
 interface NewsArticle {
+    id: string; // D1のarticlesテーブルのPRIMARY KEY
     title: string;
-    link: string;
-    summary?: string;
-    category?: string;
-    embedding?: number[];
-    llmResponse?: string;
+    url: string;
+    published_at: number;
+    content?: string;
+    embedding?: string; // D1ではTEXTとして保存されるため
 }
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
@@ -30,17 +30,6 @@ interface BanditModelState {
     dimension: number; // 特徴量ベクトルの次元 (embedding の次元)
     // その他のバンディット関連パラメータ (例: alpha for UCB)
     alpha: number;
-}
-
-interface ClickEvent {
-    articleId: string;
-    timestamp: number; // Using Unix timestamp
-    category?: string; // クリックされた記事のカテゴリを追加
-    // Add other event data as needed
-    // クリックイベント発生時の記事の特徴量（embedding）はDO側で取得する
-    // embedding?: number[];
-    // バンディットモデル更新のための報酬
-    // reward?: number; // reward はクリックイベントなので 1.0 固定とする
 }
 
 // Helper function for dot product of two vectors
@@ -152,25 +141,48 @@ function invertMatrix(matrix: number[][]): number[][] {
 
 
 // Durable Object class for managing click logs and bandit model per user
+interface EnvWithDurableObjects {
+    BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
+    USER_DB: D1Database; // D1 Database binding for user profiles and logs
+    DB: D1Database; // D1 Database binding for articles
+}
+
+// Durable Object class for managing click logs and bandit model per user
 export class ClickLogger extends DurableObject {
     state: DurableObjectState;
-    env: {
-        ARTICLE_EMBEDDINGS: KVNamespace; // KV Namespace binding (ログ保存用など、バンディットモデル以外で使用)
-        BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
-    };
+    env: EnvWithDurableObjects;
 
     private banditModel: BanditModelState | null = null;
     private readonly banditStateKey = 'banditModelState.json'; // R2に保存するオブジェクトのキー
 
-    constructor(state: DurableObjectState, env: { ARTICLE_EMBEDDINGS: KVNamespace; BANDIT_MODELS: R2Bucket }) {
+    constructor(state: DurableObjectState, env: EnvWithDurableObjects) {
         super(state, env); // 親クラスのコンストラクターを呼び出す
         this.state = state;
         this.env = env;
 
         // Durable Object が初めてロードされたときに状態を読み込む
         this.state.blockConcurrencyWhile(async () => {
+            await this.cleanupOldDOData(); // 古いDOデータをクリーンアップ
             await this.loadState();
         });
+    }
+
+    // Durable Object の古いデータをクリーンアップするメソッド
+    private async cleanupOldDOData(): Promise<void> {
+        logInfo(`Cleaning up old Durable Object data for ${this.state.id.toString()}`);
+        try {
+            // Durable Object のストレージからすべてのキーをリストアップし、削除
+            const allKeys = await this.state.storage.list();
+            const keysToDelete = Array.from(allKeys.keys());
+            if (keysToDelete.length > 0) {
+                await this.state.storage.delete(keysToDelete);
+                logInfo(`Deleted ${keysToDelete.length} old keys from Durable Object storage for ${this.state.id.toString()}`);
+            } else {
+                logInfo(`No old data found in Durable Object storage for ${this.state.id.toString()}`);
+            }
+        } catch (error) {
+            logError(`Error cleaning up old Durable Object data for ${this.state.id.toString()}:`, error);
+        }
     }
 
     // Durable Object の状態（バンディットモデル）をR2から読み込む
@@ -207,7 +219,7 @@ export class ClickLogger extends DurableObject {
 
     // 新しいバンディットモデルを初期化するヘルパーメソッド
     private async initializeNewBanditModel(): Promise<void> {
-        // OpenAI Embedding API (text-multilingual-embedding-002) の次元数 1536 で設定する。
+        // OpenAI Embedding API (text-embedding-3-large) の次元数 1536 で設定する。
         const dimension = 1536; // OpenAI Embedding API の次元数
         this.banditModel = {
             A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
@@ -223,7 +235,6 @@ export class ClickLogger extends DurableObject {
         // 初期状態を保存
         await this.saveState();
     }
-
 
     // Durable Object の状態（バンディットモデル）をR2に保存する
     private async saveState(): Promise<void> {
@@ -247,6 +258,7 @@ export class ClickLogger extends DurableObject {
     async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
         const path = url.pathname;
+        const userId = this.state.id.toString();
 
         // /get-ucb-values エンドポイントのリクエストボディの型定義
         interface GetUcbValuesRequestBody {
@@ -255,14 +267,13 @@ export class ClickLogger extends DurableObject {
 
         // /log-sent-articles エンドポイントのリクエストボディの型定義
         interface LogSentArticlesRequestBody {
-            sentArticles: { articleId: string, timestamp: number }[];
+            sentArticles: { articleId: string, timestamp: number, embedding: number[] }[];
         }
 
         // /log-click エンドポイントのリクエストボディの型定義
         interface LogClickRequestBody {
             articleId: string;
             timestamp: number;
-            category?: string; // category を追加
         }
 
         // /update-bandit-from-click エンドポイントのリクエストボディの型定義
@@ -270,37 +281,33 @@ export class ClickLogger extends DurableObject {
             articleId: string;
             embedding: number[];
             reward: number;
-            category?: string; // category を追加
+        }
+
+        // /learn-from-education エンドポイントのリクエストボディの型定義
+        interface LearnFromEducationRequestBody {
+            selectedArticles: { articleId: string, embedding: number[] }[];
         }
 
         if (request.method === 'POST' && path === '/log-click') {
             try {
-                // リクエストボディからクリック情報を取得
-                const { articleId, timestamp } = await request.json() as LogClickRequestBody; // category はここでは受け取らない
+                const { articleId, timestamp } = await request.json() as LogClickRequestBody;
 
                 if (!articleId || timestamp === undefined) {
                     logWarning('Log click failed: Missing articleId or timestamp in request body.');
                     return new Response('Missing parameters', { status: 400 });
                 }
 
-                // KVから記事データ（カテゴリ情報を含む）を取得
-                const cacheKey = `article:${articleId}`; // 記事IDはリンクと仮定
-                const cachedArticle = await this.env.ARTICLE_EMBEDDINGS.get(cacheKey, { type: 'json' }) as NewsArticle | null;
-                const articleCategory = cachedArticle?.category || '不明'; // 記事のカテゴリを取得、なければ「不明」
+                // D1にクリックログを保存
+                await this.env.USER_DB.prepare(
+                    `INSERT INTO click_logs (user_id, article_id, timestamp) VALUES (?, ?, ?)`
+                ).bind(userId, articleId, timestamp).run();
 
-                // クリックイベントをストレージに保存
-                // キーフォーマット: click:<timestamp>:<articleId>
-                const eventKey = `click:${timestamp}:${articleId}`;
-                await this.state.storage.put(eventKey, { articleId, timestamp, category: articleCategory }); // category も保存
-
-                logInfo(`Logged click for user ${this.state.id.toString()}, article ${articleId}, category ${articleCategory} at ${timestamp}`);
-
-                // バンディットモデルの更新は定期バッチ処理で行うため、ここでは行わない
+                logInfo(`Logged click for user ${userId}, article ${articleId} at ${timestamp}`);
 
                 return new Response('Click logged', { status: 200 });
 
             } catch (error) {
-                logError('Error logging click:', error, { userId: this.state.id.toString(), requestUrl: request.url });
+                logError('Error logging click:', error, { userId, requestUrl: request.url });
                 return new Response('Error logging click', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/get-ucb-values') {
@@ -328,23 +335,23 @@ export class ClickLogger extends DurableObject {
             }
         } else if (request.method === 'POST' && path === '/log-sent-articles') {
             try {
-                // 送信ログを保存するのみで、embeddingは保存しない
                 const { sentArticles } = await request.json() as LogSentArticlesRequestBody;
                 if (!Array.isArray(sentArticles)) {
                     return new Response('Invalid input: sentArticles must be an array', { status: 400 });
                 }
 
-                logInfo(`Logging ${sentArticles.length} sent articles for user ${this.state.id.toString()}`);
+                logInfo(`Logging ${sentArticles.length} sent articles for user ${userId}`);
 
-                // 送信ログを保存
-                const putPromises = sentArticles.map(async article => {
-                    // キーフォーマット: sent:<timestamp>:<articleId>
-                    const logKey = `sent:${article.timestamp}:${article.articleId}`;
-                    await this.state.storage.put(logKey, { articleId: article.articleId, timestamp: article.timestamp });
+                // D1に送信ログを保存
+                const insertPromises = sentArticles.map(async article => {
+                    const embeddingString = article.embedding ? JSON.stringify(article.embedding) : null;
+                    await this.env.USER_DB.prepare(
+                        `INSERT INTO sent_articles (user_id, article_id, timestamp, embedding) VALUES (?, ?, ?, ?)`
+                    ).bind(userId, article.articleId, article.timestamp, embeddingString).run();
                 });
-                await Promise.all(putPromises);
+                await Promise.all(insertPromises);
 
-                logInfo(`Successfully logged sent articles for user ${this.state.id.toString()}`);
+                logInfo(`Successfully logged sent articles for user ${userId}`);
 
                 return new Response('Sent articles logged', { status: 200 });
 
@@ -358,12 +365,6 @@ export class ClickLogger extends DurableObject {
             return new Response('Deprecated endpoint', { status: 405 }); // Method Not Allowed or similar
         } else if (request.method === 'POST' && path === '/learn-from-education') {
             try {
-                // /learn-from-education エンドポイントのリクエストボディの型定義
-                interface LearnFromEducationRequestBody {
-                    selectedArticles: { articleId: string, embedding: number[] }[];
-                }
-
-                // リクエストボディから選択された記事のembeddingリストを取得
                 const { selectedArticles } = await request.json() as LearnFromEducationRequestBody;
 
                 if (!Array.isArray(selectedArticles)) {
@@ -371,26 +372,24 @@ export class ClickLogger extends DurableObject {
                     return new Response('Invalid parameters', { status: 400 });
                 }
 
-                logInfo(`Learning from ${selectedArticles.length} selected articles for user ${this.state.id.toString()}`);
+                logInfo(`Learning from ${selectedArticles.length} selected articles for user ${userId}`);
 
                 if (this.banditModel) {
-                    // 各選択された記事のembeddingでバンディットモデルを更新し、教育プログラムログを保存
-                    const putPromises = selectedArticles.map(async article => {
+                    const insertPromises = selectedArticles.map(async article => {
                         if (article.embedding) {
                             // ユーザー教育による選択は報酬 1.0 として学習
                             this.updateBanditModel(article.embedding, 1.0);
-                            logInfo(`Updated bandit model with education data for article ${article.articleId}`, { userId: this.state.id.toString(), articleId: article.articleId });
+                            logInfo(`Updated bandit model with education data for article ${article.articleId}`, { userId, articleId: article.articleId });
 
-                            // 教育プログラムログを保存
-                            // キーフォーマット: education:<timestamp>:<articleId>
-                            const logKey = `education:${Date.now()}:${article.articleId}`;
-                            await this.state.storage.put(logKey, { articleId: article.articleId, timestamp: Date.now() });
+                            // D1に教育プログラムログを保存
+                            await this.env.USER_DB.prepare(
+                                `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
+                            ).bind(userId, article.articleId, Date.now(), 'selected').run();
                         } else {
                             logWarning(`Cannot update bandit model or log education data for article ${article.articleId}: embedding missing.`);
                         }
                     });
-                    await Promise.all(putPromises);
-
+                    await Promise.all(insertPromises);
 
                     // 状態全体を保存 (バンディットモデルの更新を含む)
                     if (selectedArticles.length > 0) {
@@ -398,14 +397,13 @@ export class ClickLogger extends DurableObject {
                          logInfo(`Saved Durable Object state after learning from education.`);
                     }
                 } else {
-                    logWarning(`Bandit model not initialized. Cannot learn from education or log education data for user ${this.state.id.toString()}`);
+                    logWarning(`Bandit model not initialized. Cannot learn from education or log education data for user ${userId}`);
                 }
-
 
                 return new Response('Learning from education completed', { status: 200 });
 
             } catch (error) {
-                logError('Error learning from education:', error, { userId: this.state.id.toString(), requestUrl: request.url });
+                logError('Error learning from education:', error, { userId, requestUrl: request.url });
                 return new Response('Error learning from education', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
@@ -431,17 +429,17 @@ export class ClickLogger extends DurableObject {
                 return new Response('Bandit model updated from click', { status: 200 });
 
             } catch (error) {
-                logError('Error updating bandit model from click:', error, { userId: this.state.id.toString(), requestUrl: request.url });
+                logError('Error updating bandit model from click:', error, { userId, requestUrl: request.url });
                 return new Response('Error updating bandit model from click', { status: 500 });
             }
-        }else if (request.method === 'POST' && path === '/delete-all-data') {
+        } else if (request.method === 'POST' && path === '/delete-all-data') {
             try {
-                logInfo(`Deleting all data for Durable Object ${this.state.id.toString()}`);
+                logInfo(`Deleting all data for Durable Object ${userId}`);
                 await this.state.storage.deleteAll();
-                logInfo(`All data deleted for Durable Object ${this.state.id.toString()}`);
+                logInfo(`All data deleted for Durable Object ${userId}`);
                 return new Response('All data deleted', { status: 200 });
             } catch (error) {
-                logError('Error deleting all data:', error, { userId: this.state.id.toString(), requestUrl: request.url });
+                logError('Error deleting all data:', error, { userId, requestUrl: request.url });
                 return new Response('Error deleting all data', { status: 500 });
             }
         }
@@ -451,155 +449,9 @@ export class ClickLogger extends DurableObject {
         return new Response('Not Found', { status: 404 });
     }
 
-    // 教育プログラムログを取得するメソッド
-    async getEducationLogs(startTime?: number, endTime?: number): Promise<{ articleId: string; timestamp: number; }[]> {
-        logInfo(`Getting education logs for user ${this.state.id.toString()}`, { userId: this.state.id.toString(), startTime, endTime });
-        const logs: { articleId: string; timestamp: number; }[] = [];
-        // Durable Object のストレージから education: プレフィックスで始まるキーをリストアップ
-        // キーフォーマット: education:<timestamp>:<articleId>
-        const listResult = await this.state.storage.list({ prefix: 'education:' });
-
-        for (const [key, value] of listResult.entries()) {
-            // キーから articleId と timestamp を抽出
-            const parts = key.split(':');
-            if (parts.length >= 3) {
-                 const timestamp = parseInt(parts[1], 10);
-                 const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
-
-                 if ((startTime === undefined || timestamp >= startTime) && (endTime === undefined || timestamp <= endTime)) {
-                     logs.push({ articleId, timestamp });
-                 }
-            } else {
-                 logWarning(`Invalid education log key format: ${key}`);
-            }
-        }
-        logInfo(`Found ${logs.length} education logs.`, { userId: this.state.id.toString(), count: logs.length });
-        return logs;
-    }
-
-    // クリックログを取得するメソッド
-    async getClickLogs(startTime?: number, endTime?: number): Promise<{ articleId: string; timestamp: number; }[]> {
-        logInfo(`Getting click logs for user ${this.state.id.toString()}`, { userId: this.state.id.toString(), startTime, endTime });
-        const logs: { articleId: string; timestamp: number; }[] = [];
-        // Durable Object のストレージから click: プレフィックスで始まるキーをリストアップ
-        // キーフォーマット: click:<timestamp>:<articleId>
-        const listResult = await this.state.storage.list({ prefix: 'click:' });
-
-        for (const [key, value] of listResult.entries()) {
-            // キーから articleId と timestamp を抽出
-            const parts = key.split(':');
-            if (parts.length >= 3) {
-                 const timestamp = parseInt(parts[1], 10);
-                 const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
-
-                 if ((startTime === undefined || timestamp >= startTime) && (endTime === undefined || timestamp <= endTime)) {
-                     logs.push({ articleId, timestamp });
-                 }
-            } else {
-                 logWarning(`Invalid click log key format: ${key}`);
-            }
-        }
-        logInfo(`Found ${logs.length} click logs.`, { userId: this.state.id.toString(), count: logs.length });
-        return logs;
-    }
-
-    // 送信ログを取得するメソッド
-    async getSentLogs(startTime?: number, endTime?: number): Promise<{ articleId: string; timestamp: number; }[]> {
-        logInfo(`Getting sent logs for user ${this.state.id.toString()}`, { userId: this.state.id.toString(), startTime, endTime });
-        const logs: { articleId: string; timestamp: number; }[] = [];
-        // Durable Object のストレージから sent: プレフィックスで始まるキーをリストアップ
-        // キーフォーマット: sent:<timestamp>:<articleId>
-        const listResult = await this.state.storage.list({ prefix: 'sent:' });
-
-        for (const [key, value] of listResult.entries()) {
-            // キーから articleId と timestamp を抽出
-            const parts = key.split(':');
-            if (parts.length >= 3) {
-                 const timestamp = parseInt(parts[1], 10);
-                 const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
-
-                 if ((startTime === undefined || timestamp >= startTime) && (endTime === undefined || timestamp <= endTime)) {
-                     logs.push({ articleId, timestamp });
-                 }
-            } else {
-                 logWarning(`Invalid sent log key format: ${key}`);
-            }
-        }
-        logInfo(`Found ${logs.length} sent logs.`, { userId: this.state.id.toString(), count: logs.length });
-        return logs;
-    }
-
-    // 未処理のクリックログを取得し、ストレージから削除するメソッド
-    async getAndClearClickLogs(startTime?: number, endTime?: number): Promise<{ articleId: string; timestamp: number; }[]> {
-        logInfo(`Getting and clearing click logs for user ${this.state.id.toString()}`, { userId: this.state.id.toString(), startTime, endTime });
-        const logs: { articleId: string; timestamp: number; }[] = [];
-        const keysToDelete: string[] = [];
-
-        // Durable Object のストレージから click: プレフィックスで始まるキーをリストアップ
-        const listResult = await this.state.storage.list({ prefix: 'click:' });
-
-        for (const [key, value] of listResult.entries()) {
-            // キーから articleId と timestamp を抽出
-            const parts = key.split(':');
-            if (parts.length >= 3) {
-                 const timestamp = parseInt(parts[1], 10);
-                 const articleId = parts.slice(2).join(':'); // articleId にコロンが含まれる可能性を考慮
-
-                 if ((startTime === undefined || timestamp >= startTime) && (endTime === undefined || timestamp <= endTime)) {
-                     logs.push({ articleId, timestamp });
-                     keysToDelete.push(key); // 削除リストに追加
-                 }
-            } else {
-                 logWarning(`Invalid click log key format: ${key}`);
-            }
-        }
-
-        // 取得したログをストレージから削除
-        if (keysToDelete.length > 0) {
-            logInfo(`Deleting ${keysToDelete.length} processed click log keys.`);
-            await this.state.storage.delete(keysToDelete);
-        }
-
-        logInfo(`Found and cleared ${logs.length} click logs.`, { userId: this.state.id.toString(), count: logs.length });
-    return logs;
-}
-
-    // 指定した期間よりも古いログを削除するメソッド
-    async cleanupOldLogs(daysToKeep: number): Promise<void> {
-        logInfo(`Starting cleanup of logs older than ${daysToKeep} days for user ${this.state.id.toString()}`);
-        const cutoffTimestamp = Date.now() - daysToKeep * 24 * 60 * 60 * 1000; // 指定日数より前のタイムスタンプ
-
-        const prefixes = ['click:', 'sent:', 'education:'];
-        const keysToDelete: string[] = [];
-
-        for (const prefix of prefixes) {
-            const listResult = await this.state.storage.list({ prefix: prefix });
-            for (const [key, value] of listResult.entries()) {
-                const parts = key.split(':');
-                if (parts.length >= 3) {
-                    const timestamp = parseInt(parts[1], 10);
-                    if (timestamp < cutoffTimestamp) {
-                        keysToDelete.push(key);
-                    }
-                } else {
-                    logWarning(`Invalid log key format during cleanup: ${key}`);
-                }
-            }
-        }
-
-        if (keysToDelete.length > 0) {
-            logInfo(`Deleting ${keysToDelete.length} old log keys for user ${this.state.id.toString()}`);
-            await this.state.storage.delete(keysToDelete);
-            logInfo(`Finished deleting old log keys for user ${this.state.id.toString()}`);
-        } else {
-            logInfo(`No old log keys found for deletion for user ${this.state.id.toString()}`);
-        }
-    }
-
-
-// 記事リストに対して LinUCB の UCB 値を計算する
-private getUCBValues(articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {
-    if (!this.banditModel || this.banditModel.dimension === 0) {
+    // 記事リストに対して LinUCB の UCB 値を計算する
+    private getUCBValues(articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {
+        if (!this.banditModel || this.banditModel.dimension === 0) {
             logWarning("Bandit model not initialized or dimension is zero. Cannot calculate UCB values.");
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 })); // UCB値ゼロを返す
         }

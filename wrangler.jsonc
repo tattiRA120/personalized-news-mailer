@@ -19,13 +19,9 @@
 
 	"kv_namespaces": [
 		{
-			"binding": "mail-news-user-profiles",
-			"id": "36b95e68aa684faf98d02edc9ee44eb4" // TODO: Replace with your actual KV Namespace ID
-		},
-		{
 			"binding": "mail-news-gmail-tokens", // Binding name for Gmail refresh tokens
 			"id": "f393b495a80a4d23bd7f2e77450e0027" // TODO: Replace with your actual KV Namespace ID for Gmail tokens
-		},
+		}
 	],
 
 	"durable_objects": {
@@ -51,6 +47,11 @@
 			"binding": "DB",
 			"database_name": "mail-news-articles-db",
 			"database_id": "bd19a6ea-8a5a-4fc5-8996-d95e219e94cb"
+		},
+		{
+			"binding": "USER_DB",
+			"database_name": "mail-news-user-db",
+			"database_id": "6cee90bf-588c-43be-8c6e-a181761c09aa"
 		}
 	],
 

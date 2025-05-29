@@ -40,8 +40,7 @@ export async function selectPersonalizedArticles(
     userProfile: UserProfile,
     clickLogger: DurableObjectStub<any>, // Durable Object インスタンスを受け取る (型エラー回避のためanyを使用)
     count: number,
-    lambda: number = 0.5, // MMR パラメータ
-    allSentArticles: NewsArticle[] // ユーザーに送信された全記事のリストを追加 (現在は使用しないが引数として残す)
+    lambda: number = 0.5 // MMR パラメータ
 ): Promise<NewsArticle[]> {
     if (articles.length === 0 || count <= 0) {
         logInfo("No articles or count is zero, returning empty selection.", { articleCount: articles.length, count });
@@ -53,7 +52,7 @@ export async function selectPersonalizedArticles(
     // Durable Object から記事のUCB値を取得
     const articlesWithEmbeddings = articles
         .filter(article => article.embedding !== undefined) // embedding が存在する記事のみ
-        .map(article => ({ articleId: article.link, embedding: article.embedding! })); // articleId として link を使用
+        .map(article => ({ articleId: article.link, embedding: JSON.parse(article.embedding!) })); // articleId として link を使用し、embeddingをパース
 
     let ucbValues: { articleId: string, ucb: number }[] = [];
     if (articlesWithEmbeddings.length > 0) {
@@ -80,29 +79,8 @@ export async function selectPersonalizedArticles(
 
 
     // 記事にUCB値をマッピングし、最終的な関連度スコアを計算
-    // ユーザーの興味関心データ（選択された記事のembedding）を取得
-    // userProfile.interests には選択された記事の articleId (ここではリンク) が格納されている
-    const interestedArticleLinks = userProfile.interests || [];
-    const interestedArticles = articles.filter(article => interestedArticleLinks.includes(article.link));
-
-    // 興味関心のある記事のembeddingの平均ベクトルを計算
-    let averageInterestedEmbedding: number[] | null = null;
-    if (interestedArticles.length > 0) {
-        const dimension = interestedArticles[0].embedding?.length || 0;
-        if (dimension > 0) {
-            averageInterestedEmbedding = Array(dimension).fill(0);
-            for (const article of interestedArticles) {
-                if (article.embedding && article.embedding.length === dimension) {
-                    for (let i = 0; i < dimension; i++) {
-                        averageInterestedEmbedding[i] += article.embedding[i];
-                    }
-                }
-            }
-            for (let i = 0; i < dimension; i++) {
-                averageInterestedEmbedding[i] /= interestedArticles.length;
-            }
-        }
-    }
+    // ユーザーの興味関心データ（userProfile.embedding）を取得
+    const userInterestEmbedding = userProfile.embedding;
 
     const articlesWithFinalScore = articles.map(article => {
         const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.link); // articleId は link と仮定
@@ -110,12 +88,10 @@ export async function selectPersonalizedArticles(
 
         // ユーザーの興味関心との関連度を計算 (コサイン類似度を使用)
         let interestRelevance = 0;
-        if (averageInterestedEmbedding && article.embedding) {
-            interestRelevance = cosineSimilarity(averageInterestedEmbedding, article.embedding);
+        if (userInterestEmbedding && article.embedding) {
+            interestRelevance = cosineSimilarity(userInterestEmbedding, JSON.parse(article.embedding));
         }
 
-        // 最終的な関連度スコアを計算
-        // 興味関心との関連度と UCB 値を組み合わせます。
         // TODO: これらの重みは調整可能なハイパーパラメータとすることができます。
         const interestWeight = 1.0;
         const ucbWeight = 0.5;
@@ -125,7 +101,6 @@ export async function selectPersonalizedArticles(
             ...article,
             ucb: ucb, // UCB値も保持
             finalScore: finalScore, // 最終スコアを保持
-            interestRelevance: interestRelevance, // 興味関心との関連度も保持（デバッグ用など）
         };
     });
 
@@ -156,7 +131,7 @@ export async function selectPersonalizedArticles(
             if (currentArticle.embedding) {
                 for (const selectedArticle of selected) {
                     if (selectedArticle.embedding) {
-                        const similarity = cosineSimilarity(currentArticle.embedding, selectedArticle.embedding);
+                        const similarity = cosineSimilarity(JSON.parse(currentArticle.embedding), JSON.parse(selectedArticle.embedding));
                         maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarity);
                     }
                 }

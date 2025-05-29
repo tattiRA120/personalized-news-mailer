@@ -8,35 +8,30 @@ interface NewsArticleWithCategory {
     link: string;
 }
 
-// user-profiles KV を含むようにする
-interface EnvWithUserProfilesKV {
-    'mail-news-user-profiles': KVNamespace;
+interface EnvWithUserDB {
+    USER_DB: D1Database;
 }
-
 
 export interface UserProfile {
     userId: string;
-    email?: string; // Add email to profile for easier access
-    // keywords?: string[]; // 廃止
+    email: string;
     interests: string[]; // 教育プログラムで選択された記事ID (リンク)
-    clickedArticleIds: string[]; // クリックされた記事ID (リンク)
-    sentArticleIds?: string[]; // Track articles sent to the user
-    // Add other profile data as needed
-    // interestVector?: number[]; // To be generated/updated based on clicked articles
+    embedding?: number[]; // ユーザーの興味を表す埋め込みベクトル
 }
 
-// Assuming a KV Namespace binding named 'mail-news-user-profiles' from wrangler.jsonc
-// Add this binding to your wrangler.toml:
-// [[kv_namespaces]]
-// binding = "mail-news-user-profiles"
-// id = "<your_kv_namespace_id>"
-
-export async function getUserProfile(userId: string, env: EnvWithUserProfilesKV): Promise<UserProfile | null> {
+export async function getUserProfile(userId: string, env: EnvWithUserDB): Promise<UserProfile | null> {
     try {
-        const profile = await env['mail-news-user-profiles'].get(userId, { type: 'json' });
-        if (profile) {
+        const { results } = await env.USER_DB.prepare(
+            `SELECT user_id, email, embedding FROM users WHERE user_id = ?`
+        ).bind(userId).all<UserProfile>();
+
+        if (results && results.length > 0) {
+            const userProfile = results[0];
+            // embeddingが文字列として保存されている場合、JSON.parseで配列に戻す
+            if (typeof userProfile.embedding === 'string') {
+                userProfile.embedding = JSON.parse(userProfile.embedding);
+            }
             logInfo(`Retrieved user profile for ${userId}.`, { userId });
-            const userProfile = profile as UserProfile;
             return userProfile;
         } else {
             logInfo(`User profile not found for ${userId}.`, { userId });
@@ -48,29 +43,31 @@ export async function getUserProfile(userId: string, env: EnvWithUserProfilesKV)
     }
 }
 
-export async function updateUserProfile(profile: UserProfile, env: EnvWithUserProfilesKV): Promise<void> {
+export async function updateUserProfile(profile: UserProfile, env: EnvWithUserDB): Promise<void> {
     try {
-        await env['mail-news-user-profiles'].put(profile.userId, JSON.stringify(profile));
+        // embeddingを文字列として保存
+        const embeddingString = profile.embedding ? JSON.stringify(profile.embedding) : null;
+        await env.USER_DB.prepare(
+            `UPDATE users SET email = ?, embedding = ? WHERE user_id = ?`
+        ).bind(profile.email, embeddingString, profile.userId).run();
         logInfo(`Updated user profile for ${profile.userId}.`, { userId: profile.userId });
     } catch (error) {
         logError(`Error updating user profile for ${profile.userId}:`, error, { userId: profile.userId });
     }
 }
 
-export async function createUserProfile(userId: string, email: string, env: EnvWithUserProfilesKV): Promise<UserProfile> {
+export async function createUserProfile(userId: string, email: string, env: EnvWithUserDB): Promise<UserProfile> {
     const newUserProfile: UserProfile = {
         userId: userId,
         email: email,
         interests: [],
-        clickedArticleIds: [],
-        sentArticleIds: [],
+        embedding: undefined, // 初期は埋め込みなし
     };
 
     try {
-        // Save the user profile
-        await env['mail-news-user-profiles'].put(userId, JSON.stringify(newUserProfile));
-        // Save the email-to-userId mapping
-        await env['mail-news-user-profiles'].put(`email_to_userId:${email}`, userId);
+        await env.USER_DB.prepare(
+            `INSERT INTO users (user_id, email, embedding) VALUES (?, ?, ?)`
+        ).bind(newUserProfile.userId, newUserProfile.email, null).run();
         logInfo(`Created new user profile for ${userId} with email ${email}`, { userId, email });
         return newUserProfile;
     } catch (error) {
@@ -79,30 +76,33 @@ export async function createUserProfile(userId: string, email: string, env: EnvW
     }
 }
 
-// Get user ID by email address
-export async function getUserIdByEmail(email: string, env: { 'mail-news-user-profiles': KVNamespace }): Promise<string | null> {
+export async function getUserIdByEmail(email: string, env: EnvWithUserDB): Promise<string | null> {
     try {
-        const userId = await env['mail-news-user-profiles'].get(`email_to_userId:${email}`);
-        if (userId) {
+        const { results } = await env.USER_DB.prepare(
+            `SELECT user_id FROM users WHERE email = ?`
+        ).bind(email).all<{ user_id: string }>();
+
+        if (results && results.length > 0) {
+            const userId = results[0].user_id;
             logInfo(`Retrieved user ID for email ${email}: ${userId}`, { email, userId });
+            return userId;
         } else {
             logInfo(`User ID not found for email ${email}.`, { email });
+            return null;
         }
-        return userId;
     } catch (error) {
         logError(`Error getting user ID for email ${email}:`, error, { email });
         return null;
     }
 }
 
-// Get all user IDs
-export async function getAllUserIds(env: EnvWithUserProfilesKV): Promise<string[]> {
+export async function getAllUserIds(env: EnvWithUserDB): Promise<string[]> {
     try {
-        const listResult = await env['mail-news-user-profiles'].list();
-        const userIds = listResult.keys
-            .map(key => key.name)
-            .filter(keyName => !keyName.startsWith('email_to_userId:'));
+        const { results } = await env.USER_DB.prepare(
+            `SELECT user_id FROM users`
+        ).all<{ user_id: string }>();
 
+        const userIds = results ? results.map(row => row.user_id) : [];
         logInfo(`Retrieved ${userIds.length} user IDs.`, { userCount: userIds.length });
         return userIds;
     } catch (error) {
@@ -110,13 +110,3 @@ export async function getAllUserIds(env: EnvWithUserProfilesKV): Promise<string[
         return [];
     }
 }
-
-// TODO: Implement function to get/generate user interest vector based on profile data
-// export async function getUserInterestVector(userId: string, env: Env): Promise<number[] | null> {
-//     const profile = await getUserProfile(userId, { 'mail-news-user-profiles': env['mail-news-user-profiles'] });
-//     if (!profile) {
-//         return null;
-//     }
-//     // Logic to generate/retrieve interest vector from profile data (e.g., averaging clicked article vectors)
-//     return null;
-// }
