@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS articles (
-    id TEXT PRIMARY KEY,
+    article_id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
-    url TEXT NOT NULL,
+    url TEXT UNIQUE NOT NULL,
     published_at INTEGER NOT NULL,
     content TEXT,
     embedding TEXT
@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS click_logs (
     article_id TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (article_id) REFERENCES articles(id)
+    FOREIGN KEY (article_id) REFERENCES articles(article_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_click_logs_user_id ON click_logs (user_id);
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS sent_articles (
     timestamp INTEGER NOT NULL,
     embedding TEXT,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (article_id) REFERENCES articles(id)
+    FOREIGN KEY (article_id) REFERENCES articles(article_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_sent_articles_user_id ON sent_articles (user_id);
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS education_logs (
     timestamp INTEGER NOT NULL,
     action TEXT NOT NULL, -- e.g., 'viewed', 'liked', 'disliked'
     FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (article_id) REFERENCES articles(id)
+    FOREIGN KEY (article_id) REFERENCES articles(article_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_education_logs_user_id ON education_logs (user_id);

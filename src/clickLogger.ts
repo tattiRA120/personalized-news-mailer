@@ -4,7 +4,7 @@ import { logError, logInfo, logWarning } from './logger'; // Import logging help
 import { DurableObject } from 'cloudflare:workers'; // DurableObject をインポート
 
 interface NewsArticle {
-    id: string; // D1のarticlesテーブルのPRIMARY KEY
+    articleId: string; // D1のarticlesテーブルのPRIMARY KEY
     title: string;
     url: string;
     published_at: number;

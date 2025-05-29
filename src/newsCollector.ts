@@ -3,6 +3,7 @@ import { logError, logInfo } from './logger'; // Import logging helpers
 import { XMLParser } from 'fast-xml-parser'; // Import XMLParser
 
 export interface NewsArticle {
+    articleId: string; // Add articleId as UUID
     title: string;
     link: string;
     sourceName: string;
@@ -47,6 +48,7 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                 const summary = item.description?.__cdata || item.description || item['content:encoded']?.__cdata || item['content:encoded'] || '';
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
                 articles.push({
+                    articleId: crypto.randomUUID(), // Generate UUID
                     title: item.title.__cdata || item.title,
                     link: item.link,
                     sourceName: '', // Will be filled later
@@ -79,6 +81,7 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
 
             if (title && link) {
                 articles.push({
+                    articleId: crypto.randomUUID(), // Generate UUID
                     title: title,
                     link: link,
                     sourceName: '', // Will be filled later
@@ -99,6 +102,7 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
 
             if (title && link) {
                 articles.push({
+                    articleId: crypto.randomUUID(), // Generate UUID
                     title: title,
                     link: link,
                     sourceName: '', // Will be filled later

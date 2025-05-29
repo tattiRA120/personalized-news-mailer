@@ -75,6 +75,7 @@ export default {
             // For now, fetch all articles. In a real scenario, you might fetch recent ones or those not yet processed.
             const { results } = await env.DB.prepare("SELECT * FROM articles ORDER BY published_at DESC LIMIT 1000").all(); // Fetch recent 1000 articles
             const articlesFromD1: NewsArticle[] = (results as any[]).map(row => ({
+                articleId: row.article_id, // Add articleId
                 title: row.title,
                 link: row.url,
                 summary: row.content, // Assuming 'content' column stores summary/full text
@@ -165,7 +166,7 @@ export default {
 					// --- 5. Log Sent Articles to Durable Object ---
 					logInfo(`Logging sent articles to ClickLogger for user ${userId}...`, { userId });
 					const sentArticlesData = selectedArticles.map(article => ({
-						articleId: article.link, // articleId は link と仮定
+						articleId: article.articleId, // articleId を使用
 						timestamp: Date.now(), // 送信時のタイムスタンプ
                         embedding: JSON.parse(article.embedding as string), // embedding を含める
 					}));
@@ -199,7 +200,7 @@ export default {
 							const articleId = clickLog.article_id;
 
 							// D1から記事データ（embeddingを含む）を取得
-							const { results } = await env.DB.prepare("SELECT embedding FROM articles WHERE id = ?").bind(articleId).all();
+							const { results } = await env.DB.prepare("SELECT embedding FROM articles WHERE article_id = ?").bind(articleId).all();
 							const articleEmbedding = results && results.length > 0 ? JSON.parse((results[0] as any).embedding) : null;
 
 							if (articleEmbedding) {
@@ -506,7 +507,7 @@ export default {
 
 				// 記事オブジェクトを返す
 				const articlesForEducation = articles.map(article => ({
-					articleId: article.link, // 記事IDとしてリンクを使用
+					articleId: article.articleId, // 記事IDとして articleId を使用
 					title: article.title,
 					summary: article.summary,
 					// link: article.link, // 必要であれば追加
@@ -563,7 +564,7 @@ export default {
 				// 選択された記事ごとにD1からembeddingを取得
 				for (const selectedArticle of selectedArticles) {
 					const articleId = selectedArticle.articleId;
-					const { results } = await env.DB.prepare("SELECT embedding FROM articles WHERE id = ?").bind(articleId).all();
+					const { results } = await env.DB.prepare("SELECT embedding FROM articles WHERE article_id = ?").bind(articleId).all();
 					const embedding = results && results.length > 0 ? JSON.parse((results[0] as any).embedding) : null;
 
 					if (embedding) {
@@ -682,14 +683,14 @@ export default {
                 if (articlesToSave.length > 0) {
                     logInfo(`Saving ${articlesToSave.length} articles with embeddings to D1.`, { count: articlesToSave.length });
                     const stmt = env.DB.prepare(
-                        `INSERT OR REPLACE INTO articles (id, title, url, published_at, content, embedding)
+                        `INSERT OR REPLACE INTO articles (article_id, title, url, published_at, content, embedding)
                          VALUES (?, ?, ?, ?, ?, ?)`
                     );
 
                     const batch = articlesToSave.map(article => {
                         // Ensure embedding is stringified for TEXT column
                         const embeddingString = JSON.stringify(article.embedding);
-                        return stmt.bind(article.link, article.title, article.link, article.publishedAt, article.summary, embeddingString);
+                        return stmt.bind(article.articleId, article.title, article.link, article.publishedAt, article.summary, embeddingString);
                     });
 
                     try {
