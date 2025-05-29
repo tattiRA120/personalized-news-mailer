@@ -18,6 +18,7 @@ export interface Env {
 	'mail-news-gmail-tokens': KVNamespace;
     DB: D1Database; // D1 Database binding for articles
     WORKER_BASE_URL?: string; // Add WORKER_BASE_URL for callback URL construction
+    DEBUG_API_KEY?: string; // Add DEBUG_API_KEY for debug endpoint authentication
 }
 
 interface EmailRecipient {
@@ -630,6 +631,9 @@ export default {
 					return new Response('Missing batch ID', { status: 400 });
 				}
 
+                // output_file_id は batchResult.output_file_id から取得
+                const output_file_id = batchResult.output_file_id;
+
                 if (!output_file_id) {
                     logWarning(`OpenAI Batch API callback for ID ${batchId} failed: Missing output_file_id in request body. Batch status: ${batchResult.status}`, { batchId, batchStatus: batchResult.status });
                     // If output_file_id is missing, it means the batch job likely failed or was cancelled.
@@ -661,6 +665,7 @@ export default {
                             try {
                                 const originalArticleMetadata = JSON.parse(customIdString);
                                 const article: NewsArticle = {
+                                    articleId: crypto.randomUUID(), // 新しい記事IDを生成
                                     title: originalArticleMetadata.title,
                                     link: originalArticleMetadata.url,
                                     summary: originalArticleMetadata.summary,
@@ -745,7 +750,57 @@ export default {
 				logError('Error during deletion of all Durable Object data:', error, { requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
-		}
+		} else if (request.method === 'POST' && path === '/debug/force-embed-articles') {
+            logInfo('Debug: Force embed articles request received');
+            // Check for DEBUG_API_KEY for authentication
+            const debugApiKey = request.headers.get('X-Debug-Key');
+            if (debugApiKey !== env.DEBUG_API_KEY) {
+                logWarning('Debug: Unauthorized access attempt to /debug/force-embed-articles', { providedKey: debugApiKey });
+                return new Response('Unauthorized', { status: 401 });
+            }
+
+            try {
+                logInfo('Debug: Starting news collection for force embedding...');
+                const articles = await collectNews();
+                logInfo(`Debug: Collected ${articles.length} articles for force embedding.`, { articleCount: articles.length });
+
+                if (articles.length === 0) {
+                    logInfo('Debug: No articles collected for force embedding. Skipping further steps.');
+                    return new Response('No articles collected', { status: 200 });
+                }
+
+                logInfo('Debug: Starting OpenAI Batch API embedding job creation for force embedding...');
+
+                const batchInputContent = prepareBatchInputFileContent(articles);
+                const batchInputBlob = new Blob([batchInputContent], { type: 'application/jsonl' });
+                const filename = `articles_for_embedding_force_${Date.now()}.jsonl`;
+
+                const uploadedFile = await uploadOpenAIFile(filename, batchInputBlob, 'batch', env);
+
+                if (uploadedFile && uploadedFile.id) {
+                    const actualCallbackUrl = env.WORKER_BASE_URL ? `${env.WORKER_BASE_URL}/openai-batch-callback` : 'https://mail-news.tattira120.workers.dev/openai-batch-callback';
+
+                    const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, actualCallbackUrl, env);
+
+                    if (batchJob && batchJob.id) {
+                        logInfo(`Debug: OpenAI Batch API job created successfully for force embedding. Job ID: ${batchJob.id}`, { jobId: batchJob.id });
+                        return new Response(JSON.stringify({ message: 'Batch embedding job initiated successfully.', jobId: batchJob.id }), {
+                            status: 200,
+                            headers: { 'Content-Type': 'application/json' },
+                        });
+                    } else {
+                        logError('Debug: Failed to create OpenAI Batch API job for force embedding.', null);
+                        return new Response('Failed to create batch embedding job', { status: 500 });
+                    }
+                } else {
+                    logError('Debug: Failed to upload file to OpenAI for force batch embedding.', null);
+                    return new Response('Failed to upload file for batch embedding', { status: 500 });
+                }
+            } catch (error) {
+                logError('Debug: Error during force embedding process:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error during force embedding', { status: 500 });
+            }
+        }
 
 
 		// Handle other requests or return a default response
