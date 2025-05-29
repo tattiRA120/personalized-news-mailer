@@ -12,7 +12,14 @@
 	},
 	"triggers": {
 		"crons": [
-			"0 22 * * *"
+			"0 22 * * *",
+			"0 8 * * *"
+		],
+		"http_routes": [
+			{
+				"pattern": "/openai-batch-callback",
+				"method": "POST"
+			}
 		]
 	},
 
@@ -54,6 +61,14 @@
 			"new_sqlite_classes": [
 				"ClickLogger"
 			]
+		}
+	],
+
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "mail-news-articles-db",
+			"database_id": "bd19a6ea-8a5a-4fc5-8996-d95e219e94cb"
 		}
 	],
 

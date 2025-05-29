@@ -8,17 +8,7 @@ import { extractKeywordsFromText, normalizeText } from './keywordManager'; // �
 import { classifyArticle } from './categoryClassifier'; // カテゴリ分類関数をインポート (記事にカテゴリが付与されていることを前提とする)
 
 
-interface NewsArticle {
-    title: string;
-    link: string;
-    summary?: string; // summaryフィールドを追加
-    category?: string; // categoryフィールドを追加
-    // Add other fields as needed, including score and embedding
-    score?: number; // Assuming a relevance score is added in the scoring step
-    embedding?: number[]; // Assuming embedding vector is added in the embedding step
-    ucb?: number; // UCB値を保持するためのフィールドを追加
-    finalScore?: number; // 最終スコアを保持するためのフィールドを追加
-}
+import { NewsArticle } from './newsCollector'; // Import NewsArticle from newsCollector.ts
 
 // 興味なし記事に対する減点重み
 const DISLIKE_PENALTY_WEIGHT = 0.3;

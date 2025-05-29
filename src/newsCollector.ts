@@ -5,7 +5,9 @@ import { XMLParser } from 'fast-xml-parser'; // Import XMLParser
 interface NewsArticle {
     title: string;
     link: string;
-    sourceName: string; // Add sourceName
+    sourceName: string;
+    summary?: string; // Add summary field
+    publishedAt: number; // Add publishedAt as Unix timestamp
 }
 
 async function fetchRSSFeed(url: string): Promise<string | null> {
@@ -41,10 +43,14 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
         const items = Array.isArray(jsonObj.rss.channel.item) ? jsonObj.rss.channel.item : (jsonObj.rss.channel.item ? [jsonObj.rss.channel.item] : []);
         for (const item of items) {
             if (item.title && item.link) {
+                const summary = item.description?.__cdata || item.description || item['content:encoded']?.__cdata || item['content:encoded'] || '';
+                const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
                 articles.push({
                     title: item.title.__cdata || item.title,
                     link: item.link,
-                    sourceName: ''
+                    sourceName: '', // Will be filled later
+                    summary: summary.trim(),
+                    publishedAt: Date.parse(pubDate),
                 });
             }
         }
@@ -67,12 +73,16 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                     link = entry.link['@_href'];
                 }
             }
+            const summary = entry.summary?.__cdata || entry.summary || entry.content?.__cdata || entry.content || '';
+            const pubDate = entry.updated || entry.published || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
                 articles.push({
                     title: title,
                     link: link,
-                    sourceName: ''
+                    sourceName: '', // Will be filled later
+                    summary: summary.trim(),
+                    publishedAt: Date.parse(pubDate),
                 });
             }
         }
@@ -81,13 +91,18 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
     else if (jsonObj['rdf:RDF'] && jsonObj['rdf:RDF'].item) {
         const items = Array.isArray(jsonObj['rdf:RDF'].item) ? jsonObj['rdf:RDF'].item : (jsonObj['rdf:RDF'].item ? [jsonObj['rdf:RDF'].item] : []);
         for (const item of items) {
-            const title = item['dc:title'] || item.title;
+            const title = item['dc:title']?.__cdata || item['dc:title'] || item.title?.__cdata || item.title;
             const link = item['link'] || item['@_rdf:about']; // linkまたはrdf:aboutを使用
+            const summary = item.description?.__cdata || item.description || '';
+            const pubDate = item['dc:date'] || item.date || new Date().toUTCString(); // Fallback to current date
+
             if (title && link) {
                 articles.push({
-                    title: title.__cdata || title,
+                    title: title,
                     link: link,
-                    sourceName: ''
+                    sourceName: '', // Will be filled later
+                    summary: summary.trim(),
+                    publishedAt: Date.parse(pubDate),
                 });
             }
         }

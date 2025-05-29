@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { collectNews } from './newsCollector';
-import { getOpenAIEmbeddingsBatch } from './openaiClient'; // Import OpenAI embeddings client
+import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, prepareBatchInputFileContent } from './openaiClient'; // Import OpenAI Batch API client functions
 import { getUserProfile, updateUserProfile, UserProfile, getAllUserIds, createUserProfile, updateCategoryInterestScores } from './userProfile'; // Assuming these functions are in userProfile.ts
 import { selectTopArticles, selectPersonalizedArticles } from './articleSelector'; // Assuming these functions are in articleSelector.ts
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator'; // Assuming these functions are in emailGenerator.ts
@@ -24,7 +24,8 @@ export interface Env extends EnvWithAIAndKeywordsKV {
 	GOOGLE_CLIENT_SECRET?: string;
 	GOOGLE_REDIRECT_URI?: string;
 	'mail-news-gmail-tokens': KVNamespace;
-    ARTICLE_EMBEDDINGS: KVNamespace;
+    ARTICLE_EMBEDDINGS: KVNamespace; // KV for temporary article storage or old embeddings
+    DB: D1Database; // D1 Database binding
 }
 
 interface EmailRecipient {
@@ -237,74 +238,89 @@ export default {
 
 					logInfo(`Finished first selection. Selected ${firstSelectedArticles.length} articles for embedding.`, { userId, selectedCount: firstSelectedArticles.length });
 
+                    // Check if the current cron is for embedding generation (22:00 JST)
+                    // The scheduledTime is UTC, so 22:00 JST is 13:00 UTC
+                    const scheduledHourUTC = new Date(controller.scheduledTime).getUTCHours();
 
-					// --- 6. Embedding Generation & Caching ---
-					logInfo(`Generating embeddings and checking cache for user ${userId}...`, { userId });
+                    if (scheduledHourUTC === 13) { // This is the 22:00 JST cron for embedding generation
+                        logInfo('Current cron is for embedding generation. Initiating OpenAI Batch API job.');
 
-					const articlesWithEmbeddings: NewsArticle[] = []; // NewsArticle型を使用
-                    const articlesToEmbed: NewsArticle[] = []; // NewsArticle型を使用
-                    const articlesToEmbedTexts: string[] = [];
+                        const articlesToEmbedForBatch = classifiedArticles.map(article => ({
+                            id: article.link, // Use article link as custom_id
+                            text: `${article.title} ${article.summary || ''}` // Combine title and summary for embedding
+                        }));
 
-                    // キャッシュを確認し、キャッシュがない記事をembedding対象とする
-                    for (const article of firstSelectedArticles) {
-                        const cacheKey = getEmbeddingCacheKey(article.link);
-                        const cachedEmbedding = await env.ARTICLE_EMBEDDINGS.get(cacheKey, { type: 'json' });
-
-                        if (cachedEmbedding) {
-                            logInfo(`Embedding cache hit for article: "${article.title}"`, { articleTitle: article.title, articleLink: article.link });
-                            articlesWithEmbeddings.push({ ...article, embedding: cachedEmbedding as number[] });
-                        } else {
-                            logInfo(`Embedding cache miss for article: "${article.title}". Adding to embedding queue.`, { articleTitle: article.title, articleLink: article.link });
-                            articlesToEmbed.push(article);
-                            articlesToEmbedTexts.push(`${article.title} ${article.link}`);
+                        if (articlesToEmbedForBatch.length === 0) {
+                            logInfo('No articles to embed. Skipping batch job creation.');
+                            return;
                         }
+
+                        // Prepare input file content for Batch API
+                        const batchInputContent = prepareBatchInputFileContent(articlesToEmbedForBatch);
+                        const batchInputBlob = new Blob([batchInputContent], { type: 'application/jsonl' });
+                        const filename = `batch_input_${Date.now()}.jsonl`;
+
+                        // Upload input file to OpenAI
+                        const uploadedFile = await uploadOpenAIFile(filename, batchInputBlob, 'batch', env);
+
+                        if (!uploadedFile) {
+                            logError('Failed to upload batch input file to OpenAI. Cannot create batch job.', null);
+                            return;
+                        }
+
+                        // Create Batch API job
+                        // Construct the callback URL for the current worker
+                        // Assuming the worker is deployed at a known URL, e.g., https://your-worker-name.your-account.workers.dev
+                        // For local testing, this might need to be a ngrok URL or similar.
+                        // In production, you'd use the actual worker URL.
+                        // For now, we'll use a placeholder and assume it's handled by deployment environment.
+                        const workerUrl = `https://${env.WORKER_NAME}.${env.CLOUDFLARE_ACCOUNT_ID}.workers.dev`; // Example, adjust as needed
+                        const callbackUrl = `${workerUrl}/openai-batch-callback`;
+
+                        const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, callbackUrl, env);
+
+                        if (batchJob) {
+                            logInfo(`OpenAI Batch Embedding Job created successfully. Job ID: ${batchJob.id}. Input File ID: ${uploadedFile.id}`, { jobId: batchJob.id, inputFileId: uploadedFile.id });
+                            // Store job ID and input file ID in KV or D1 for later reference if needed
+                            // For simplicity, we'll just log it for now.
+                        } else {
+                            logError('Failed to create OpenAI Batch Embedding Job.', null);
+                        }
+
+                        logInfo('Embedding generation cron finished. Waiting for Batch API callback.');
+                        return; // Exit here, email sending will be handled by the morning cron
                     }
 
-                    // キャッシュがない記事に対してバッチでembeddingを生成
-                    if (articlesToEmbed.length > 0) {
-                        logInfo(`Generating embeddings for ${articlesToEmbed.length} articles...`, { count: articlesToEmbed.length });
-                        const embeddings = await getOpenAIEmbeddingsBatch(articlesToEmbedTexts, env);
+                    // If it's the morning cron (08:00 JST, which is 23:00 UTC the previous day)
+                    // This part will be executed by the 08:00 JST cron for email sending
+                    logInfo('Current cron is for email sending. Fetching articles from D1.');
 
-                        if (embeddings && embeddings.length === articlesToEmbed.length) {
-                            for (let i = 0; i < articlesToEmbed.length; i++) {
-                                const article = articlesToEmbed[i];
-                                const embedding = embeddings[i];
-                                if (embedding) {
-                                    articlesWithEmbeddings.push({ ...article, embedding });
-                                    // Embedding 結果を KV にキャッシュ
-                                    const cacheKey = getEmbeddingCacheKey(article.link);
-                                    // TODO: KVの容量制限を考慮し、有効期限を設定するなど
-                                    // 有効期限を30日（秒単位）に設定
-                                    const expirationTtl = 30 * 24 * 60 * 60; // 30 days in seconds
-                                    await env.ARTICLE_EMBEDDINGS.put(cacheKey, JSON.stringify(embedding), { expirationTtl });
-                                    logInfo(`Cached embedding for article: "${article.title}" with TTL ${expirationTtl}s`, { articleTitle: article.title, articleLink: article.link, expirationTtl });
-                                } else {
-                                     logWarning(`Embedding generation failed for article: "${article.title}". Skipping.`, { articleTitle: article.title, articleLink: article.link });
-                                }
-                            }
-                             logInfo(`Finished generating and caching embeddings for ${articlesToEmbed.length} articles.`, { count: articlesToEmbed.length });
-                        } else {
-                            logError(`Embedding generation failed for batch. Expected ${articlesToEmbed.length} embeddings, got ${embeddings?.length}.`, null, { expected: articlesToEmbed.length, received: embeddings?.length });
-                        }
-                    } else {
-                         logInfo('No articles needed embedding generation (all were cached).');
+                    // --- Fetch articles from D1 ---
+                    // For now, fetch all articles. In a real scenario, you might fetch recent ones or those not yet processed.
+                    const { results } = await env.DB.prepare("SELECT * FROM articles ORDER BY published_at DESC LIMIT 1000").all(); // Fetch recent 1000 articles
+                    const articlesFromD1: NewsArticle[] = (results as any[]).map(row => ({
+                        title: row.title,
+                        link: row.url,
+                        summary: row.content, // Assuming 'content' column stores summary/full text
+                        category: row.category, // Assuming category is stored
+                        embedding: JSON.parse(row.embedding), // Parse JSON string back to array
+                        published_at: row.published_at,
+                    }));
+                    logInfo(`Fetched ${articlesFromD1.length} articles from D1.`, { count: articlesFromD1.length });
+
+                    if (articlesFromD1.length === 0) {
+                        logInfo('No articles found in D1 for email sending. Skipping further steps.');
+                        return;
                     }
 
+                    // Filter out articles without embeddings (should not happen if batch job completed successfully)
+                    const articlesWithEmbeddings = articlesFromD1.filter(article => article.embedding && article.embedding.length > 0);
+                    logInfo(`Found ${articlesWithEmbeddings.length} articles with embeddings from D1.`, { count: articlesWithEmbeddings.length });
 
-					logInfo(`Finished embedding generation and caching for user ${userId}. Processed ${articlesWithEmbeddings.length} articles with embeddings.`, { userId, processedCount: articlesWithEmbeddings.length });
-
-					// --- 7. Cache all articles with embeddings in KV ---
-					logInfo('Caching all articles with embeddings in KV...');
-					const articleCachePromises = articlesWithEmbeddings.map(article => {
-						const cacheKey = `article:${article.link}`;
-						// TODO: KVの容量制限を考慮し、有効期限を設定するなど
-						// 有効期限を30日（秒単位）に設定
-						const expirationTtl = 30 * 24 * 60 * 60; // 30 days in seconds
-						return env.ARTICLE_EMBEDDINGS.put(cacheKey, JSON.stringify(article), { expirationTtl });
-					});
-					await Promise.all(articleCachePromises);
-					logInfo(`Finished caching ${articlesWithEmbeddings.length} articles in KV.`, { cachedCount: articlesWithEmbeddings.length });
-
+                    if (articlesWithEmbeddings.length === 0) {
+                        logWarning('No articles with embeddings found in D1. Cannot proceed with personalization.', null);
+                        return;
+                    }
 
 					// --- 8. Second Selection (MMR + Bandit) ---
 					logInfo(`Starting second selection (MMR + Bandit) for user ${userId}...`, { userId });
@@ -491,7 +507,25 @@ export default {
                 logError('Error during KV embedding cleanup:', cleanupError);
             }
 
-					logInfo('Scheduled task finished.');
+            // --- 13. Clean up old articles in D1 ---
+            // This should run only for the email sending cron (08:00 JST, 23:00 UTC previous day)
+            if (scheduledHourUTC === 23) { // Check if it's the email sending cron
+                logInfo('Starting D1 article cleanup...');
+                try {
+                    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000); // 30 days in milliseconds
+                    const { success, error, results } = await env.DB.prepare("DELETE FROM articles WHERE published_at < ?").bind(thirtyDaysAgo).run();
+
+                    if (success) {
+                        logInfo(`Successfully deleted old articles from D1. Rows affected: ${results?.changes || 0}`, { deletedCount: results?.changes || 0 });
+                    } else {
+                        logError(`Failed to delete old articles from D1: ${error}`, null, { error });
+                    }
+                } catch (cleanupError) {
+                    logError('Error during D1 article cleanup:', cleanupError);
+                }
+            }
+
+			logInfo('Scheduled task finished.');
 
 		} catch (mainError) {
 			logError('Error during scheduled task execution:', mainError);
@@ -914,7 +948,98 @@ export default {
 				logError('Error during deletion of all Durable Object data:', error, { requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
-		}
+		} else if (request.method === 'POST' && path === '/openai-batch-callback') {
+            logInfo('OpenAI Batch API callback received.');
+            try {
+                const batchJobData = await request.json();
+                const jobId = batchJobData.id;
+                const status = batchJobData.status;
+                const output_file_id = batchJobData.output_file_id;
+
+                logInfo(`Batch Job ${jobId} status: ${status}. Output File ID: ${output_file_id}`, { jobId, status, output_file_id });
+
+                if (status === 'completed' && output_file_id) {
+                    logInfo(`Batch Job ${jobId} completed. Fetching results...`, { jobId });
+                    const resultsContent = await getOpenAIBatchJobResults(output_file_id, env);
+
+                    if (resultsContent) {
+                        const lines = resultsContent.split('\n').filter(line => line.trim() !== '');
+                        const articlesToSave: { id: string, title: string, url: string, published_at: number, content: string, embedding: number[] }[] = [];
+
+                        for (const line of lines) {
+                            try {
+                                const result = JSON.parse(line);
+                                if (result.response && result.response.body && result.response.body.data && result.response.body.data.length > 0) {
+                                    const customId = result.custom_id; // This is the article link
+                                    const embedding = result.response.body.data[0].embedding;
+
+                                    // Retrieve original article data from KV using customId (article link)
+                                    // This assumes the original article data (title, url, content, published_at)
+                                    // was stored in KV with a key like `article:${link}` during collection.
+                                    const originalArticle = await env.ARTICLE_EMBEDDINGS.get(`article:${customId}`, { type: 'json' });
+
+                                    if (originalArticle) {
+                                        articlesToSave.push({
+                                            id: customId,
+                                            title: originalArticle.title,
+                                            url: originalArticle.link,
+                                            published_at: originalArticle.published_at,
+                                            content: originalArticle.summary, // Assuming summary is stored as content
+                                            embedding: embedding,
+                                        });
+                                    } else {
+                                        logWarning(`Original article data not found in KV for custom_id: ${customId}. Skipping D1 save for this article.`, { customId });
+                                    }
+                                } else {
+                                    logWarning(`Batch result line missing expected data structure: ${line}`, { line });
+                                }
+                            } catch (parseError) {
+                                logError(`Error parsing batch result line: ${line}`, parseError);
+                            }
+                        }
+
+                        if (articlesToSave.length > 0) {
+                            logInfo(`Saving ${articlesToSave.length} articles with embeddings to D1...`, { count: articlesToSave.length });
+                            const insertPromises = articlesToSave.map(article =>
+                                env.DB.prepare(
+                                    "INSERT OR REPLACE INTO articles (id, title, url, published_at, content, embedding) VALUES (?, ?, ?, ?, ?, ?)"
+                                ).bind(
+                                    article.id,
+                                    article.title,
+                                    article.url,
+                                    article.published_at,
+                                    article.content,
+                                    JSON.stringify(article.embedding) // Store embedding as JSON string
+                                ).run()
+                            );
+                            await Promise.all(insertPromises);
+                            logInfo(`Successfully saved ${articlesToSave.length} articles to D1.`, { savedCount: articlesToSave.length });
+
+                            // Clean up temporary article data from KV after saving to D1
+                            const deleteKvPromises = articlesToSave.map(article =>
+                                env.ARTICLE_EMBEDDINGS.delete(`article:${article.id}`)
+                            );
+                            await Promise.all(deleteKvPromises);
+                            logInfo(`Cleaned up temporary KV data for ${articlesToSave.length} articles.`, { cleanedCount: articlesToSave.length });
+
+                        } else {
+                            logWarning('No valid embedding results to save to D1.', null);
+                        }
+                    } else {
+                        logError(`Failed to fetch results for batch job ${jobId}.`, null, { jobId });
+                    }
+                } else if (status === 'failed' || status === 'cancelled') {
+                    logError(`OpenAI Batch Job ${jobId} failed or was cancelled.`, null, { jobId, status, errors: batchJobData.errors });
+                } else {
+                    logInfo(`OpenAI Batch Job ${jobId} is still in progress or has an unexpected status: ${status}`, { jobId, status });
+                }
+
+                return new Response('Callback processed', { status: 200 });
+            } catch (error) {
+                logError('Error processing OpenAI Batch API callback:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
 
 
 		// Handle Durable Object requests
