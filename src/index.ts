@@ -259,7 +259,6 @@ export default {
 
             // --- 8. Clean up old articles in D1 ---
             // This should run only for the email sending cron (08:00 JST, 23:00 UTC previous day)
-            const scheduledHourUTC = new Date(controller.scheduledTime).getUTCHours();
             if (scheduledHourUTC === 23) { // Check if it's the email sending cron
                 logInfo('Starting D1 article cleanup...');
                 try {
