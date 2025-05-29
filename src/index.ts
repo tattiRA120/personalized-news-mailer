@@ -504,17 +504,15 @@ export default {
 				const articles = await collectNews();
 				logInfo(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
-				// 分類結果を含む記事オブジェクトを返す
-				const articlesWithClassification = articles.map(article => ({
+				// 記事オブジェクトを返す
+				const articlesForEducation = articles.map(article => ({
 					articleId: article.link, // 記事IDとしてリンクを使用
 					title: article.title,
 					summary: article.summary,
-					category: article.category, // 分類されたカテゴリーを追加
-					llmResponse: article.llmResponse, // LLMの応答を追加 (LLMが使用された場合)
 					// link: article.link, // 必要であれば追加
 				}));
 
-				return new Response(JSON.stringify(articlesWithClassification), {
+				return new Response(JSON.stringify(articlesForEducation), {
 					headers: { 'Content-Type': 'application/json' },
 					status: 200,
 				});
