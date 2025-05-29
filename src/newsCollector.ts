@@ -53,7 +53,7 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                     title: (item.title as any).__cdata || item.title,
                     link: item.link,
                     sourceName: '', // Will be filled later
-                    summary: summary.trim(),
+                    summary: String(summary).trim(),
                     publishedAt: Date.parse(pubDate),
                 });
             }
@@ -87,7 +87,7 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                     title: title,
                     link: link,
                     sourceName: '', // Will be filled later
-                    summary: summary.trim(),
+                    summary: String(summary).trim(),
                     publishedAt: Date.parse(pubDate),
                 });
             }
@@ -109,7 +109,7 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                     title: title,
                     link: link,
                     sourceName: '', // Will be filled later
-                    summary: summary.trim(),
+                    summary: String(summary).trim(),
                     publishedAt: Date.parse(pubDate),
                 });
             }
