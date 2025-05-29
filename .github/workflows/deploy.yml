@@ -51,4 +51,8 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: 'latest' # 最新のWranglerを使用
+          vars: |
+            WORKER_BASE_URL
+        env:
+          WORKER_BASE_URL: ${{ vars.WORKER_BASE_URL }}
           # プロジェクト名はwrangler.jsoncで指定済みのため不要

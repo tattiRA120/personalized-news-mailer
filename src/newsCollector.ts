@@ -2,12 +2,13 @@ import { NEWS_RSS_URLS } from './config';
 import { logError, logInfo } from './logger'; // Import logging helpers
 import { XMLParser } from 'fast-xml-parser'; // Import XMLParser
 
-interface NewsArticle {
+export interface NewsArticle {
     title: string;
     link: string;
     sourceName: string;
     summary?: string; // Add summary field
     publishedAt: number; // Add publishedAt as Unix timestamp
+    embedding?: number[]; // Add embedding field for temporary storage
 }
 
 async function fetchRSSFeed(url: string): Promise<string | null> {

@@ -1,6 +1,7 @@
 // src/openaiClient.ts
 import { logError, logWarning, logInfo } from './logger'; // Import logging helpers
 import { OPENAI_EMBEDDING_MODEL } from './config'; // Import the model name from config
+import { NewsArticle } from './newsCollector'; // Import NewsArticle interface
 
 interface OpenAIEmbeddingResponse {
     data: Array<{
@@ -213,17 +214,22 @@ export async function getOpenAIBatchJobResults(output_file_id: string, env: { OP
  * Prepares the input file content for OpenAI Batch API.
  * Each line in the file should be a JSON object with "custom_id" and "method" and "url" and "body".
  * For embeddings, the body contains the model and input text.
- * @param texts An array of texts to embed.
+ * @param articles An array of NewsArticle objects to embed.
  * @returns A string formatted for OpenAI batch input file.
  */
-export function prepareBatchInputFileContent(texts: { id: string, text: string }[]): string {
-    return texts.map(item => JSON.stringify({
-        custom_id: item.id,
+export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
+    return articles.map(article => JSON.stringify({
+        custom_id: JSON.stringify({
+            url: article.link,
+            title: article.title,
+            summary: article.summary,
+            publishedAt: article.publishedAt
+        }),
         method: "POST",
         url: "/v1/embeddings",
         body: {
             model: OPENAI_EMBEDDING_MODEL,
-            input: item.text,
+            input: `${article.title}. ${article.summary || ''}`, // タイトルとサマリーを結合
             encoding_format: "float"
         }
     })).join('\n');

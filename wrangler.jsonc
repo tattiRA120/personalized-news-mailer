@@ -14,12 +14,6 @@
 		"crons": [
 			"0 22 * * *",
 			"0 8 * * *"
-		],
-		"http_routes": [
-			{
-				"pattern": "/openai-batch-callback",
-				"method": "POST"
-			}
 		]
 	},
 

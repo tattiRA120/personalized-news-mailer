@@ -1,10 +1,11 @@
 // @ts-nocheck
-import { collectNews } from './newsCollector';
+import { collectNews, NewsArticle } from './newsCollector'; // NewsArticle をインポート
 import { getUserProfile, updateUserProfile, UserProfile, getAllUserIds, createUserProfile } from './userProfile'; // Assuming these functions are in userProfile.ts
 import { selectTopArticles, selectPersonalizedArticles } from './articleSelector'; // Assuming these functions are in articleSelector.ts
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator'; // Assuming these functions are in emailGenerator.ts
 import { ClickLogger } from './clickLogger'; // Assuming this is your Durable Object class
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
+import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResults, prepareBatchInputFileContent } from './openaiClient'; // getOpenAIBatchJobResults, prepareBatchInputFileContent を追加
 
 // EnvWithAI を定義
 interface EnvWithAI {
@@ -22,6 +23,7 @@ export interface Env extends EnvWithAI {
 	GOOGLE_REDIRECT_URI?: string;
 	'mail-news-gmail-tokens': KVNamespace;
     DB: D1Database; // D1 Database binding
+    WORKER_BASE_URL?: string; // Add WORKER_BASE_URL for callback URL construction
 }
 
 interface EmailRecipient {
@@ -29,16 +31,6 @@ interface EmailRecipient {
     name?: string;
 }
 
-interface NewsArticle {
-    title: string;
-    link: string;
-    // Add other fields as needed, including score and embedding
-    score?: number; // Assuming a relevance score is added in the scoring step
-    embedding?: number[]; // Assuming embedding vector is added in the embedding step
-    ucb?: number; // UCB値を保持するためのフィールドを追加
-    finalScore?: number; // 最終スコアを保持するためのフィールドを追加
-    llmResponse?: string; // Add field to store LLM response for debugging
-}
 
 
 export default {
@@ -56,6 +48,35 @@ export default {
 				return;
 			}
 
+            // 日本時間22時（UTC 13時）のCronトリガーでのみ埋め込みバッチジョブを作成
+            const scheduledHourUTC = new Date(controller.scheduledTime).getUTCHours();
+            if (scheduledHourUTC === 13) { // 22:00 JST is 13:00 UTC
+                logInfo('Starting OpenAI Batch API embedding job creation...');
+
+                // 記事のテキストを準備
+                const batchInputContent = prepareBatchInputFileContent(articles); // articles を直接渡す
+                const batchInputBlob = new Blob([batchInputContent], { type: 'application/jsonl' });
+                const filename = `articles_for_embedding_${Date.now()}.jsonl`;
+
+                // ファイルをOpenAIにアップロード
+                const uploadedFile = await uploadOpenAIFile(filename, batchInputBlob, 'batch', env);
+
+                if (uploadedFile && uploadedFile.id) {
+                    // コールバックURLを構築
+                    const actualCallbackUrl = env.WORKER_BASE_URL ? `${env.WORKER_BASE_URL}/openai-batch-callback` : 'https://mail-news.tattira120.workers.dev/openai-batch-callback'; // 仮のURL
+
+                    const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, actualCallbackUrl, env);
+
+                    if (batchJob && batchJob.id) {
+                        logInfo(`OpenAI Batch API job created successfully. Job ID: ${batchJob.id}`, { jobId: batchJob.id });
+                    } else {
+                        logError('Failed to create OpenAI Batch API job.', null);
+                    }
+                } else {
+                    logError('Failed to upload file to OpenAI for batch embedding.', null);
+                }
+            }
+
             // --- Fetch articles from D1 ---
             logInfo('Fetching articles from D1.');
 
@@ -66,7 +87,7 @@ export default {
                 link: row.url,
                 summary: row.content, // Assuming 'content' column stores summary/full text
                 embedding: JSON.parse(row.embedding), // Parse JSON string back to array
-                published_at: row.published_at,
+                publishedAt: row.published_at, // Use publishedAt
             }));
             logInfo(`Fetched ${articlesFromD1.length} articles from D1.`, { count: articlesFromD1.length });
 
@@ -588,6 +609,97 @@ export default {
 
 			} catch (error) {
 				logError('Error submitting interests:', error, { requestUrl: request.url });
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		} else if (request.method === 'POST' && path === '/openai-batch-callback') {
+			logInfo('OpenAI Batch API callback received');
+			try {
+				const batchResult = await request.json();
+				const batchId = batchResult.id; // Assuming the batch ID is in the payload
+
+				if (!batchId) {
+					logWarning('OpenAI Batch API callback failed: Missing batch ID in request body.');
+					return new Response('Missing batch ID', { status: 400 });
+				}
+
+                if (!output_file_id) {
+                    logWarning(`OpenAI Batch API callback for ID ${batchId} failed: Missing output_file_id in request body. Batch status: ${batchResult.status}`, { batchId, batchStatus: batchResult.status });
+                    // If output_file_id is missing, it means the batch job likely failed or was cancelled.
+                    // Log the error and return.
+                    return new Response('Missing output file ID', { status: 400 });
+                }
+
+				logInfo(`Received callback for OpenAI Batch ID: ${batchId} with output file ID: ${output_file_id}`, { batchId, output_file_id, batchResult });
+
+                // Download batch results
+                const batchOutputContent = await getOpenAIBatchJobResults(output_file_id, env);
+
+                if (!batchOutputContent) {
+                    logError(`Failed to download batch results for Batch ID: ${batchId}, Output File ID: ${output_file_id}`, null, { batchId, output_file_id });
+                    return new Response('Failed to download batch results', { status: 500 });
+                }
+
+                // Process batch results and save to D1
+                const lines = batchOutputContent.split('\n').filter(line => line.trim() !== '');
+                const articlesToSave: NewsArticle[] = [];
+
+                for (const line of lines) {
+                    try {
+                        const result = JSON.parse(line);
+                        if (result.response && result.response.body && result.response.body.data && result.response.body.data.length > 0) {
+                            const embedding = result.response.body.data[0].embedding;
+                            const customIdString = result.custom_id; // This is the JSON string we put in custom_id
+
+                            try {
+                                const originalArticleMetadata = JSON.parse(customIdString);
+                                const article: NewsArticle = {
+                                    title: originalArticleMetadata.title,
+                                    link: originalArticleMetadata.url,
+                                    summary: originalArticleMetadata.summary,
+                                    publishedAt: originalArticleMetadata.publishedAt,
+                                    sourceName: '', // Source name is not part of batch output, can be left empty or derived if needed
+                                    embedding: embedding, // Add embedding to NewsArticle interface temporarily for saving
+                                };
+                                articlesToSave.push(article);
+                            } catch (parseError) {
+                                logError(`Error parsing custom_id JSON for line: ${line}`, parseError, { line });
+                            }
+                        } else {
+                            logWarning(`Batch result line missing expected embedding data: ${line}`, null, { line });
+                        }
+                    } catch (jsonParseError) {
+                        logError(`Error parsing batch result line as JSON: ${line}`, jsonParseError, { line });
+                    }
+                }
+
+                if (articlesToSave.length > 0) {
+                    logInfo(`Saving ${articlesToSave.length} articles with embeddings to D1.`, { count: articlesToSave.length });
+                    const stmt = env.DB.prepare(
+                        `INSERT OR REPLACE INTO articles (id, title, url, published_at, content, embedding)
+                         VALUES (?, ?, ?, ?, ?, ?)`
+                    );
+
+                    const batch = articlesToSave.map(article => {
+                        // Ensure embedding is stringified for TEXT column
+                        const embeddingString = JSON.stringify(article.embedding);
+                        return stmt.bind(article.link, article.title, article.link, article.publishedAt, article.summary, embeddingString);
+                    });
+
+                    try {
+                        await env.DB.batch(batch);
+                        logInfo(`Successfully saved ${articlesToSave.length} articles to D1.`, { savedCount: articlesToSave.length });
+                    } catch (dbError) {
+                        logError('Error saving articles to D1:', dbError, { articlesCount: articlesToSave.length });
+                        return new Response('Error saving articles to D1', { status: 500 });
+                    }
+                } else {
+                    logWarning('No valid articles with embeddings found in batch results to save to D1.', null, { batchId, output_file_id });
+                }
+
+				return new Response('Callback processed', { status: 200 });
+
+			} catch (error) {
+				logError('Error processing OpenAI Batch API callback:', error, { requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		} else if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
