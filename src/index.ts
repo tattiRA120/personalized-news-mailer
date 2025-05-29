@@ -7,14 +7,8 @@ import { ClickLogger } from './clickLogger'; // Assuming this is your Durable Ob
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
 import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResults, prepareBatchInputFileContent } from './openaiClient'; // getOpenAIBatchJobResults, prepareBatchInputFileContent を追加
 
-// EnvWithAI を定義
-interface EnvWithAI {
-    AI: Ai;
-}
-
 // Define the Env interface with bindings from wrangler.jsonc
-// EnvWithAI を継承し、その他のバインディングを追加
-export interface Env extends EnvWithAI {
+export interface Env {
 	'mail-news-user-profiles': KVNamespace;
 	CLICK_LOGGER: DurableObjectNamespace;
 	OPENAI_API_KEY?: string;
