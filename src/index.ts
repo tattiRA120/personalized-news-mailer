@@ -901,9 +901,17 @@ export default {
                 const uploadedFile = await uploadOpenAIFile(filename, batchInputBlob, 'batch', env);
 
                 if (uploadedFile && uploadedFile.id) {
-                    const actualCallbackUrl = env.WORKER_BASE_URL ? `${env.WORKER_BASE_URL}/openai-batch-callback` : 'https://mail-news.tattira120.workers.dev/openai-batch-callback';
+                    // セキュリティ強化: コールバックURLに固有トークンを付与し、KVに保存
+                    const callbackToken = crypto.randomUUID();
+                    const callbackUrl = env.WORKER_BASE_URL
+                        ? `${env.WORKER_BASE_URL}/openai-batch-callback?token=${callbackToken}`
+                        : `https://mail-news.tattira120.workers.dev/openai-batch-callback?token=${callbackToken}`;
 
-                    const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, actualCallbackUrl, env);
+                    // トークンをKVに保存 (有効期限48時間)
+                    await env.BATCH_CALLBACK_TOKENS.put(callbackToken, 'true', { expirationTtl: 48 * 60 * 60 });
+                    logInfo(`Debug: Stored callback token in KV with 48h TTL.`, { callbackToken });
+
+                    const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, callbackUrl, env);
 
                     if (batchJob && batchJob.id) {
                         logInfo(`Debug: OpenAI Batch API job created successfully for force embedding. Job ID: ${batchJob.id}`, { jobId: batchJob.id });
