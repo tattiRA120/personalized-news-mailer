@@ -46,27 +46,44 @@ export default {
             if (scheduledHourUTC === 13) { // 22:00 JST is 13:00 UTC
                 logInfo('Starting OpenAI Batch API embedding job creation...');
 
-                // 記事のテキストを準備
-                const batchInputContent = prepareBatchInputFileContent(articles); // articles を直接渡す
-                const batchInputBlob = new Blob([batchInputContent], { type: 'application/jsonl' });
-                const filename = `articles_for_embedding_${Date.now()}.jsonl`;
+                // D1から既存の記事のURLとembeddingの有無を取得
+                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT url, embedding FROM articles").all();
+                const existingArticleUrlsWithEmbedding = new Set(
+                    (existingArticlesInDb as any[])
+                        .filter(row => row.embedding !== null && row.embedding !== undefined)
+                        .map(row => row.url)
+                );
+                logInfo(`Found ${existingArticleUrlsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleUrlsWithEmbedding.size });
 
-                // ファイルをOpenAIにアップロード
-                const uploadedFile = await uploadOpenAIFile(filename, batchInputBlob, 'batch', env);
+                // 収集した記事から、既にembeddingが存在する記事を除外
+                const articlesToEmbed = articles.filter(article => !existingArticleUrlsWithEmbedding.has(article.link));
+                logInfo(`Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
-                if (uploadedFile && uploadedFile.id) {
-                    // コールバックURLを構築
-                    const actualCallbackUrl = env.WORKER_BASE_URL ? `${env.WORKER_BASE_URL}/openai-batch-callback` : 'https://mail-news.tattira120.workers.dev/openai-batch-callback'; // 仮のURL
-
-                    const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, actualCallbackUrl, env);
-
-                    if (batchJob && batchJob.id) {
-                        logInfo(`OpenAI Batch API job created successfully. Job ID: ${batchJob.id}`, { jobId: batchJob.id });
-                    } else {
-                        logError('Failed to create OpenAI Batch API job.', null);
-                    }
+                if (articlesToEmbed.length === 0) {
+                    logInfo('No new articles found that need embedding. Skipping batch job creation.');
                 } else {
-                    logError('Failed to upload file to OpenAI for batch embedding.', null);
+                    // 記事のテキストを準備
+                    const batchInputContent = prepareBatchInputFileContent(articlesToEmbed); // フィルタリングされた articlesToEmbed を渡す
+                    const batchInputBlob = new Blob([batchInputContent], { type: 'application/jsonl' });
+                    const filename = `articles_for_embedding_${Date.now()}.jsonl`;
+
+                    // ファイルをOpenAIにアップロード
+                    const uploadedFile = await uploadOpenAIFile(filename, batchInputBlob, 'batch', env);
+
+                    if (uploadedFile && uploadedFile.id) {
+                        // コールバックURLを構築
+                        const actualCallbackUrl = env.WORKER_BASE_URL ? `${env.WORKER_BASE_URL}/openai-batch-callback` : 'https://mail-news.tattira120.workers.dev/openai-batch-callback'; // 仮のURL
+
+                        const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, actualCallbackUrl, env);
+
+                        if (batchJob && batchJob.id) {
+                            logInfo(`OpenAI Batch API job created successfully. Job ID: ${batchJob.id}`, { jobId: batchJob.id });
+                        } else {
+                            logError('Failed to create OpenAI Batch API job.', null);
+                        }
+                    } else {
+                        logError('Failed to upload file to OpenAI for batch embedding.', null);
+                    }
                 }
             }
 
@@ -80,7 +97,7 @@ export default {
                 title: row.title,
                 link: row.url,
                 summary: row.content, // Assuming 'content' column stores summary/full text
-                embedding: JSON.parse(row.embedding), // Parse JSON string back to array
+                embedding: row.embedding ? JSON.parse(row.embedding) : undefined, // Parse JSON string back to array, handle null/undefined
                 publishedAt: row.published_at, // Use publishedAt
             }));
             logInfo(`Fetched ${articlesFromD1.length} articles from D1.`, { count: articlesFromD1.length });
@@ -771,7 +788,25 @@ export default {
 
                 logInfo('Debug: Starting OpenAI Batch API embedding job creation for force embedding...');
 
-                const batchInputContent = prepareBatchInputFileContent(articles);
+                // D1から既存の記事のURLとembeddingの有無を取得
+                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT url, embedding FROM articles").all();
+                const existingArticleUrlsWithEmbedding = new Set(
+                    (existingArticlesInDb as any[])
+                        .filter(row => row.embedding !== null && row.embedding !== undefined)
+                        .map(row => row.url)
+                );
+                logInfo(`Debug: Found ${existingArticleUrlsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleUrlsWithEmbedding.size });
+
+                // 収集した記事から、既にembeddingが存在する記事を除外
+                const articlesToEmbed = articles.filter(article => !existingArticleUrlsWithEmbedding.has(article.link));
+                logInfo(`Debug: Filtered down to ${articlesToEmbed.length} articles that need embedding for force embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
+
+                if (articlesToEmbed.length === 0) {
+                    logInfo('Debug: No new articles found that need embedding for force embedding. Skipping batch job creation.');
+                    return new Response('No articles collected that need embedding', { status: 200 });
+                }
+
+                const batchInputContent = prepareBatchInputFileContent(articlesToEmbed); // フィルタリングされた articlesToEmbed を渡す
                 const batchInputBlob = new Blob([batchInputContent], { type: 'application/jsonl' });
                 const filename = `articles_for_embedding_force_${Date.now()}.jsonl`;
 
