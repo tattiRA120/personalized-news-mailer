@@ -184,10 +184,7 @@ export async function getOpenAIBatchJobResults(output_file_id: string, env: { OP
 export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
     return articles.map(article => JSON.stringify({
         custom_id: JSON.stringify({
-            url: article.link,
-            title: article.title,
-            summary: article.summary,
-            publishedAt: article.publishedAt
+            articleId: article.articleId // custom_id に articleId のみを含める
         }),
         method: "POST",
         url: "/v1/embeddings",

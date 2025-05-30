@@ -52,22 +52,35 @@ export default {
 				return;
 			}
 
+            // --- 1. D1への仮保存 ---
+            logInfo('Saving collected articles to D1 temporarily...');
+            const articlesToSaveToD1 = articles.map(article => ({
+                articleId: article.articleId,
+                title: article.title,
+                url: article.link,
+                publishedAt: article.publishedAt,
+                content: article.summary || '', // summary が undefined の場合は空文字列を割り当てる
+                embedding: undefined, // embedding は後で更新するため、ここでは undefined
+            }));
+            await saveArticlesToD1(articlesToSaveToD1, env);
+            logInfo(`Saved ${articlesToSaveToD1.length} articles to D1 temporarily.`, { count: articlesToSaveToD1.length });
+
             // 日本時間22時（UTC 13時）のCronトリガーでのみ埋め込みバッチジョブを作成
             const scheduledHourUTC = new Date(controller.scheduledTime).getUTCHours();
             if (scheduledHourUTC === 13) { // 22:00 JST is 13:00 UTC
                 logInfo('Starting OpenAI Batch API embedding job creation...');
 
                 // D1から既存の記事のURLとembeddingの有無を取得
-                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT url, embedding FROM articles").all();
-                const existingArticleUrlsWithEmbedding = new Set(
+                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT article_id, embedding FROM articles").all();
+                const existingArticleIdsWithEmbedding = new Set(
                     (existingArticlesInDb as any[])
                         .filter(row => row.embedding !== null && row.embedding !== undefined)
-                        .map(row => row.url)
+                        .map(row => row.article_id)
                 );
-                logInfo(`Found ${existingArticleUrlsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleUrlsWithEmbedding.size });
+                logInfo(`Found ${existingArticleIdsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleIdsWithEmbedding.size });
 
                 // 収集した記事から、既にembeddingが存在する記事を除外
-                const articlesToEmbed = articles.filter(article => !existingArticleUrlsWithEmbedding.has(article.link));
+                const articlesToEmbed = articles.filter(article => !existingArticleIdsWithEmbedding.has(article.articleId));
                 logInfo(`Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
                 if (articlesToEmbed.length === 0) {
@@ -749,13 +762,9 @@ export default {
                 const lines = batchOutputContent.split('\n').filter(line => line.trim() !== '');
                 logInfo(`Batch results contain ${lines.length} lines`, { lineCount: lines.length });
 
-                const BATCH_INSERT_SIZE = 500;
-                let batchRecords: {
+                const BATCH_UPDATE_SIZE = 500;
+                let updateRecords: {
                     articleId: string;
-                    title: string;
-                    url: string;
-                    publishedAt: number;
-                    content: string;
                     embedding: number[];
                 }[] = [];
 
@@ -768,12 +777,8 @@ export default {
 
                             try {
                                 const originalArticleMetadata = JSON.parse(customIdString);
-                                batchRecords.push({
+                                updateRecords.push({
                                     articleId: originalArticleMetadata.articleId, // custom_id から articleId を取得
-                                    title: originalArticleMetadata.title,
-                                    url: originalArticleMetadata.url,
-                                    publishedAt: originalArticleMetadata.publishedAt,
-                                    content: originalArticleMetadata.summary, // summary を content として保存
                                     embedding: embedding,
                                 });
                             } catch (parseError) {
@@ -787,25 +792,25 @@ export default {
                         continue; // エラーが発生した行はスキップ
                     }
 
-                    // 500 レコードたまったら一括インサート
-                    if (batchRecords.length >= BATCH_INSERT_SIZE) {
+                    // 500 レコードたまったら一括更新
+                    if (updateRecords.length >= BATCH_UPDATE_SIZE) {
                         try {
-                            await saveArticlesToD1(batchRecords, env);
-                            logInfo(`Inserted ${batchRecords.length} records into D1`, { count: batchRecords.length });
+                            await updateArticleEmbeddingsInD1(updateRecords, env);
+                            logInfo(`Updated embeddings for ${updateRecords.length} records in D1`, { count: updateRecords.length });
                         } catch (e) {
-                            logError("Error inserting batch into D1", e, { batchSize: batchRecords.length });
+                            logError("Error updating embeddings batch in D1", e, { batchSize: updateRecords.length });
                         }
-                        batchRecords = [];
+                        updateRecords = [];
                     }
                 }
 
-                // 残りをインサート
-                if (batchRecords.length > 0) {
+                // 残りを更新
+                if (updateRecords.length > 0) {
                     try {
-                        await saveArticlesToD1(batchRecords, env);
-                        logInfo(`Inserted final ${batchRecords.length} records into D1`, { count: batchRecords.length });
+                        await updateArticleEmbeddingsInD1(updateRecords, env);
+                        logInfo(`Updated embeddings for final ${updateRecords.length} records in D1`, { count: updateRecords.length });
                     } catch (e) {
-                        logError("Error inserting final batch into D1", e, { batchSize: batchRecords.length });
+                        logError("Error updating final embeddings batch in D1", e, { batchSize: updateRecords.length });
                     }
                 }
 
@@ -937,7 +942,7 @@ async function saveArticlesToD1(
     url: string;
     publishedAt: number;
     content: string;
-    embedding: number[];
+    embedding: number[] | undefined; // embedding を undefined も許容するように変更
   }[],
   env: Env
 ): Promise<void> {
@@ -953,6 +958,27 @@ async function saveArticlesToD1(
       rec.publishedAt,
       rec.content,
       JSON.stringify(rec.embedding)
+    );
+  });
+  await env.DB.batch(batch);
+}
+
+async function updateArticleEmbeddingsInD1(
+  records: {
+    articleId: string;
+    embedding: number[];
+  }[],
+  env: Env
+): Promise<void> {
+  const stmt = env.DB.prepare(`
+    UPDATE articles
+    SET embedding = ?
+    WHERE article_id = ?
+  `);
+  const batch = records.map((rec) => {
+    return stmt.bind(
+      JSON.stringify(rec.embedding),
+      rec.articleId
     );
   });
   await env.DB.batch(batch);
