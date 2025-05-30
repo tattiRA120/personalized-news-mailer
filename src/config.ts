@@ -24,3 +24,5 @@ export const OPENAI_EMBEDDING_MODEL = "text-embedding-3-large";
 
 // You can add other configuration variables here, like API keys (though better to use Workers Secrets for sensitive info)
 // export const NEWS_API_KEY: string | undefined = undefined;
+
+export const CHUNK_SIZE = 1000; // OpenAI Batch API のチャンクサイズ

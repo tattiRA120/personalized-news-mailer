@@ -34,11 +34,10 @@ function cosineSimilarity(vec1: number[], vec2: number[]): number {
 
 // MMR (Maximal Marginal Relevance) と Contextual Bandit を組み合わせて記事を選択する関数
 // ClickLogger Durable Object を引数として受け取り、バンディットモデルからUCB値を取得する
-// @ts-ignore: Durable Object Stub の型に関するエラーを抑制
 export async function selectPersonalizedArticles(
     articles: NewsArticle[],
     userProfile: UserProfile,
-    clickLogger: DurableObjectStub<any>, // Durable Object インスタンスを受け取る (型エラー回避のためanyを使用)
+    clickLogger: DurableObjectStub<ClickLogger>, // Durable Object インスタンスを受け取る
     count: number,
     lambda: number = 0.5 // MMR パラメータ
 ): Promise<NewsArticle[]> {

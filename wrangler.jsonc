@@ -21,6 +21,10 @@
 		{
 			"binding": "mail-news-gmail-tokens", // Binding name for Gmail refresh tokens
 			"id": "f393b495a80a4d23bd7f2e77450e0027" // TODO: Replace with your actual KV Namespace ID for Gmail tokens
+		},
+		{
+			"binding": "BATCH_CALLBACK_TOKENS", // Binding name for OpenAI Batch API callback tokens
+			"id": "df13a4b73ec24a4d99f0b3edb908f8d8" // TODO: Replace with your actual KV Namespace ID for batch callback tokens
 		}
 	],
 
@@ -28,7 +32,11 @@
 		"bindings": [
 			{
 				"name": "CLICK_LOGGER", // Binding name for Durable Object
-				"class_name": "ClickLogger" // TODO: Replace with your actual Durable Object class name
+				"class_name": "ClickLogger"
+			},
+			{
+				"name": "BATCH_QUEUE_DO", // Binding name for Batch Queue Durable Object
+				"class_name": "BatchQueueDO"
 			}
 		]
 	},
@@ -37,7 +45,8 @@
 		{
 			"tag": "v1",
 			"new_sqlite_classes": [
-				"ClickLogger"
+				"ClickLogger",
+				"BatchQueueDO"
 			]
 		}
 	],

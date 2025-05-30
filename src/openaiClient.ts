@@ -139,42 +139,6 @@ export async function createOpenAIBatchEmbeddingJob(inputFileId: string, callbac
 }
 
 /**
- * Retrieves the status of an OpenAI batch job.
- * @param jobId The ID of the batch job.
- * @param env Environment variables containing OPENAI_API_KEY.
- * @returns The batch job object or null on failure.
- */
-export async function getOpenAIBatchJobStatus(jobId: string, env: { OPENAI_API_KEY?: string }): Promise<OpenAIBatchJob | null> {
-    if (!env.OPENAI_API_KEY) {
-        logError('OPENAI_API_KEY is not set for batch job status retrieval.', null);
-        return null;
-    }
-
-    const url = `https://api.openai.com/v1/batches/${jobId}`;
-
-    try {
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
-            },
-        });
-
-        const data: OpenAIBatchJob = await response.json(); // Explicitly cast to OpenAIBatchJob
-        if (response.ok) {
-            logInfo(`Successfully retrieved OpenAI batch job status for Job ID: ${jobId}. Status: ${data.status}`, { jobId, status: data.status });
-            return data;
-        } else {
-            logError(`Error getting OpenAI batch job status: ${response.statusText}`, null, { status: response.status, statusText: response.statusText, responseBody: data });
-            return null;
-        }
-    } catch (error) {
-        logError('Exception when getting OpenAI batch job status:', error);
-        return null;
-    }
-}
-
-/**
  * Retrieves the results of a completed OpenAI batch job.
  * @param output_file_id The ID of the output file from the completed batch job.
  * @param env Environment variables containing OPENAI_API_KEY.
@@ -235,83 +199,19 @@ export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
     })).join('\n');
 }
 
-// Keep the existing getOpenAIEmbeddingsBatch for direct calls if needed,
-// or remove it if all embedding generation will go through the Batch API.
-// For now, we'll keep it but rename it to avoid confusion with the new batch job flow.
-// It's also good to have a synchronous option for smaller requests or testing.
-export async function getOpenAIEmbeddingsDirect(texts: string[], env: { OPENAI_API_KEY?: string }): Promise<number[][] | null> {
-    if (!env.OPENAI_API_KEY) {
-        logError('OPENAI_API_KEY is not set.', null);
-        return null;
-    }
-
-    if (texts.length === 0) {
-        return [];
-    }
-
-    const url = `https://api.openai.com/v1/embeddings`;
-    const model = OPENAI_EMBEDDING_MODEL; // Use the specified OpenAI model from config
-
-    const maxRetries = 3; // Reduced maximum number of retries for OpenAI
-    let retries = 0;
-    let delay = 500; // Reduced initial delay in milliseconds (0.5 seconds)
-
-    const requestBody = {
-        input: texts,
-        model: model,
-        encoding_format: "float"
-    };
-
-    while (retries < maxRetries) {
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(requestBody),
-            });
-
-            const responseBodyText = await response.text();
-            try {
-                const data: OpenAIEmbeddingResponse = JSON.parse(responseBodyText);
-
-                if (response.ok) {
-                    const embeddings = new Array(texts.length);
-                    for (const item of data.data) {
-                        embeddings[item.index] = item.embedding;
-                    }
-
-                    if (embeddings.length !== texts.length) {
-                        logWarning(`OpenAI returned ${embeddings.length} embeddings for a batch of ${texts.length} texts.`, { returnedCount: embeddings.length, expectedCount: texts.length, responseBody: responseBodyText });
-                    } else {
-                         logInfo(`Successfully received ${embeddings.length} embeddings from OpenAI.`, { returnedCount: embeddings.length, expectedCount: texts.length });
-                    }
-                    return embeddings;
-
-                } else if (response.status === 429) {
-                    logWarning(`Rate limit exceeded for OpenAI direct embedding. Retrying in ${delay}ms. Retry count: ${retries + 1}`, { status: response.status, statusText: response.statusText, retryCount: retries + 1, delay, responseBody: responseBodyText });
-                    await new Promise(resolve => setTimeout(resolve, delay));
-                    delay *= 2;
-                    retries++;
-                } else {
-                    logError(`Error getting OpenAI direct embeddings: ${response.statusText}`, null, { status: response.status, statusText: response.statusText, responseBody: responseBodyText });
-                    return null;
-                }
-            } catch (jsonError) {
-                logError('Error parsing OpenAI direct embeddings response JSON:', jsonError, { status: response.status, statusText: response.statusText, responseBody: responseBodyText });
-                return null;
-            }
-        } catch (error) {
-            logError('Exception when getting OpenAI direct embeddings:', error);
-            return null;
-        }
-    }
-
-    logError(`Max retries reached for getting OpenAI direct embeddings after ${maxRetries} attempts. Batch size: ${texts.length}`, null, { maxRetries, batchSize: texts.length });
-    return null;
-}
-
 // Export the upload function as well, as it will be used by index.ts
 export { uploadOpenAIFile };
+
+/**
+ * Chunks an array into smaller arrays.
+ * @param array The array to chunk.
+ * @param size The maximum size of each chunk.
+ * @returns An array of chunks.
+ */
+export function chunkArray<T>(array: T[], size: number): T[][] {
+    const chunkedArr: T[][] = [];
+    for (let i = 0; i < array.length; i += size) {
+        chunkedArr.push(array.slice(i, i + size));
+    }
+    return chunkedArr;
+}
