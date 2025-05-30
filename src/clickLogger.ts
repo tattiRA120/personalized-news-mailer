@@ -219,7 +219,7 @@ export class ClickLogger extends DurableObject {
 
     // 新しいバンディットモデルを初期化するヘルパーメソッド
     private async initializeNewBanditModel(): Promise<void> {
-        // OpenAI Embedding API (text-embedding-3-large) の次元数 1536 で設定する。
+        // OpenAI Embedding API (text-embedding-3-small) の次元数 1536 で設定する。
         const dimension = 1536; // OpenAI Embedding API の次元数
         this.banditModel = {
             A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),

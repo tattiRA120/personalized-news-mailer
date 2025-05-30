@@ -20,7 +20,7 @@ export const NEWS_RSS_URLS: string[] = [
     'https://northwood.blog.fc2.com/?xml', // 北森瓦版(PCパーツ:リーク系)
 ];
 
-export const OPENAI_EMBEDDING_MODEL = "text-embedding-3-large";
+export const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 
 // You can add other configuration variables here, like API keys (though better to use Workers Secrets for sensitive info)
 // export const NEWS_API_KEY: string | undefined = undefined;
