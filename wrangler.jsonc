@@ -42,6 +42,13 @@
 	},
 
 
+	"migrations": [
+		{
+			"tag": "v5",
+			"new_classes": []
+		}
+	],
+
 	"d1_databases": [
 		{
 			"binding": "DB",
