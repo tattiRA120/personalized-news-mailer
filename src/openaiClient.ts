@@ -106,8 +106,8 @@ export async function createOpenAIBatchEmbeddingJob(inputFileId: string, callbac
         input_file_id: inputFileId,
         endpoint: "/v1/embeddings",
         completion_window: "24h", // Or "48h"
-        callback_url: callbackUrl, // コールバックURLをトップレベルに移動
         metadata: {
+            callback_url: callbackUrl, // コールバックURLをメタデータに移動
             // 必要に応じて他のメタデータをここに保持
         },
         // For embeddings, the model is specified in the input file for each request
