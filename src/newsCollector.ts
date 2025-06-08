@@ -2,6 +2,14 @@ import { NEWS_RSS_URLS } from './config';
 import { logError, logInfo } from './logger'; // Import logging helpers
 import { XMLParser } from 'fast-xml-parser'; // Import XMLParser
 
+// HTMLタグを除去するヘルパー関数
+function stripHtmlTags(html: string): string {
+    let strippedText = html.replace(/<[^>]*>/g, ''); // すべてのHTMLタグを除去
+    strippedText = strippedText.replace(/&nbsp;/g, ' '); // &nbsp;をスペースに置換
+    strippedText = strippedText.replace(/\s+/g, ' ').trim(); // 複数の空白を1つにまとめる
+    return strippedText;
+}
+
 export interface NewsArticle {
     articleId: string; // Add articleId as UUID
     title: string;
@@ -50,10 +58,10 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
                 articles.push({
                     articleId: crypto.randomUUID(), // Generate UUID
-                    title: (item.title as any).__cdata || item.title,
+                    title: stripHtmlTags((item.title as any).__cdata || item.title), // HTMLタグを除去
                     link: item.link,
                     sourceName: '', // Will be filled later
-                    summary: String(summary).trim(),
+                    summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
                     publishedAt: Date.parse(pubDate),
                 });
             }
@@ -84,10 +92,10 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
             if (title && link) {
                 articles.push({
                     articleId: crypto.randomUUID(), // Generate UUID
-                    title: title,
+                    title: stripHtmlTags(title), // HTMLタグを除去
                     link: link,
                     sourceName: '', // Will be filled later
-                    summary: String(summary).trim(),
+                    summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
                     publishedAt: Date.parse(pubDate),
                 });
             }
@@ -106,10 +114,10 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
             if (title && link) {
                 articles.push({
                     articleId: crypto.randomUUID(), // Generate UUID
-                    title: title,
+                    title: stripHtmlTags(title), // HTMLタグを除去
                     link: link,
                     sourceName: '', // Will be filled later
-                    summary: String(summary).trim(),
+                    summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
                     publishedAt: Date.parse(pubDate),
                 });
             }
