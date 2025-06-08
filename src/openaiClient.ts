@@ -196,6 +196,42 @@ export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
     })).join('\n');
 }
 
+/**
+ * Retrieves the status of an OpenAI batch job.
+ * @param batchId The ID of the batch job.
+ * @param env Environment variables containing OPENAI_API_KEY.
+ * @returns The batch job object or null on failure.
+ */
+export async function getOpenAIBatchJobStatus(batchId: string, env: { OPENAI_API_KEY?: string }): Promise<OpenAIBatchJob | null> {
+    if (!env.OPENAI_API_KEY) {
+        logError('OPENAI_API_KEY is not set for batch job status retrieval.', null);
+        return null;
+    }
+
+    const url = `https://api.openai.com/v1/batches/${batchId}`;
+
+    try {
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${env.OPENAI_API_KEY}`,
+            },
+        });
+
+        const data: OpenAIBatchJob = await response.json();
+        if (response.ok) {
+            logInfo(`Successfully retrieved OpenAI batch job status for Job ID: ${batchId}. Status: ${data.status}`, { jobId: batchId, status: data.status });
+            return data;
+        } else {
+            logError(`Error getting OpenAI batch job status for Job ID: ${batchId}: ${response.statusText}`, null, { jobId: batchId, status: response.status, statusText: response.statusText, responseBody: data });
+            return null;
+        }
+    } catch (error) {
+        logError(`Exception when getting OpenAI batch job status for Job ID: ${batchId}:`, error);
+        return null;
+    }
+}
+
 // Export the upload function as well, as it will be used by index.ts
 export { uploadOpenAIFile };
 

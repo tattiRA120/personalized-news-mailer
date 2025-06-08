@@ -92,16 +92,6 @@ export default {
 
                     // 最初のチャンクをCron内で処理
                     const firstChunk = chunks[0];
-                    // セキュリティ強化: コールバックURLに固有トークンを付与し、KVに保存
-                    const callbackToken = crypto.randomUUID();
-                    const callbackUrl = env.WORKER_BASE_URL
-                        ? `${env.WORKER_BASE_URL}/openai-batch-callback?token=${callbackToken}`
-                        : `https://mail-news.tattira120.workers.dev/openai-batch-callback?token=${callbackToken}`;
-
-                    // トークンをKVに保存 (有効期限48時間)
-                    await env.BATCH_CALLBACK_TOKENS.put(callbackToken, 'true', { expirationTtl: 48 * 60 * 60 });
-                    logInfo(`Stored callback token in KV with 48h TTL.`, { callbackToken });
-
                     // JSONL 生成
                     const jsonl = prepareBatchInputFileContent(firstChunk);
                     const blob = new Blob([jsonl], { type: "application/jsonl" });
@@ -122,11 +112,9 @@ export default {
                     logInfo("Chunk 0 uploaded. File ID:", { fileId: uploaded.id });
 
                     // バッチジョブ作成
+                    let job;
                     try {
-                        const job = await createOpenAIBatchEmbeddingJob(
-                            uploaded.id,
-                            env
-                        );
+                        job = await createOpenAIBatchEmbeddingJob(uploaded.id, env);
                         if (!job || !job.id) {
                             logError("Chunk 0 batch job creation returned no job ID.", null, { chunkIndex: 0 });
                             return;
@@ -137,6 +125,18 @@ export default {
                         return;
                     }
 
+                    // Durable Object にバッチジョブIDを渡し、ポーリングを委譲
+                    logInfo(`Delegating batch job ${job.id} to BatchQueueDO for polling.`);
+                    const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
+                    const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
+
+                    await batchQueueDOStub.fetch(new Request('http://dummy-host/start-polling', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
+                    }));
+                    logInfo(`Successfully delegated batch job ${job.id} to BatchQueueDO.`);
+
                     // 残りチャンクを分散処理用に委譲 (Durable Object を利用)
                     const remainingChunks = chunks.slice(1).map((articles: NewsArticle[], index: number) => ({
                         chunkIndex: index + 1, // チャンクインデックスを調整
@@ -145,9 +145,6 @@ export default {
 
                     if (remainingChunks.length > 0) {
                         logInfo(`Delegating ${remainingChunks.length} remaining chunks to BatchQueueDO.`);
-                        const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
-                        const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
-
                         await batchQueueDOStub.fetch(new Request('http://dummy-host/queue-chunks', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -708,117 +705,6 @@ export default {
 				logError('Error submitting interests:', error, { requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
-		} else if (request.method === 'POST' && path.startsWith('/openai-batch-callback')) {
-			logInfo('OpenAI Batch API callback received');
-			try {
-                // セキュリティ強化: トークン検証
-                const token = url.searchParams.get('token');
-                if (!token) {
-                    logWarning('OpenAI Batch API callback failed: Missing token in query parameters.');
-                    return new Response('Missing token', { status: 401 });
-                }
-
-                const tokenExists = await env.BATCH_CALLBACK_TOKENS.get(token);
-                if (!tokenExists) {
-                    logWarning('OpenAI Batch API callback failed: Invalid or expired token.', { token });
-                    return new Response('Invalid or expired token', { status: 401 });
-                }
-
-                // トークンは一度しか使用できないように削除
-                await env.BATCH_CALLBACK_TOKENS.delete(token);
-                logInfo(`Successfully validated and deleted callback token.`, { token });
-
-				const batchResult: any = await request.json(); // Cast to any
-				const batchId = batchResult.id; // Assuming the batch ID is in the payload
-
-				if (!batchId) {
-					logWarning('OpenAI Batch API callback failed: Missing batch ID in request body.');
-					return new Response('Missing batch ID', { status: 400 });
-				}
-
-                // output_file_id は batchResult.output_file_id から取得
-                const output_file_id = batchResult.output_file_id;
-
-                if (!output_file_id) {
-                    logWarning(`OpenAI Batch API callback for ID ${batchId} failed: Missing output_file_id in request body. Batch status: ${batchResult.status}`, { batchId, batchStatus: batchResult.status });
-                    // If output_file_id is missing, it means the batch job likely failed or was cancelled.
-                    // Log the error and return.
-                    return new Response('Missing output file ID', { status: 400 });
-                }
-
-				logInfo(`Received callback for OpenAI Batch ID: ${batchId} with output file ID: ${output_file_id}`, { batchId, output_file_id, batchResult });
-
-                // Download batch results
-                const batchOutputContent = await getOpenAIBatchJobResults(output_file_id, env);
-
-                if (!batchOutputContent) {
-                    logError(`Failed to download batch results for Batch ID: ${batchId}, Output File ID: ${output_file_id}`, null, { batchId, output_file_id });
-                    return new Response('Failed to download batch results', { status: 500 });
-                }
-
-
-                // Process batch results and save to D1
-                const lines = batchOutputContent.split('\n').filter(line => line.trim() !== '');
-                logInfo(`Batch results contain ${lines.length} lines`, { lineCount: lines.length });
-
-                const BATCH_UPDATE_SIZE = 500;
-                let updateRecords: {
-                    articleId: string;
-                    embedding: number[];
-                }[] = [];
-
-                for (const [idx, line] of lines.entries()) {
-                    try {
-                        const parsed = JSON.parse(line);
-                        if (parsed.response && parsed.response.body && parsed.response.body.data && parsed.response.body.data.length > 0) {
-                            const embedding = parsed.response.body.data[0].embedding;
-                            const customIdString = parsed.custom_id;
-
-                            try {
-                                const originalArticleMetadata = JSON.parse(customIdString);
-                                updateRecords.push({
-                                    articleId: originalArticleMetadata.articleId, // custom_id から articleId を取得
-                                    embedding: embedding,
-                                });
-                            } catch (parseError) {
-                                logError(`Error parsing custom_id JSON for line: ${line}`, parseError, { line });
-                            }
-                        } else {
-                            logWarning(`Batch result line missing expected embedding data: ${line}`, { line });
-                        }
-                    } catch (jsonParseError) {
-                        logError(`Error parsing batch result line as JSON: ${line}`, jsonParseError, { line });
-                        continue; // エラーが発生した行はスキップ
-                    }
-
-                    // 500 レコードたまったら一括更新
-                    if (updateRecords.length >= BATCH_UPDATE_SIZE) {
-                        try {
-                            await updateArticleEmbeddingsInD1(updateRecords, env);
-                            logInfo(`Updated embeddings for ${updateRecords.length} records in D1`, { count: updateRecords.length });
-                        } catch (e) {
-                            logError("Error updating embeddings batch in D1", e, { batchSize: updateRecords.length });
-                        }
-                        updateRecords = [];
-                    }
-                }
-
-                // 残りを更新
-                if (updateRecords.length > 0) {
-                    try {
-                        await updateArticleEmbeddingsInD1(updateRecords, env);
-                        logInfo(`Updated embeddings for final ${updateRecords.length} records in D1`, { count: updateRecords.length });
-                    } catch (e) {
-                        logError("Error updating final embeddings batch in D1", e, { batchSize: updateRecords.length });
-                    }
-                }
-
-				return new Response('Callback processed', { status: 200 });
-
-			} catch (error) {
-				logError('Error processing OpenAI Batch API callback:', error, { requestUrl: request.url });
-				return new Response('Internal Server Error', { status: 500 });
-			}
 		} else if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
 			logInfo('Request received to delete all Durable Object data');
 			try {
@@ -900,16 +786,6 @@ export default {
                 const uploadedFile = await uploadOpenAIFile(filename, batchInputBlob, 'batch', env);
 
                 if (uploadedFile && uploadedFile.id) {
-                    // セキュリティ強化: コールバックURLに固有トークンを付与し、KVに保存
-                    const callbackToken = crypto.randomUUID();
-                    const callbackUrl = env.WORKER_BASE_URL
-                        ? `${env.WORKER_BASE_URL}/openai-batch-callback?token=${callbackToken}`
-                        : `https://mail-news.tattira120.workers.dev/openai-batch-callback?token=${callbackToken}`;
-
-                    // トークンをKVに保存 (有効期限48時間)
-                    await env.BATCH_CALLBACK_TOKENS.put(callbackToken, 'true', { expirationTtl: 48 * 60 * 60 });
-                    logInfo(`Debug: Stored callback token in KV with 48h TTL.`, { callbackToken });
-
                     const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, env);
 
                     if (batchJob && batchJob.id) {
