@@ -125,7 +125,6 @@ export default {
                     try {
                         const job = await createOpenAIBatchEmbeddingJob(
                             uploaded.id,
-                            callbackUrl,
                             env
                         );
                         if (!job || !job.id) {
@@ -911,7 +910,7 @@ export default {
                     await env.BATCH_CALLBACK_TOKENS.put(callbackToken, 'true', { expirationTtl: 48 * 60 * 60 });
                     logInfo(`Debug: Stored callback token in KV with 48h TTL.`, { callbackToken });
 
-                    const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, callbackUrl, env);
+                    const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, env);
 
                     if (batchJob && batchJob.id) {
                         logInfo(`Debug: OpenAI Batch API job created successfully for force embedding. Job ID: ${batchJob.id}`, { jobId: batchJob.id });

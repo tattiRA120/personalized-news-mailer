@@ -95,7 +95,7 @@ async function uploadOpenAIFile(filename: string, content: Blob, purpose: string
  * @param env Environment variables containing OPENAI_API_KEY.
  * @returns The created batch job object or null on failure.
  */
-export async function createOpenAIBatchEmbeddingJob(inputFileId: string, callbackUrl: string, env: { OPENAI_API_KEY?: string }): Promise<OpenAIBatchJob | null> {
+export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: { OPENAI_API_KEY?: string }): Promise<OpenAIBatchJob | null> {
     if (!env.OPENAI_API_KEY) {
         logError('OPENAI_API_KEY is not set for batch job creation.', null);
         return null;
@@ -107,7 +107,6 @@ export async function createOpenAIBatchEmbeddingJob(inputFileId: string, callbac
         endpoint: "/v1/embeddings",
         completion_window: "24h", // Or "48h"
         metadata: {
-            callback_url: callbackUrl, // コールバックURLをメタデータに移動
             // 必要に応じて他のメタデータをここに保持
         },
         // For embeddings, the model is specified in the input file for each request

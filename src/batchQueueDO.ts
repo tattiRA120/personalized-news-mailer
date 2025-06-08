@@ -113,7 +113,6 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
       logInfo(`Attempting to create batch job for chunk ${chunk.chunkIndex} with file ID: ${uploaded.id}`);
       const job = await createOpenAIBatchEmbeddingJob(
         uploaded.id,
-        callbackUrl,
         this.env
       );
       if (!job || !job.id) {
