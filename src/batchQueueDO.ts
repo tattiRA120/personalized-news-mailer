@@ -143,12 +143,31 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                 .map(line => JSON.parse(line));
 
             if (results && results.length > 0) {
-                const embeddingsToUpdate = results.map(r => ({
-                    articleId: JSON.parse(r.custom_id).articleId, // custom_id をパースして articleId を取得
-                    embedding: r.embedding
-                }));
-                await this.updateArticleEmbeddingsInD1(embeddingsToUpdate, this.env);
-                logInfo(`Updated D1 with embeddings for batch job ${jobInfo.batchId}.`);
+                const embeddingsToUpdate = results.map(r => {
+                    let articleId: string | undefined;
+                    try {
+                        articleId = JSON.parse(r.custom_id).articleId;
+                    } catch (e) {
+                        logWarning(`Failed to parse custom_id for batch result item. Skipping.`, { error: e, custom_id: r.custom_id });
+                        return null; // スキップするためにnullを返す
+                    }
+
+                    if (r.embedding === undefined || articleId === undefined) {
+                        logWarning(`Batch result item missing embedding or articleId. Skipping.`, { embeddingExists: r.embedding !== undefined, articleIdExists: articleId !== undefined, custom_id: r.custom_id });
+                        return null; // スキップするためにnullを返す
+                    }
+                    return {
+                        articleId: articleId,
+                        embedding: r.embedding
+                    };
+                }).filter(item => item !== null) as { articleId: string; embedding: number[]; }[]; // nullを除外して型アサーション
+
+                if (embeddingsToUpdate.length > 0) {
+                    await this.updateArticleEmbeddingsInD1(embeddingsToUpdate, this.env);
+                    logInfo(`Updated D1 with embeddings for batch job ${jobInfo.batchId}.`);
+                } else {
+                    logWarning(`Batch job ${jobInfo.batchId} completed but no valid embeddings to update after filtering.`, { jobId: jobInfo.batchId });
+                }
             } else {
                 logWarning(`Batch job ${jobInfo.batchId} completed but no results found after parsing.`, { jobId: jobInfo.batchId });
             }
