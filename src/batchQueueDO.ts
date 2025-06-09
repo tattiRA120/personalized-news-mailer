@@ -18,9 +18,30 @@ interface BatchJobInfo {
 }
 
 interface BatchResultItem {
+    id?: string; // リクエストID
     custom_id: string; // JSON.stringify({ articleId: article.articleId }) された文字列
-    embedding: number[];
-    // 他のプロパティも存在する可能性あり
+    response?: { // 成功時の応答
+        status_code: number;
+        body: {
+            object: string;
+            data: Array<{
+                object: string;
+                embedding: number[];
+                index: number;
+            }>;
+            model: string;
+            usage: {
+                prompt_tokens: number;
+                total_tokens: number;
+            };
+        };
+    };
+    error?: { // エラー時の応答
+        code: string;
+        message: string;
+        param: string;
+        type: string;
+    };
 }
 
 export class BatchQueueDO extends DurableObject { // DurableObject を継承
@@ -144,23 +165,30 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
             if (results && results.length > 0) {
                 const embeddingsToUpdate = results.map(r => {
+                    if (r.error) {
+                        logWarning(`Batch result item contains an error. Skipping.`, { error: r.error, custom_id: r.custom_id });
+                        return null;
+                    }
+
                     let articleId: string | undefined;
                     try {
                         articleId = JSON.parse(r.custom_id).articleId;
                     } catch (e) {
                         logWarning(`Failed to parse custom_id for batch result item. Skipping.`, { error: e, custom_id: r.custom_id });
-                        return null; // スキップするためにnullを返す
+                        return null;
                     }
 
-                    if (r.embedding === undefined || articleId === undefined) {
-                        logWarning(`Batch result item missing embedding or articleId. Skipping.`, { embeddingExists: r.embedding !== undefined, articleIdExists: articleId !== undefined, custom_id: r.custom_id });
-                        return null; // スキップするためにnullを返す
+                    const embedding = r.response?.body?.data?.[0]?.embedding;
+
+                    if (embedding === undefined || articleId === undefined) {
+                        logWarning(`Batch result item missing embedding or articleId after parsing. Skipping.`, { custom_id: r.custom_id, embeddingExists: embedding !== undefined, articleIdExists: articleId !== undefined });
+                        return null;
                     }
                     return {
                         articleId: articleId,
-                        embedding: r.embedding
+                        embedding: embedding
                     };
-                }).filter(item => item !== null) as { articleId: string; embedding: number[]; }[]; // nullを除外して型アサーション
+                }).filter(item => item !== null) as { articleId: string; embedding: number[]; }[];
 
                 if (embeddingsToUpdate.length > 0) {
                     await this.updateArticleEmbeddingsInD1(embeddingsToUpdate, this.env);
