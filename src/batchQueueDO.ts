@@ -334,6 +334,16 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     }[],
     env: Env
   ): Promise<void> {
+    // デバッグ: 更新対象の articleId が存在するか確認
+    for (const rec of records) {
+      const existingArticle = await env.DB.prepare('SELECT article_id FROM articles WHERE article_id = ?').bind(rec.articleId).first();
+      if (!existingArticle) {
+        logWarning(`Attempted to update non-existent articleId in D1: ${rec.articleId}`, { articleId: rec.articleId });
+      } else {
+        logInfo(`ArticleId exists in D1: ${rec.articleId}`, { articleId: rec.articleId });
+      }
+    }
+
     const stmt = env.DB.prepare(`
       UPDATE articles
       SET embedding = ?
