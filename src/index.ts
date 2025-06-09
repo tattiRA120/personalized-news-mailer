@@ -771,13 +771,17 @@ export default {
                 logInfo(`Debug: Found ${existingArticleUrlsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleUrlsWithEmbedding.size });
 
                 // 収集した記事から、既にembeddingが存在する記事を除外
-                const articlesToEmbed = articles.filter(article => !existingArticleUrlsWithEmbedding.has(article.link));
+                let articlesToEmbed = articles.filter(article => !existingArticleUrlsWithEmbedding.has(article.link));
                 logInfo(`Debug: Filtered down to ${articlesToEmbed.length} articles that need embedding for force embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
                 if (articlesToEmbed.length === 0) {
                     logInfo('Debug: No new articles found that need embedding for force embedding. Skipping batch job creation.');
                     return new Response('No articles collected that need embedding', { status: 200 });
                 }
+
+                // デバッグ目的で記事数を5に制限
+                articlesToEmbed = articlesToEmbed.slice(0, 5);
+                logInfo(`Debug: Limiting force embedding to ${articlesToEmbed.length} articles for debugging purposes.`, { limitedCount: articlesToEmbed.length });
 
                 const batchInputContent = prepareBatchInputFileContent(articlesToEmbed); // フィルタリングされた articlesToEmbed を渡す
                 const batchInputBlob = new Blob([batchInputContent], { type: 'application/jsonl' });
