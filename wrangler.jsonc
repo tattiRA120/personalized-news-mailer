@@ -58,7 +58,8 @@
 		{
 			"binding": "USER_DB",
 			"database_name": "mail-news-user-db",
-			"database_id": "6cee90bf-588c-43be-8c6e-a181761c09aa"
+			"database_id": "6cee90bf-588c-43be-8c6e-a181761c09aa",
+			"migrations_dir": "./migrations"
 		}
 	],
 

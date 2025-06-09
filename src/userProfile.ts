@@ -22,11 +22,18 @@ export interface UserProfile {
 export async function getUserProfile(userId: string, env: EnvWithUserDB): Promise<UserProfile | null> {
     try {
         const { results } = await env.USER_DB.prepare(
-            `SELECT user_id, email, embedding FROM users WHERE user_id = ?`
+            `SELECT user_id, email, interests, embedding FROM users WHERE user_id = ?`
         ).bind(userId).all<UserProfile>();
 
         if (results && results.length > 0) {
             const userProfile = results[0];
+            // interestsが文字列として保存されている場合、JSON.parseで配列に戻す
+            if (typeof userProfile.interests === 'string') {
+                userProfile.interests = JSON.parse(userProfile.interests);
+            } else if (!userProfile.interests) {
+                // interestsがnullまたはundefinedの場合、空の配列で初期化
+                userProfile.interests = [];
+            }
             // embeddingが文字列として保存されている場合、JSON.parseで配列に戻す
             if (typeof userProfile.embedding === 'string') {
                 userProfile.embedding = JSON.parse(userProfile.embedding);
@@ -45,11 +52,12 @@ export async function getUserProfile(userId: string, env: EnvWithUserDB): Promis
 
 export async function updateUserProfile(profile: UserProfile, env: EnvWithUserDB): Promise<void> {
     try {
-        // embeddingを文字列として保存
+        // interestsとembeddingを文字列として保存
+        const interestsString = JSON.stringify(profile.interests);
         const embeddingString = profile.embedding ? JSON.stringify(profile.embedding) : null;
         await env.USER_DB.prepare(
-            `UPDATE users SET email = ?, embedding = ? WHERE user_id = ?`
-        ).bind(profile.email, embeddingString, profile.userId).run();
+            `UPDATE users SET email = ?, interests = ?, embedding = ? WHERE user_id = ?`
+        ).bind(profile.email, interestsString, embeddingString, profile.userId).run();
         logInfo(`Updated user profile for ${profile.userId}.`, { userId: profile.userId });
     } catch (error) {
         logError(`Error updating user profile for ${profile.userId}:`, error, { userId: profile.userId });

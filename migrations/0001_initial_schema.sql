@@ -12,6 +12,7 @@ CREATE INDEX IF NOT EXISTS idx_articles_published_at ON articles (published_at);
 CREATE TABLE IF NOT EXISTS users (
     user_id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
+    interests TEXT DEFAULT '[]' NOT NULL,
     embedding TEXT
 );
 
