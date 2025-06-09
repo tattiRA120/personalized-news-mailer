@@ -71,16 +71,16 @@ export default {
                 logInfo('Starting OpenAI Batch API embedding job creation...');
 
                 // D1から既存の記事のURLとembeddingの有無を取得
-                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT article_id, embedding FROM articles").all();
-                const existingArticleIdsWithEmbedding = new Set(
+                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT url, embedding FROM articles").all();
+                const existingArticleUrlsWithEmbedding = new Set(
                     (existingArticlesInDb as any[])
                         .filter(row => row.embedding !== null && row.embedding !== undefined)
-                        .map(row => row.article_id)
+                        .map(row => row.url)
                 );
-                logInfo(`Found ${existingArticleIdsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleIdsWithEmbedding.size });
+                logInfo(`Found ${existingArticleUrlsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleUrlsWithEmbedding.size });
 
                 // 収集した記事から、既にembeddingが存在する記事を除外
-                const articlesToEmbed = articles.filter(article => !existingArticleIdsWithEmbedding.has(article.articleId));
+                const articlesToEmbed = articles.filter(article => !existingArticleUrlsWithEmbedding.has(article.link));
                 logInfo(`Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
                 if (articlesToEmbed.length === 0) {
