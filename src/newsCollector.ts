@@ -1,6 +1,7 @@
 import { NEWS_RSS_URLS } from './config';
 import { logError, logInfo } from './logger'; // Import logging helpers
 import { XMLParser } from 'fast-xml-parser'; // Import XMLParser
+import { cleanArticleText } from './utils/textProcessor'; // Import text cleaning utility
 
 // HTMLタグを除去するヘルパー関数
 function stripHtmlTags(html: string): string {
@@ -200,6 +201,13 @@ export async function collectNews(): Promise<NewsArticle[]> {
             title: `${article.title} - ${article.sourceName}`
         };
     });
+
+    // Apply text cleaning to title and summary for all articles
+    allArticles = allArticles.map(article => ({
+        ...article,
+        title: cleanArticleText(article.title),
+        summary: article.summary ? cleanArticleText(article.summary) : undefined,
+    }));
 
     logInfo(`Collected ${allArticles.length} articles from ${NEWS_RSS_URLS.length} sources.`, { articleCount: allArticles.length, sourceCount: NEWS_RSS_URLS.length });
     return allArticles;
