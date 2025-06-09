@@ -870,7 +870,7 @@ async function saveArticlesToD1(
       rec.url,
       rec.publishedAt,
       rec.content,
-      JSON.stringify(rec.embedding)
+      rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null
     );
   });
   await env.DB.batch(batch);
