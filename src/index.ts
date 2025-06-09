@@ -759,6 +759,19 @@ export default {
                     return new Response('No articles collected', { status: 200 });
                 }
 
+                // --- D1への仮保存 (Debug Endpoint) ---
+                logInfo('Debug: Saving collected articles to D1 temporarily for force embedding...');
+                const articlesToSaveToD1 = articles.map(article => ({
+                    articleId: article.articleId,
+                    title: article.title,
+                    url: article.link,
+                    publishedAt: article.publishedAt,
+                    content: article.summary || '',
+                    embedding: undefined,
+                }));
+                await saveArticlesToD1(articlesToSaveToD1, env);
+                logInfo(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
+
                 logInfo('Debug: Starting OpenAI Batch API embedding job creation for force embedding...');
 
                 // D1から既存の記事のURLとembeddingの有無を取得
