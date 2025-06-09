@@ -345,6 +345,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         rec.articleId
       );
     });
-    await env.DB.batch(batch);
+    const batchResult = await env.DB.batch(batch);
+    logInfo(`D1 batch update result for job:`, { batchResult });
   }
 }
