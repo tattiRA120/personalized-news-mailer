@@ -790,6 +790,19 @@ export default {
 
                     if (batchJob && batchJob.id) {
                         logInfo(`Debug: OpenAI Batch API job created successfully for force embedding. Job ID: ${batchJob.id}`, { jobId: batchJob.id });
+
+                        // Durable Object にバッチジョブIDを渡し、ポーリングを委譲
+                        logInfo(`Debug: Delegating batch job ${batchJob.id} to BatchQueueDO for polling.`);
+                        const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
+                        const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
+
+                        await batchQueueDOStub.fetch(new Request('http://dummy-host/start-polling', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ batchId: batchJob.id, inputFileId: uploadedFile.id }),
+                        }));
+                        logInfo(`Debug: Successfully delegated batch job ${batchJob.id} to BatchQueueDO.`);
+
                         return new Response(JSON.stringify({ message: 'Batch embedding job initiated successfully.', jobId: batchJob.id }), {
                             status: 200,
                             headers: { 'Content-Type': 'application/json' },
