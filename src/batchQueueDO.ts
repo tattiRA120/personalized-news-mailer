@@ -15,6 +15,9 @@ interface BatchJobInfo {
   inputFileId: string;
   status: string;
   retryCount: number;
+  // ポーリング間隔調整のために追加
+  pollingStartTime?: number; // ポーリング開始時刻 (Unixタイムスタンプ)
+  currentPollingInterval?: number; // 現在のポーリング間隔 (ミリ秒)
 }
 
 interface BatchResultItem {
@@ -66,7 +69,12 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         logInfo("BatchQueueDO initialized with pending batch jobs. Resuming polling.");
         // アラームが設定されていない場合は設定
         if (!await this.state.storage.getAlarm()) {
-          await this.state.storage.setAlarm(Date.now() + 60 * 1000); // 1分後にアラームを設定
+          // 初期化時にアラームを設定する場合、ポーリング開始時刻も設定
+          const now = Date.now();
+          await this.state.storage.put("pollingStartTime", now);
+          await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
+          await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
+          logInfo("Set initial alarm for batch job polling during DO initialization.");
         }
       }
     });
@@ -112,7 +120,10 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
         // アラームが設定されていない場合のみ設定
         if (!await this.state.storage.getAlarm()) {
-          await this.state.storage.setAlarm(Date.now() + 60 * 1000); // 1分後にアラームを設定
+          const now = Date.now();
+          await this.state.storage.put("pollingStartTime", now);
+          await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
+          await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
           logInfo("Set initial alarm for batch job polling.");
         }
 
@@ -132,6 +143,30 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     const completedJobs: BatchJobInfo[] = [];
     const failedJobs: BatchJobInfo[] = [];
     const pendingJobs: BatchJobInfo[] = [];
+
+    const pollingStartTime = await this.state.storage.get<number>("pollingStartTime");
+    let currentPollingInterval = await this.state.storage.get<number>("currentPollingInterval") || 60 * 1000; // デフォルト1分
+
+    if (pollingStartTime) {
+      const elapsedTime = Date.now() - pollingStartTime; // ミリ秒
+      const elapsedMinutes = elapsedTime / (60 * 1000);
+
+      if (elapsedMinutes < 10) {
+        currentPollingInterval = 1 * 60 * 1000; // 1分
+      } else if (elapsedMinutes < 30) {
+        currentPollingInterval = 10 * 60 * 1000; // 10分
+      } else if (elapsedMinutes < 60) {
+        currentPollingInterval = 30 * 60 * 1000; // 30分
+      } else {
+        currentPollingInterval = 60 * 60 * 1000; // 1時間
+      }
+      await this.state.storage.put("currentPollingInterval", currentPollingInterval);
+      logInfo(`Polling interval adjusted to ${currentPollingInterval / 1000 / 60} minutes based on elapsed time: ${elapsedMinutes.toFixed(2)} minutes.`);
+    } else {
+      logWarning("Polling start time not found. Using default 1-minute interval.");
+      await this.state.storage.put("pollingStartTime", Date.now()); // 初回アラーム時に設定
+      await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
+    }
 
     for (const jobInfo of batchJobs) {
       try {
@@ -228,10 +263,13 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
     if (pendingJobs.length > 0) {
       // 未処理のジョブが残っている場合、次のアラームを設定
-      await this.state.storage.setAlarm(Date.now() + 60 * 1000); // 1分後に再度アラームを設定
-      logInfo(`Set next alarm for batch job polling. Remaining jobs: ${pendingJobs.length}`);
+      await this.state.storage.setAlarm(Date.now() + currentPollingInterval); // 計算された間隔でアラームを設定
+      logInfo(`Set next alarm for batch job polling in ${currentPollingInterval / 1000 / 60} minutes. Remaining jobs: ${pendingJobs.length}`);
     } else {
       logInfo("All batch jobs processed. No more alarms scheduled for polling.");
+      // 全てのジョブが完了したら、ポーリング開始時刻と間隔をリセット
+      await this.state.storage.delete("pollingStartTime");
+      await this.state.storage.delete("currentPollingInterval");
     }
   }
 
@@ -302,7 +340,10 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
       // アラームが設定されていない場合のみ設定
       if (!await this.state.storage.getAlarm()) {
-        await this.state.storage.setAlarm(Date.now() + 60 * 1000); // 1分後にアラームを設定
+        const now = Date.now();
+        await this.state.storage.put("pollingStartTime", now);
+        await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
+        await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
         logInfo("Set initial alarm for batch job polling from chunk processing.");
       }
 
