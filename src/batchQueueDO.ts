@@ -1,8 +1,8 @@
 import { logError, logInfo, logWarning } from "./logger";
 import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, prepareBatchInputFileContent, getOpenAIBatchJobStatus, getOpenAIBatchJobResults } from "./openaiClient";
 import { NewsArticle } from "./newsCollector";
-import { Env } from "./index"; // Envインターフェースをインポート
-import { DurableObject } from 'cloudflare:workers'; // DurableObject をインポート
+import { Env } from "./index";
+import { DurableObject } from 'cloudflare:workers';
 
 interface BatchChunk {
   chunkIndex: number;
@@ -15,7 +15,6 @@ interface BatchJobInfo {
   inputFileId: string;
   status: string;
   retryCount: number;
-  // ポーリング間隔調整のために追加
   pollingStartTime?: number; // ポーリング開始時刻 (Unixタイムスタンプ)
   currentPollingInterval?: number; // 現在のポーリング間隔 (ミリ秒)
 }
