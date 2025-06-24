@@ -1,7 +1,7 @@
 import { NEWS_RSS_URLS } from './config';
 import { logError, logInfo } from './logger'; // Import logging helpers
 import { XMLParser } from 'fast-xml-parser'; // Import XMLParser
-import { cleanArticleText } from './utils/textProcessor'; // Import text cleaning utility
+import { cleanArticleText, generateContentHash } from './utils/textProcessor'; // Import text cleaning utility
 
 // HTMLタグを除去するヘルパー関数
 function stripHtmlTags(html: string): string {
@@ -19,6 +19,7 @@ export interface NewsArticle {
     summary?: string; // Add summary field
     publishedAt: number; // Add publishedAt as Unix timestamp
     embedding?: number[]; // Add embedding field for temporary storage
+    contentHash?: string; // Add contentHash field
 }
 
 async function fetchRSSFeed(url: string): Promise<string | null> {
@@ -208,6 +209,11 @@ export async function collectNews(): Promise<NewsArticle[]> {
         title: cleanArticleText(article.title),
         summary: article.summary ? cleanArticleText(article.summary) : undefined,
     }));
+
+    // Calculate contentHash for all articles
+    for (const article of allArticles) {
+        article.contentHash = await generateContentHash(`${article.title} ${article.summary || ''}`);
+    }
 
     logInfo(`Collected ${allArticles.length} articles from ${NEWS_RSS_URLS.length} sources.`, { articleCount: allArticles.length, sourceCount: NEWS_RSS_URLS.length });
     return allArticles;

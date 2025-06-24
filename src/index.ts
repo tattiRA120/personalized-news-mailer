@@ -7,6 +7,7 @@ import { BatchQueueDO } from './batchQueueDO';
 import { logError, logInfo, logWarning } from './logger';
 import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResults, prepareBatchInputFileContent, chunkArray } from './openaiClient'; // chunkArray を追加
 import { CHUNK_SIZE } from './config';
+import { cleanArticleText, generateContentHash } from './utils/textProcessor';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	USER_DB: D1Database;
@@ -61,6 +62,7 @@ export default {
                 publishedAt: article.publishedAt,
                 content: article.summary || '', // summary が undefined の場合は空文字列を割り当てる
                 embedding: undefined, // embedding は後で更新するため、ここでは undefined
+                contentHash: article.contentHash || '', // contentHash を割り当てる
             }));
             await saveArticlesToD1(articlesToSaveToD1, env);
             logInfo(`Saved ${articlesToSaveToD1.length} articles to D1 temporarily.`, { count: articlesToSaveToD1.length });
@@ -70,17 +72,17 @@ export default {
             if (scheduledHourUTC === 13) { // 22:00 JST is 13:00 UTC
                 logInfo('Starting OpenAI Batch API embedding job creation...');
 
-                // D1から既存の記事のURLとembeddingの有無を取得
-                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT url, embedding FROM articles").all();
-                const existingArticleUrlsWithEmbedding = new Set(
+                // D1から既存の記事のcontent_hashとembeddingの有無を取得
+                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT content_hash, embedding FROM articles").all();
+                const existingArticleHashesWithEmbedding = new Set(
                     (existingArticlesInDb as any[])
-                        .filter(row => row.embedding !== null && row.embedding !== undefined)
-                        .map(row => row.url)
+                        .filter(row => row.embedding !== null && row.embedding !== undefined && row.content_hash !== null && row.content_hash !== undefined)
+                        .map(row => row.content_hash)
                 );
-                logInfo(`Found ${existingArticleUrlsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleUrlsWithEmbedding.size });
+                logInfo(`Found ${existingArticleHashesWithEmbedding.size} articles with existing embeddings in D1 (based on content hash).`, { count: existingArticleHashesWithEmbedding.size });
 
-                // 収集した記事から、既にembeddingが存在する記事を除外
-                const articlesToEmbed = articles.filter(article => !existingArticleUrlsWithEmbedding.has(article.link));
+                // 収集した記事から、既にembeddingが存在する記事を除外 (contentHashで判断)
+                const articlesToEmbed = articles.filter(article => article.contentHash && !existingArticleHashesWithEmbedding.has(article.contentHash));
                 logInfo(`Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
                 if (articlesToEmbed.length === 0) {
@@ -768,23 +770,24 @@ export default {
                     publishedAt: article.publishedAt,
                     content: article.summary || '',
                     embedding: undefined,
+                    contentHash: article.contentHash || '', // contentHash を割り当てる
                 }));
                 await saveArticlesToD1(articlesToSaveToD1, env);
                 logInfo(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
 
                 logInfo('Debug: Starting OpenAI Batch API embedding job creation for force embedding...');
 
-                // D1から既存の記事のURLとembeddingの有無を取得
-                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT url, embedding FROM articles").all();
-                const existingArticleUrlsWithEmbedding = new Set(
+                // D1から既存の記事のcontent_hashとembeddingの有無を取得
+                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT content_hash, embedding FROM articles").all();
+                const existingArticleHashesWithEmbedding = new Set(
                     (existingArticlesInDb as any[])
-                        .filter(row => row.embedding !== null && row.embedding !== undefined)
-                        .map(row => row.url)
+                        .filter(row => row.embedding !== null && row.embedding !== undefined && row.content_hash !== null && row.content_hash !== undefined)
+                        .map(row => row.content_hash)
                 );
-                logInfo(`Debug: Found ${existingArticleUrlsWithEmbedding.size} articles with existing embeddings in D1.`, { count: existingArticleUrlsWithEmbedding.size });
+                logInfo(`Debug: Found ${existingArticleHashesWithEmbedding.size} articles with existing embeddings in D1 (based on content hash).`, { count: existingArticleHashesWithEmbedding.size });
 
-                // 収集した記事から、既にembeddingが存在する記事を除外
-                let articlesToEmbed = articles.filter(article => !existingArticleUrlsWithEmbedding.has(article.link));
+                // 収集した記事から、既にembeddingが存在する記事を除外 (contentHashで判断)
+                let articlesToEmbed = articles.filter(article => article.contentHash && !existingArticleHashesWithEmbedding.has(article.contentHash));
                 logInfo(`Debug: Filtered down to ${articlesToEmbed.length} articles that need embedding for force embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
                 if (articlesToEmbed.length === 0) {
@@ -856,12 +859,13 @@ async function saveArticlesToD1(
     publishedAt: number;
     content: string;
     embedding: number[] | undefined; // embedding を undefined も許容するように変更
+    contentHash: string;
   }[],
   env: Env
 ): Promise<void> {
   const stmt = env.DB.prepare(`
-    INSERT OR REPLACE INTO articles (article_id, title, url, published_at, content, embedding)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT OR REPLACE INTO articles (article_id, title, url, published_at, content, embedding, content_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const batch = records.map((rec) => {
     return stmt.bind(
@@ -870,7 +874,8 @@ async function saveArticlesToD1(
       rec.url,
       rec.publishedAt,
       rec.content,
-      rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null
+      rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null,
+      rec.contentHash
     );
   });
   await env.DB.batch(batch);

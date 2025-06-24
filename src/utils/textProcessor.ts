@@ -15,6 +15,14 @@ export function cleanArticleText(text: string): string {
     // 全角スペースを半角スペースに変換
     cleanedText = cleanedText.replace(/　/g, ' ');
 
+    // "は ギャズログ|GAZLOG に最初に表示されました。" の除去
+    cleanedText = cleanedText.replace(/は ギャズログ\|GAZLOG に最初に表示されました。/g, '');
+    // "&quot;" の除去 (HTMLエンティティのデコードではなく除去)
+    cleanedText = cleanedText.replace(/&quot;/g, '');
+    // " [&#8230;]" の除去
+    cleanedText = cleanedText.replace(/ \[\&#8230;\]/g, '');
+
+
     // タイトルの重複除去 (例: "タイトル - ソース. タイトル ソース" -> "タイトル - ソース")
     // ロイターやBloombergの形式に対応
     const parts = cleanedText.split('. ');
@@ -39,4 +47,13 @@ export function cleanArticleText(text: string): string {
     cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
 
     return cleanedText;
+}
+
+export async function generateContentHash(content: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(content);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const hexHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    return hexHash;
 }

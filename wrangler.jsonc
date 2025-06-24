@@ -44,7 +44,7 @@
 
 	"migrations": [
 		{
-			"tag": "v5",
+			"tag": "v8",
 			"new_classes": []
 		}
 	],
@@ -53,7 +53,8 @@
 		{
 			"binding": "DB",
 			"database_name": "mail-news-articles-db",
-			"database_id": "bd19a6ea-8a5a-4fc5-8996-d95e219e94cb"
+			"database_id": "bd19a6ea-8a5a-4fc5-8996-d95e219e94cb",
+			"migrations_dir": "./migrations"
 		},
 		{
 			"binding": "USER_DB",
@@ -96,11 +97,58 @@
 	 * Static Assets
 	 * https://developers.cloudflare.com/workers/static-assets/binding/
 	 */
-	"assets": { "directory": "./public/", "binding": "ASSETS" }
+	"assets": { "directory": "./public/", "binding": "ASSETS" },
 
 	/**
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
 	 */
 	// "services": [{ "binding": "MY_SERVICE", "service": "my-service" }]
+	"env": {
+		"production": {
+            "kv_namespaces": [
+                {
+                    "binding": "mail-news-gmail-tokens",
+                    "id": "f393b495a80a4d23bd7f2e77450e0027"
+                },
+                {
+                    "binding": "BATCH_CALLBACK_TOKENS",
+                    "id": "df13a4b73ec24a4d99f0b3edb908f8d8"
+                }
+            ],
+            "durable_objects": {
+                "bindings": [
+                    {
+                        "name": "CLICK_LOGGER",
+                        "class_name": "ClickLogger"
+                    },
+                    {
+                        "name": "BATCH_QUEUE_DO",
+                        "class_name": "BatchQueueDO"
+                    }
+                ]
+            },
+            "d1_databases": [
+                {
+                    "binding": "DB",
+                    "database_name": "mail-news-articles-db",
+                    "database_id": "bd19a6ea-8a5a-4fc5-8996-d95e219e94cb",
+                    "migrations_dir": "./migrations"
+                },
+                {
+                    "binding": "USER_DB",
+                    "database_name": "mail-news-user-db",
+                    "database_id": "6cee90bf-588c-43be-8c6e-a181761c09aa",
+                    "migrations_dir": "./migrations"
+                }
+            ],
+            "r2_buckets": [
+                {
+                    "binding": "BANDIT_MODELS",
+                    "bucket_name": "mail-news-bandit-models"
+                }
+            ],
+            "assets": { "directory": "./public/", "binding": "ASSETS" }
+		}
+	}
 }
