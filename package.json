@@ -5,6 +5,6 @@
   "dependencies": {
     "fast-xml-parser": "^5.2.3",
     "typescript": "^5.8.3",
-    "wrangler": "^4.19.1"
+    "wrangler": "^4.21.0"
   }
 }
