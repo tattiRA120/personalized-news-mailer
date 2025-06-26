@@ -1,2 +1,2 @@
--- Add content_hash column to articles table without UNIQUE constraint
-ALTER TABLE articles ADD COLUMN content_hash TEXT;
+-- This migration has been applied manually or in a previous failed attempt.
+-- The content_hash column already exists.

@@ -53,37 +53,49 @@ export default {
 				return;
 			}
 
-            // --- 1. D1への仮保存 ---
-            logInfo('Saving collected articles to D1 temporarily...');
-            const articlesToSaveToD1 = articles.map(article => ({
-                articleId: article.articleId,
-                title: article.title,
-                url: article.link,
-                publishedAt: article.publishedAt,
-                content: article.summary || '', // summary が undefined の場合は空文字列を割り当てる
-                embedding: undefined, // embedding は後で更新するため、ここでは undefined
-                contentHash: article.contentHash || '', // contentHash を割り当てる
-            }));
-            await saveArticlesToD1(articlesToSaveToD1, env);
-            logInfo(`Saved ${articlesToSaveToD1.length} articles to D1 temporarily.`, { count: articlesToSaveToD1.length });
+            // --- 1. 新規記事のみをD1に保存 ---
+            const contentHashes = articles.map(a => a.contentHash).filter(Boolean) as string[];
+            logInfo(`Collected ${contentHashes.length} content hashes from new articles.`, { count: contentHashes.length });
+
+            let newArticles: NewsArticle[] = [];
+            if (contentHashes.length > 0) {
+                // D1に既に存在するcontent_hashを問い合わせる
+                const placeholders = contentHashes.map(() => '?').join(',');
+                const stmt = env.DB.prepare(`SELECT content_hash FROM articles WHERE content_hash IN (${placeholders})`);
+                const { results: existingRows } = await stmt.bind(...contentHashes).all<{ content_hash: string }>();
+                const existingHashes = new Set(existingRows.map(row => row.content_hash));
+                logInfo(`Found ${existingHashes.size} existing content hashes in D1.`, { count: existingHashes.size });
+
+                // 新規記事のみをフィルタリング
+                newArticles = articles.filter(article => article.contentHash && !existingHashes.has(article.contentHash));
+                logInfo(`Filtered down to ${newArticles.length} new articles to be saved.`, { count: newArticles.length });
+
+                if (newArticles.length > 0) {
+                    const articlesToSaveToD1 = newArticles.map(article => ({
+                        articleId: article.articleId,
+                        title: article.title,
+                        url: article.link,
+                        publishedAt: article.publishedAt,
+                        content: article.summary || '',
+                        embedding: undefined,
+                        contentHash: article.contentHash || '',
+                    }));
+                    await saveArticlesToD1(articlesToSaveToD1, env);
+                    logInfo(`Saved ${articlesToSaveToD1.length} new articles to D1.`, { count: articlesToSaveToD1.length });
+                }
+            }
+
 
             // 日本時間22時（UTC 13時）のCronトリガーでのみ埋め込みバッチジョブを作成
             const scheduledHourUTC = new Date(controller.scheduledTime).getUTCHours();
             if (scheduledHourUTC === 13) { // 22:00 JST is 13:00 UTC
                 logInfo('Starting OpenAI Batch API embedding job creation...');
 
-                // D1から既存の記事のcontent_hashとembeddingの有無を取得
-                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT content_hash, embedding FROM articles").all();
-                const existingArticleHashesWithEmbedding = new Set(
-                    (existingArticlesInDb as any[])
-                        .filter(row => row.embedding !== null && row.embedding !== undefined && row.content_hash !== null && row.content_hash !== undefined)
-                        .map(row => row.content_hash)
-                );
-                logInfo(`Found ${existingArticleHashesWithEmbedding.size} articles with existing embeddings in D1 (based on content hash).`, { count: existingArticleHashesWithEmbedding.size });
+                // D1からembeddingがまだない記事を取得
+                const { results: articlesMissingEmbedding } = await env.DB.prepare("SELECT * FROM articles WHERE embedding IS NULL").all<NewsArticle>();
+                logInfo(`Found ${articlesMissingEmbedding.length} articles missing embeddings in D1.`, { count: articlesMissingEmbedding.length });
 
-                // 収集した記事から、既にembeddingが存在する記事を除外 (contentHashで判断)
-                const articlesToEmbed = articles.filter(article => article.contentHash && !existingArticleHashesWithEmbedding.has(article.contentHash));
-                logInfo(`Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
+                const articlesToEmbed = articlesMissingEmbedding;
 
                 if (articlesToEmbed.length === 0) {
                     logInfo('No new articles found that need embedding. Skipping batch job creation.');
@@ -864,7 +876,7 @@ async function saveArticlesToD1(
   env: Env
 ): Promise<void> {
   const stmt = env.DB.prepare(`
-    INSERT OR REPLACE INTO articles (article_id, title, url, published_at, content, embedding, content_hash)
+    INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding, content_hash)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
   const batch = records.map((rec) => {
