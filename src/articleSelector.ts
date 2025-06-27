@@ -38,6 +38,7 @@ export async function selectPersonalizedArticles(
     articles: NewsArticle[],
     userProfile: UserProfile,
     clickLogger: DurableObjectStub<ClickLogger>, // Durable Object インスタンスを受け取る
+    userId: string,
     count: number,
     lambda: number = 0.5 // MMR パラメータ
 ): Promise<NewsArticle[]> {
@@ -51,7 +52,7 @@ export async function selectPersonalizedArticles(
     // Durable Object から記事のUCB値を取得
     const articlesWithEmbeddings = articles
         .filter(article => article.embedding !== undefined) // embedding が存在する記事のみ
-        .map(article => ({ articleId: article.link, embedding: JSON.parse(article.embedding!) })); // articleId として link を使用し、embeddingをパース
+        .map(article => ({ articleId: article.articleId, embedding: JSON.parse(article.embedding!) })); // articleId を使用
 
     let ucbValues: { articleId: string, ucb: number }[] = [];
     if (articlesWithEmbeddings.length > 0) {
@@ -59,7 +60,7 @@ export async function selectPersonalizedArticles(
             const response = await clickLogger.fetch(new Request('http://dummy-host/get-ucb-values', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ articlesWithEmbeddings }),
+                body: JSON.stringify({ userId: userId, articlesWithEmbeddings: articlesWithEmbeddings }),
             }));
 
             if (response.ok) {
@@ -82,7 +83,7 @@ export async function selectPersonalizedArticles(
     const userInterestEmbedding = userProfile.embedding;
 
     const articlesWithFinalScore = articles.map(article => {
-        const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.link); // articleId は link と仮定
+        const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.articleId); // articleId で検索
         const ucb = ucbInfo ? ucbInfo.ucb : 0; // UCB値がない場合は0とする
 
         // ユーザーの興味関心との関連度を計算 (コサイン類似度を使用)

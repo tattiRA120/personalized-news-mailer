@@ -42,12 +42,6 @@
 	},
 
 
-	"migrations": [
-		{
-			"tag": "v8",
-			"new_classes": []
-		}
-	],
 
 	"d1_databases": [
 		{

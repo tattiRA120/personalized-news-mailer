@@ -224,16 +224,16 @@ export default {
 					}
 					logInfo(`Loaded user profile for ${userId}.`);
 
-					// Durable Object (ClickLogger) のインスタンスを取得
-					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId); // ユーザーIDに対応するDO IDを取得
-					const clickLogger: DurableObjectStub<ClickLogger> = env.CLICK_LOGGER.get(clickLoggerId); // DO インスタンスを取得
+					// Durable Object (ClickLogger) のグローバルインスタンスを取得
+					const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+					const clickLogger: DurableObjectStub<ClickLogger> = env.CLICK_LOGGER.get(clickLoggerId);
 
 					// --- 3. Article Selection (MMR + Bandit) ---
 					logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
 
 					// selectPersonalizedArticles 関数に embedding が付与された記事リストを渡す
 					const numberOfArticlesToSend = 5; // Define how many articles to send
-					const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, numberOfArticlesToSend, 0.5);
+					const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5);
 					logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
 
 					if (selectedArticles.length === 0) {
@@ -275,7 +275,7 @@ export default {
 					const logSentResponse = await clickLogger.fetch(new Request('http://dummy-host/log-sent-articles', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ sentArticles: sentArticlesData }),
+						body: JSON.stringify({ userId: userId, sentArticles: sentArticlesData }),
 					}));
 
 					if (logSentResponse.ok) {
@@ -309,7 +309,7 @@ export default {
 								const updateResponse = await clickLogger.fetch(new Request('http://dummy-host/update-bandit-from-click', {
 									method: 'POST',
 									headers: { 'Content-Type': 'application/json' },
-									body: JSON.stringify({ articleId: articleId, embedding: articleEmbedding, reward: reward }),
+									body: JSON.stringify({ userId: userId, articleId: articleId, embedding: articleEmbedding, reward: reward }),
 								}));
 
 								if (updateResponse.ok) {
@@ -504,8 +504,8 @@ export default {
 			}
 
 			try {
-				// Get the Durable Object for this user
-				const clickLoggerId = env.CLICK_LOGGER.idFromName(userId);
+				// Get the global Durable Object instance
+				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
 				// Send a request to the Durable Object to log the click
@@ -513,7 +513,7 @@ export default {
 				const logClickResponse = await clickLogger.fetch(new Request('http://dummy-host/log-click', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ userId, articleId, timestamp: Date.now() }),
+					body: JSON.stringify({ userId: userId, articleId: articleId, timestamp: Date.now() }),
 				}));
 
 				if (logClickResponse.ok) {
@@ -675,8 +675,8 @@ export default {
 				}
 
 				if (selectedArticlesWithEmbeddings.length > 0) {
-					// Get the Durable Object for this user
-					const clickLoggerId = env.CLICK_LOGGER.idFromName(userId);
+					// Get the global Durable Object instance
+					const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
 					const batchSize = 10; // バッチサイズを定義 (調整可能)
@@ -691,7 +691,7 @@ export default {
 						const learnResponse = await clickLogger.fetch(new Request('http://dummy-host/learn-from-education', {
 							method: 'POST',
 							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ selectedArticles: batch }),
+							body: JSON.stringify({ userId: userId, selectedArticles: batch }),
 						}));
 
 						if (learnResponse.ok) {
@@ -722,33 +722,21 @@ export default {
 		} else if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
 			logInfo('Request received to delete all Durable Object data');
 			try {
-				// Get all user IDs from D1
-				const userIds = await getAllUserIds(env);
-				logInfo(`Found ${userIds.length} users. Deleting data for each Durable Object.`, { userCount: userIds.length });
+				// This now deletes the single aggregated R2 object via the global DO instance.
+				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-				const deletePromises = userIds.map(async userId => {
-					try {
-						const clickLoggerId = env.CLICK_LOGGER.idFromName(userId);
-						const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
-						// Send request to the Durable Object to delete its data
-						const deleteResponse = await clickLogger.fetch(new Request('http://dummy-host/delete-all-data', {
-							method: 'POST',
-						}));
+				const deleteResponse = await clickLogger.fetch(new Request('http://dummy-host/delete-all-data', {
+					method: 'POST',
+				}));
 
-						if (deleteResponse.ok) {
-							logInfo(`Successfully deleted data for Durable Object for user ${userId}.`, { userId });
-						} else {
-							logError(`Failed to delete data for Durable Object for user ${userId}: ${deleteResponse.statusText}`, null, { userId, status: deleteResponse.status, statusText: deleteResponse.statusText });
-						}
-					} catch (error) {
-						logError(`Error processing Durable Object deletion for user ${userId}:`, error, { userId });
-					}
-				});
-
-				await Promise.all(deletePromises);
-
-				logInfo('Finished attempting to delete data for all Durable Objects.');
-				return new Response('Attempted to delete data for all Durable Objects', { status: 200 });
+				if (deleteResponse.ok) {
+					logInfo('Successfully triggered deletion of all bandit models.');
+					return new Response('Triggered deletion of all bandit models.', { status: 200 });
+				} else {
+					logError(`Failed to trigger deletion of all bandit models: ${deleteResponse.statusText}`, null, { status: deleteResponse.status, statusText: deleteResponse.statusText });
+					return new Response('Failed to trigger deletion.', { status: 500 });
+				}
 
 			} catch (error) {
 				logError('Error during deletion of all Durable Object data:', error, { requestUrl: request.url });

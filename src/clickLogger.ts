@@ -147,137 +147,133 @@ interface EnvWithDurableObjects {
     DB: D1Database; // D1 Database binding for articles
 }
 
-// Durable Object class for managing click logs and bandit model per user
+// Durable Object class for managing click logs and bandit models for ALL users.
+// This acts as a central hub to minimize R2 access.
 export class ClickLogger extends DurableObject {
     state: DurableObjectState;
     env: EnvWithDurableObjects;
 
-    private banditModel: BanditModelState | null = null;
-    private readonly banditStateKey = 'banditModelState.json'; // R2に保存するオブジェクトのキー
+    private inMemoryModels: Map<string, BanditModelState>;
+    private readonly modelsR2Key = 'bandit_models.json'; // Key for the aggregated models file in R2
+    private dirty: boolean; // Flag to track if in-memory models have changed
 
     constructor(state: DurableObjectState, env: EnvWithDurableObjects) {
-        super(state, env); // 親クラスのコンストラクターを呼び出す
+        super(state, env);
         this.state = state;
         this.env = env;
+        this.inMemoryModels = new Map<string, BanditModelState>();
+        this.dirty = false;
 
-        // Durable Object が初めてロードされたときに状態を読み込む
+        // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
-            await this.cleanupOldDOData(); // 古いDOデータをクリーンアップ
-            await this.loadState();
+            await this.loadModelsFromR2();
         });
     }
 
-    // Durable Object の古いデータをクリーンアップするメソッド
-    private async cleanupOldDOData(): Promise<void> {
-        logInfo(`Cleaning up old Durable Object data for ${this.state.id.toString()}`);
+    // Load all bandit models from a single R2 object.
+    private async loadModelsFromR2(): Promise<void> {
+        logInfo(`Attempting to load all bandit models from R2 key: ${this.modelsR2Key}`);
         try {
-            // Durable Object のストレージからすべてのキーをリストアップし、削除
-            const allKeys = await this.state.storage.list();
-            const keysToDelete = Array.from(allKeys.keys());
-            if (keysToDelete.length > 0) {
-                await this.state.storage.delete(keysToDelete);
-                logInfo(`Deleted ${keysToDelete.length} old keys from Durable Object storage for ${this.state.id.toString()}`);
-            } else {
-                logInfo(`No old data found in Durable Object storage for ${this.state.id.toString()}`);
-            }
-        } catch (error) {
-            logError(`Error cleaning up old Durable Object data for ${this.state.id.toString()}:`, error);
-        }
-    }
-
-    // Durable Object の状態（バンディットモデル）をR2から読み込む
-    private async loadState(): Promise<void> {
-        const userId = this.state.id.toString();
-        const objectKey = `${userId}/${this.banditStateKey}`; // ユーザーIDごとにフォルダ分け
-
-        try {
-            const object = await this.env.BANDIT_MODELS.get(objectKey);
+            const object = await this.env.BANDIT_MODELS.get(this.modelsR2Key);
 
             if (object !== null) {
-                const stateText = await object.text();
-                const loadedState = JSON.parse(stateText) as BanditModelState;
-
-                // 読み込んだデータが正しい形式か基本的なチェックを行う
-                if (Array.isArray(loadedState.A) && Array.isArray(loadedState.b) && typeof loadedState.dimension === 'number' && typeof loadedState.alpha === 'number') {
-                    this.banditModel = loadedState;
-                    logInfo(`Loaded bandit model state from R2 for ${userId}`);
-                } else {
-                    logWarning(`Invalid bandit model data format in R2 for ${userId}. Initializing new model.`);
-                    await this.initializeNewBanditModel();
-                }
+                const models = await object.json<Record<string, BanditModelState>>();
+                this.inMemoryModels = new Map(Object.entries(models));
+                logInfo(`Successfully loaded ${this.inMemoryModels.size} bandit models from R2.`);
             } else {
-                // モデルがまだR2に存在しない場合は初期化
-                logInfo(`Bandit model state not found in R2 for ${userId}. Initializing new model.`);
-                await this.initializeNewBanditModel();
+                logInfo('No existing bandit models file found in R2. Starting with an empty map.');
+                this.inMemoryModels = new Map<string, BanditModelState>();
             }
         } catch (error) {
-            logError(`Error loading bandit model state from R2 for ${userId}:`, error);
-            logWarning(`Initializing new bandit model due to loading error for ${userId}.`);
-            await this.initializeNewBanditModel();
+            logError('Error loading bandit models from R2. Starting fresh.', error);
+            // In case of a loading/parsing error, start with a clean slate to avoid corruption.
+            this.inMemoryModels = new Map<string, BanditModelState>();
         }
     }
 
-    // 新しいバンディットモデルを初期化するヘルパーメソッド
-    private async initializeNewBanditModel(): Promise<void> {
-        // OpenAI Embedding API (text-embedding-3-small) の次元数 1536 で設定する。
-        const dimension = 1536; // OpenAI Embedding API の次元数
-        this.banditModel = {
+    // Save all in-memory bandit models to a single R2 object.
+    private async saveModelsToR2(): Promise<void> {
+        logInfo(`Attempting to save ${this.inMemoryModels.size} bandit models to R2.`);
+        try {
+            const modelsObject = Object.fromEntries(this.inMemoryModels);
+            await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify(modelsObject));
+            this.dirty = false; // Reset dirty flag after successful save
+            logInfo('Successfully saved all bandit models to R2.');
+        } catch (error) {
+            logError('Failed to save bandit models to R2.', error);
+        }
+    }
+    
+    // Initialize a new bandit model for a specific user.
+    private initializeNewBanditModel(userId: string): BanditModelState {
+        const dimension = 1536; // Dimension for text-embedding-3-small
+        const newModel: BanditModelState = {
             A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
             b: Array(dimension).fill(0),
             dimension: dimension,
-            alpha: 0.1, // UCB パラメータ alpha
+            alpha: 0.1, // UCB parameter
         };
-        // A を単位行列で初期化 (LinUCB の標準的な初期化)
+        // Initialize A as an identity matrix
         for (let i = 0; i < dimension; i++) {
-            this.banditModel.A[i][i] = 1.0;
+            newModel.A[i][i] = 1.0;
         }
-        logInfo(`Initialized new bandit model state with dimension ${dimension} for ${this.state.id.toString()}`);
-        // 初期状態を保存
-        await this.saveState();
+        this.inMemoryModels.set(userId, newModel);
+        this.dirty = true;
+        logInfo(`Initialized new bandit model for userId: ${userId}`);
+        return newModel;
     }
 
-    // Durable Object の状態（バンディットモデル）をR2に保存する
-    private async saveState(): Promise<void> {
-        if (this.banditModel) {
-            const userId = this.state.id.toString();
-            const objectKey = `${userId}/${this.banditStateKey}`; // ユーザーIDごとにフォルダ分け
+    async alarm() {
+        // This alarm is triggered periodically to save dirty models to R2.
+        if (this.dirty) {
+            logInfo('Alarm triggered. Saving dirty models to R2.');
+            await this.saveModelsToR2();
+        } else {
+            logInfo('Alarm triggered, but no changes to save.');
+        }
+    }
 
-            try {
-                // JSON形式で保存
-                const stateJson = JSON.stringify(this.banditModel);
-                await this.env.BANDIT_MODELS.put(objectKey, stateJson);
-                logInfo(`Saved bandit model state to R2 for ${userId}`);
-            } catch (error) {
-                logError(`Error saving bandit model state to R2 for ${userId}:`, error);
-                // エラーハンドリングを検討 (リトライ、アラートなど)
-            }
+    // Helper to ensure an alarm is set.
+    private async ensureAlarmIsSet(): Promise<void> {
+        const currentAlarm = await this.state.storage.getAlarm();
+        if (currentAlarm === null) {
+            logInfo('Alarm not set. Setting a new alarm to run in 60 minutes.');
+            // Set an alarm to run in 60 minutes (3600 * 1000 ms)
+            const oneHour = 60 * 60 * 1000;
+            await this.state.storage.setAlarm(Date.now() + oneHour);
         }
     }
 
     // Handle requests to the Durable Object
     async fetch(request: Request): Promise<Response> {
+        // Ensure an alarm is set to periodically save data.
+        await this.ensureAlarmIsSet();
+
         const url = new URL(request.url);
         const path = url.pathname;
-        const userId = this.state.id.toString();
 
         // /get-ucb-values エンドポイントのリクエストボディの型定義
         interface GetUcbValuesRequestBody {
+            userId: string;
             articlesWithEmbeddings: { articleId: string, embedding: number[] }[];
         }
 
         // /log-sent-articles エンドポイントのリクエストボディの型定義
         interface LogSentArticlesRequestBody {
+            userId: string;
             sentArticles: { articleId: string, timestamp: number, embedding: number[] }[];
         }
 
         // /log-click エンドポイントのリクエストボディの型定義
         interface LogClickRequestBody {
+            userId: string;
             articleId: string;
             timestamp: number;
         }
 
         // /update-bandit-from-click エンドポイントのリクエストボディの型定義
         interface UpdateBanditFromClickRequestBody {
+            userId: string;
             articleId: string;
             embedding: number[];
             reward: number;
@@ -285,48 +281,46 @@ export class ClickLogger extends DurableObject {
 
         // /learn-from-education エンドポイントのリクエストボディの型定義
         interface LearnFromEducationRequestBody {
+            userId: string;
             selectedArticles: { articleId: string, embedding: number[] }[];
         }
 
         if (request.method === 'POST' && path === '/log-click') {
             try {
-                const { articleId, timestamp } = await request.json() as LogClickRequestBody;
+                const { userId, articleId, timestamp } = await request.json() as LogClickRequestBody;
 
-                if (!articleId || timestamp === undefined) {
-                    logWarning('Log click failed: Missing articleId or timestamp in request body.');
+                if (!userId || !articleId || timestamp === undefined) {
+                    logWarning('Log click failed: Missing userId, articleId, or timestamp.');
                     return new Response('Missing parameters', { status: 400 });
                 }
 
-                // D1にクリックログを保存
                 await this.env.USER_DB.prepare(
                     `INSERT INTO click_logs (user_id, article_id, timestamp) VALUES (?, ?, ?)`
                 ).bind(userId, articleId, timestamp).run();
 
-                logInfo(`Logged click for user ${userId}, article ${articleId} at ${timestamp}`);
-
+                logInfo(`Logged click for user ${userId}, article ${articleId}`);
                 return new Response('Click logged', { status: 200 });
 
             } catch (error) {
-                logError('Error logging click:', error, { userId, requestUrl: request.url });
+                logError('Error logging click:', error, { requestUrl: request.url });
                 return new Response('Error logging click', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/get-ucb-values') {
              try {
-                if (!this.banditModel) {
-                    // モデルがロードされていない場合はエラー
-                     return new Response('Bandit model not loaded', { status: 500 });
+                const { userId, articlesWithEmbeddings } = await request.json() as GetUcbValuesRequestBody;
+                if (!userId || !Array.isArray(articlesWithEmbeddings)) {
+                     return new Response('Invalid input: userId and articlesWithEmbeddings array are required', { status: 400 });
                 }
 
-                const { articlesWithEmbeddings } = await request.json() as GetUcbValuesRequestBody; // 記事リストと埋め込みベクトルを受け取る
-                if (!Array.isArray(articlesWithEmbeddings)) {
-                     return new Response('Invalid input: articlesWithEmbeddings must be an array', { status: 400 });
+                let banditModel = this.inMemoryModels.get(userId);
+                if (!banditModel) {
+                    logWarning(`No model found for user ${userId} in get-ucb-values. Initializing a new one.`);
+                    banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                const ucbValues = this.getUCBValues(articlesWithEmbeddings);
-
+                const ucbValues = this.getUCBValues(banditModel, articlesWithEmbeddings);
                 return new Response(JSON.stringify(ucbValues), {
                     headers: { 'Content-Type': 'application/json' },
-                    status: 200
                 });
 
             } catch (error) {
@@ -335,24 +329,19 @@ export class ClickLogger extends DurableObject {
             }
         } else if (request.method === 'POST' && path === '/log-sent-articles') {
             try {
-                const { sentArticles } = await request.json() as LogSentArticlesRequestBody;
-                if (!Array.isArray(sentArticles)) {
-                    return new Response('Invalid input: sentArticles must be an array', { status: 400 });
+                const { userId, sentArticles } = await request.json() as LogSentArticlesRequestBody;
+                if (!userId || !Array.isArray(sentArticles)) {
+                    return new Response('Invalid input: userId and sentArticles array are required', { status: 400 });
                 }
 
-                logInfo(`Logging ${sentArticles.length} sent articles for user ${userId}`);
-
-                // D1に送信ログを保存
-                const insertPromises = sentArticles.map(async article => {
-                    const embeddingString = article.embedding ? JSON.stringify(article.embedding) : null;
-                    await this.env.USER_DB.prepare(
+                const statements = sentArticles.map(article => 
+                    this.env.USER_DB.prepare(
                         `INSERT INTO sent_articles (user_id, article_id, timestamp, embedding) VALUES (?, ?, ?, ?)`
-                    ).bind(userId, article.articleId, article.timestamp, embeddingString).run();
-                });
-                await Promise.all(insertPromises);
+                    ).bind(userId, article.articleId, article.timestamp, article.embedding ? JSON.stringify(article.embedding) : null)
+                );
+                await this.env.USER_DB.batch(statements);
 
-                logInfo(`Successfully logged sent articles for user ${userId}`);
-
+                logInfo(`Successfully logged ${sentArticles.length} sent articles for user ${userId}`);
                 return new Response('Sent articles logged', { status: 200 });
 
             } catch (error) {
@@ -360,87 +349,81 @@ export class ClickLogger extends DurableObject {
                 return new Response('Error logging sent articles', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/decay-rewards') {
-            // このエンドポイントは定期バッチ処理に置き換えられるため、ここでは何もしないか、廃止する
-            logWarning('/decay-rewards endpoint is deprecated and will be replaced by a batch process.');
-            return new Response('Deprecated endpoint', { status: 405 }); // Method Not Allowed or similar
+            logWarning('/decay-rewards endpoint is deprecated.');
+            return new Response('Deprecated endpoint', { status: 410 });
         } else if (request.method === 'POST' && path === '/learn-from-education') {
             try {
-                const { selectedArticles } = await request.json() as LearnFromEducationRequestBody;
-
-                if (!Array.isArray(selectedArticles)) {
-                    logWarning('Learn from education failed: selectedArticles is not an array.');
-                    return new Response('Invalid parameters', { status: 400 });
+                const { userId, selectedArticles } = await request.json() as LearnFromEducationRequestBody;
+                if (!userId || !Array.isArray(selectedArticles)) {
+                    return new Response('Invalid parameters: userId and selectedArticles array are required', { status: 400 });
                 }
 
-                logInfo(`Learning from ${selectedArticles.length} selected articles for user ${userId}`);
+                let banditModel = this.inMemoryModels.get(userId);
+                if (!banditModel) {
+                    logWarning(`No model found for user ${userId} in learn-from-education. Initializing a new one.`);
+                    banditModel = this.initializeNewBanditModel(userId);
+                }
 
-                if (this.banditModel) {
-                    const insertPromises = selectedArticles.map(async article => {
-                        if (article.embedding) {
-                            // ユーザー教育による選択は報酬 1.0 として学習
-                            this.updateBanditModel(article.embedding, 1.0);
-                            logInfo(`Updated bandit model with education data for article ${article.articleId}`, { userId, articleId: article.articleId });
-
-                            // D1に教育プログラムログを保存
-                            await this.env.USER_DB.prepare(
+                const logStatements = [];
+                for (const article of selectedArticles) {
+                    if (article.embedding) {
+                        this.updateBanditModel(banditModel, article.embedding, 1.0);
+                        logStatements.push(
+                            this.env.USER_DB.prepare(
                                 `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
-                            ).bind(userId, article.articleId, Date.now(), 'selected').run();
-                        } else {
-                            logWarning(`Cannot update bandit model or log education data for article ${article.articleId}: embedding missing.`);
-                        }
-                    });
-                    await Promise.all(insertPromises);
-
-                    // 状態全体を保存 (バンディットモデルの更新を含む)
-                    if (selectedArticles.length > 0) {
-                         await this.saveState();
-                         logInfo(`Saved Durable Object state after learning from education.`);
+                            ).bind(userId, article.articleId, Date.now(), 'selected')
+                        );
                     }
-                } else {
-                    logWarning(`Bandit model not initialized. Cannot learn from education or log education data for user ${userId}`);
+                }
+                
+                if (logStatements.length > 0) {
+                    await this.env.USER_DB.batch(logStatements);
+                    this.dirty = true;
+                    logInfo(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
                 }
 
                 return new Response('Learning from education completed', { status: 200 });
 
             } catch (error) {
-                logError('Error learning from education:', error, { userId, requestUrl: request.url });
+                logError('Error learning from education:', error, { requestUrl: request.url });
                 return new Response('Error learning from education', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
              try {
-                const { articleId, embedding, reward } = await request.json() as UpdateBanditFromClickRequestBody;
-
-                if (!articleId || !embedding || reward === undefined) {
-                    logWarning('Update bandit from click failed: Missing parameters.');
+                const { userId, articleId, embedding, reward } = await request.json() as UpdateBanditFromClickRequestBody;
+                if (!userId || !articleId || !embedding || reward === undefined) {
                     return new Response('Missing parameters', { status: 400 });
                 }
 
-                logInfo(`Updating bandit model from click for article ${articleId} with reward ${reward}`);
-
-                if (this.banditModel) {
-                    this.updateBanditModel(embedding, reward);
-                    await this.saveState();
-                    logInfo(`Successfully updated bandit model from click for article ${articleId}`);
-                } else {
-                    logWarning(`Bandit model not initialized. Cannot update bandit model from click for article ${articleId}.`);
-                    return new Response('Bandit model not initialized', { status: 500 });
+                let banditModel = this.inMemoryModels.get(userId);
+                if (!banditModel) {
+                    logWarning(`No model found for user ${userId} in update-bandit-from-click. Initializing a new one.`);
+                    banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                return new Response('Bandit model updated from click', { status: 200 });
+                this.updateBanditModel(banditModel, embedding, reward);
+                this.dirty = true;
+                logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
+                
+                return new Response('Bandit model updated', { status: 200 });
 
             } catch (error) {
-                logError('Error updating bandit model from click:', error, { userId, requestUrl: request.url });
+                logError('Error updating bandit model from click:', error, { requestUrl: request.url });
                 return new Response('Error updating bandit model from click', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/delete-all-data') {
+            // This is a destructive operation and should be used with caution.
+            // It now deletes the entire R2 object.
             try {
-                logInfo(`Deleting all data for Durable Object ${userId}`);
-                await this.state.storage.deleteAll();
-                logInfo(`All data deleted for Durable Object ${userId}`);
-                return new Response('All data deleted', { status: 200 });
+                logInfo(`Deleting all bandit models from R2.`);
+                await this.env.BANDIT_MODELS.delete(this.modelsR2Key);
+                this.inMemoryModels.clear();
+                this.dirty = false;
+                logInfo(`All bandit models deleted.`);
+                return new Response('All bandit models deleted', { status: 200 });
             } catch (error) {
-                logError('Error deleting all data:', error, { userId, requestUrl: request.url });
-                return new Response('Error deleting all data', { status: 500 });
+                logError('Error deleting all bandit models:', error, { requestUrl: request.url });
+                return new Response('Error deleting all models', { status: 500 });
             }
         }
 
@@ -449,82 +432,68 @@ export class ClickLogger extends DurableObject {
         return new Response('Not Found', { status: 404 });
     }
 
-    // 記事リストに対して LinUCB の UCB 値を計算する
-    private getUCBValues(articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {
-        if (!this.banditModel || this.banditModel.dimension === 0) {
-            logWarning("Bandit model not initialized or dimension is zero. Cannot calculate UCB values.");
-            return articles.map(article => ({ articleId: article.articleId, ucb: 0 })); // UCB値ゼロを返す
-        }
-
-        const { A, b, alpha, dimension } = this.banditModel;
-        const ucbResults: { articleId: string, ucb: number }[] = [];
-
-        try {
-            // A の逆行列を計算
-            const A_inv = invertMatrix(A);
-
-            for (const article of articles) {
-                const x = article.embedding; // 記事の特徴量ベクトル (embedding)
-
-                if (!x || x.length !== dimension) {
-                    logWarning(`Article ${article.articleId} has invalid or missing embedding.`, { articleId: article.articleId });
-                    ucbResults.push({ articleId: article.articleId, ucb: 0 }); // UCB値ゼロ
-                    continue;
-                }
-
-                // LinUCB の UCB 計算式: p_t(a) = x_t(a)^T * hat_theta_a + alpha * sqrt(x_t(a)^T * A_a_inverse * x_t(a))
-                // hat_theta_a = A_a_inverse * b_a
-                // ここではグローバルな A, b を使っているので、hat_theta = A_inverse * b となります。
-                const hat_theta = multiplyMatrixVector(A_inv, b);
-
-                // UCB 値の計算
-                const term1 = dotProduct(x, hat_theta); // x^T * hat_theta
-
-                // Calculate x^T * A_inv
-                const x_T_A_inv: number[] = [];
-                const A_inv_T = transposeMatrix(A_inv); // Transpose A_inv to easily get columns as rows
-                for (let i = 0; i < dimension; i++) {
-                    x_T_A_inv.push(dotProduct(x, A_inv_T[i])); // Dot product of x and i-th column of A_inv
-                }
-
-                const term2_sqrt = dotProduct(x_T_A_inv, x); // (x^T * A_inv) * x
-                const term2 = alpha * Math.sqrt(term2_sqrt); // alpha * sqrt(x^T * A_inv * x)
-
-                const ucb = term1 + term2;
-
-                ucbResults.push({ articleId: article.articleId, ucb: ucb });
-            }
-        } catch (error) {
-            logError("Error during UCB calculation:", error);
-            // エラーが発生した場合は、全ての記事に対してUCB値ゼロを返すか、エラーを伝えるか検討
-            // ここではUCB値ゼロを返します。
+    // Calculate UCB values for a list of articles for a specific user model.
+    private getUCBValues(banditModel: BanditModelState, articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {
+        if (banditModel.dimension === 0) {
+            logWarning("Bandit model dimension is zero. Cannot calculate UCB values.");
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
         }
 
+        const { A, b, alpha, dimension } = banditModel;
+        const ucbResults: { articleId: string, ucb: number }[] = [];
 
+        try {
+            const A_inv = invertMatrix(A);
+
+            for (const article of articles) {
+                const x = article.embedding;
+
+                if (!x || x.length !== dimension) {
+                    logWarning(`Article ${article.articleId} has invalid or missing embedding.`);
+                    ucbResults.push({ articleId: article.articleId, ucb: 0 });
+                    continue;
+                }
+
+                const hat_theta = multiplyMatrixVector(A_inv, b);
+                const term1 = dotProduct(x, hat_theta);
+
+                const x_T_A_inv: number[] = [];
+                const A_inv_T = transposeMatrix(A_inv);
+                for (let i = 0; i < dimension; i++) {
+                    x_T_A_inv.push(dotProduct(x, A_inv_T[i]));
+                }
+
+                const term2_sqrt = dotProduct(x_T_A_inv, x);
+                const term2 = alpha * Math.sqrt(Math.abs(term2_sqrt)); // Use Math.abs for safety
+
+                ucbResults.push({ articleId: article.articleId, ucb: term1 + term2 });
+            }
+        } catch (error) {
+            logError("Error during UCB calculation:", error);
+            return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
+        }
         return ucbResults;
     }
 
-    // バンディットモデルを更新するメソッド
-    // このメソッドは、教育プログラムからの学習時と、定期バッチ処理によるクリックログからの学習時に使用される
-    private updateBanditModel(embedding: number[], reward: number): void {
-        if (!this.banditModel || embedding.length !== this.banditModel.dimension) {
-            logWarning("Cannot update bandit model: model not initialized or embedding dimension mismatch.");
+    // Update a specific user's bandit model.
+    private updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number): void {
+        if (embedding.length !== banditModel.dimension) {
+            logWarning("Cannot update bandit model: embedding dimension mismatch.");
             return;
         }
 
-        const { A, b } = this.banditModel;
+        const { A, b, dimension } = banditModel;
         const x = embedding;
 
-        // A = A + x * x^T (行列の外積を加算)
-        for (let i = 0; i < this.banditModel.dimension; i++) {
-            for (let j = 0; j < this.banditModel.dimension; j++) {
+        // A = A + x * x^T
+        for (let i = 0; i < dimension; i++) {
+            for (let j = 0; j < dimension; j++) {
                 A[i][j] += x[i] * x[j];
             }
         }
 
-        // b = b + reward * x (ベクトルに加算)
-        for (let i = 0; i < this.banditModel.dimension; i++) {
+        // b = b + reward * x
+        for (let i = 0; i < dimension; i++) {
             b[i] += reward * x[i];
         }
     }
