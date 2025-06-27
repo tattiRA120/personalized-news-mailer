@@ -1,2 +1,0 @@
--- This migration has been applied manually or in a previous failed attempt.
--- The content_hash column already exists.

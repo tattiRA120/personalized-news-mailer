@@ -361,13 +361,9 @@ export default {
                     logInfo(`Finished cleanup of old logs for user ${userId} in D1.`, { userId });
 
 
-					// TODO: Update user profile with sent article IDs for future reference/negative feedback
-					// This could be done here or within the click logging process
-					// For now, let's add a placeholder for updating the profile with sent articles
 					// userProfile.sentArticleIds は userProfile から削除されたため、このロジックは不要
-					// userProfile.interests は教育プログラムで更新されるため、ここでは更新しない
-					await updateUserProfile(userProfile, env); // env を直接渡す
-					logInfo(`Updated user profile for ${userId}.`, { userId });
+					// userProfile に他の更新があれば updateUserProfile を呼び出すが、このフローでは不要
+					logInfo(`Finished processing user ${userId}.`, { userId });
 
 
 				} catch (userProcessError) {
@@ -435,7 +431,7 @@ export default {
 		if (request.method === 'POST' && path === '/register') {
 			logInfo('Registration request received');
 			try {
-				const { email } = await request.json() as { email: string }; // keywords を削除
+				const { email } = await request.json() as { email: string };
 
 				if (!email) {
 					logWarning('Registration failed: Missing email in request body.');
@@ -644,17 +640,9 @@ export default {
 					return new Response('User not found', { status: 404 });
 				}
 
-				// Update user profile with selected article IDs
-				// userProfile.interests は教育プログラムで選択された記事ID (リンク) を保持
-				const selectedArticleIds = selectedArticles.map(article => article.articleId);
-				userProfile.interests.push(...selectedArticleIds);
-				// 重複を排除
-				userProfile.interests = [...new Set(userProfile.interests)];
+				// Save updated user profile to D1 (if there were other updates to userProfile, though not in this specific flow)
 
-				// Save updated user profile to D1
-				await updateUserProfile(userProfile, env);
-
-				logInfo(`User interests updated successfully for user ${userId}.`, { userId, selectedArticleIds });
+				logInfo(`User education articles processed successfully for user ${userId}.`, { userId });
 
 				// --- Learn from User Education (Send to Durable Object) ---
 				logInfo(`Learning from user education for user ${userId}...`, { userId });
