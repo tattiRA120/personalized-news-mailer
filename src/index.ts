@@ -5,9 +5,9 @@ import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
 import { ClickLogger } from './clickLogger';
 import { BatchQueueDO } from './batchQueueDO';
 import { logError, logInfo, logWarning } from './logger';
-import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResults, prepareBatchInputFileContent, chunkArray } from './openaiClient'; // chunkArray を追加
+import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResults, prepareBatchInputFileContent } from './openaiClient';
 import { CHUNK_SIZE } from './config';
-import { cleanArticleText, generateContentHash } from './utils/textProcessor';
+import { cleanArticleText, generateContentHash, chunkArray } from './utils/textProcessor';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	USER_DB: D1Database;
@@ -325,20 +325,25 @@ export default {
 						logInfo(`Finished processing click logs and updating bandit model for user ${userId}.`, { userId });
 
                         // 処理済みのクリックログをD1から削除
-                        const clickLogIdsToDelete = clickLogs.map(log => log.article_id); // Assuming article_id is unique enough for deletion or need a primary key from click_logs table
+                        const clickLogIdsToDelete = clickLogs.map(log => log.article_id);
                         if (clickLogIdsToDelete.length > 0) {
-                            // D1のclick_logsテーブルにPRIMARY KEYのidがあるため、それを使って削除する
-                            // SELECT id FROM click_logs WHERE user_id = ? AND article_id IN (...)
-                            const { results: idsToDelete } = await env.USER_DB.prepare(
-                                `SELECT id FROM click_logs WHERE user_id = ? AND article_id IN (${clickLogIdsToDelete.map(() => '?').join(',')})`
-                            ).bind(userId, ...clickLogIdsToDelete).all<{ id: number }>();
+                            const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
+                            const idChunks = chunkArray(clickLogIdsToDelete, CHUNK_SIZE_SQL_VARIABLES);
 
-                            if (idsToDelete && idsToDelete.length > 0) {
-                                const deleteStmt = env.USER_DB.prepare(
-                                    `DELETE FROM click_logs WHERE id IN (${idsToDelete.map(() => '?').join(',')})`
-                                );
-                                await deleteStmt.bind(...idsToDelete.map(row => row.id)).run();
-                                logInfo(`Deleted ${idsToDelete.length} processed click logs from D1 for user ${userId}.`, { userId, deletedCount: idsToDelete.length });
+                            for (const chunk of idChunks) {
+                                const placeholders = chunk.map(() => '?').join(',');
+                                const { results: idsToDelete } = await env.USER_DB.prepare(
+                                    `SELECT id FROM click_logs WHERE user_id = ? AND article_id IN (${placeholders})`
+                                ).bind(userId, ...chunk).all<{ id: number }>();
+
+                                if (idsToDelete && idsToDelete.length > 0) {
+                                    const deletePlaceholders = idsToDelete.map(() => '?').join(',');
+                                    const deleteStmt = env.USER_DB.prepare(
+                                        `DELETE FROM click_logs WHERE id IN (${deletePlaceholders})`
+                                    );
+                                    await deleteStmt.bind(...idsToDelete.map(row => row.id)).run();
+                                    logInfo(`Deleted ${idsToDelete.length} processed click logs from D1 for user ${userId}.`, { userId, deletedCount: idsToDelete.length });
+                                }
                             }
                         }
 

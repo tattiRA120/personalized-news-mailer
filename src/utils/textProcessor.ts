@@ -57,3 +57,11 @@ export async function generateContentHash(content: string): Promise<string> {
     const hexHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
     return hexHash;
 }
+
+export function chunkArray<T>(array: T[], chunkSize: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < array.length; i += chunkSize) {
+        chunks.push(array.slice(i, i + chunkSize));
+    }
+    return chunks;
+}
