@@ -59,11 +59,18 @@ export default {
 
             let newArticles: NewsArticle[] = [];
             if (contentHashes.length > 0) {
-                // D1に既に存在するcontent_hashを問い合わせる
-                const placeholders = contentHashes.map(() => '?').join(',');
-                const stmt = env.DB.prepare(`SELECT content_hash FROM articles WHERE content_hash IN (${placeholders})`);
-                const { results: existingRows } = await stmt.bind(...contentHashes).all<{ content_hash: string }>();
-                const existingHashes = new Set(existingRows.map(row => row.content_hash));
+                const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
+                const contentHashChunks = chunkArray(contentHashes, CHUNK_SIZE_SQL_VARIABLES);
+                const existingHashes = new Set<string>();
+
+                for (const chunk of contentHashChunks) {
+                    const placeholders = chunk.map(() => '?').join(',');
+                    const query = `SELECT content_hash FROM articles WHERE content_hash IN (${placeholders})`;
+                    logInfo(`Executing D1 query: ${query} with ${chunk.length} variables.`, { query, variableCount: chunk.length });
+                    const stmt = env.DB.prepare(query);
+                    const { results: existingRows } = await stmt.bind(...chunk).all<{ content_hash: string }>();
+                    existingRows.forEach(row => existingHashes.add(row.content_hash));
+                }
                 logInfo(`Found ${existingHashes.size} existing content hashes in D1.`, { count: existingHashes.size });
 
                 // 新規記事のみをフィルタリング
@@ -328,22 +335,28 @@ export default {
                         const clickLogIdsToDelete = clickLogs.map(log => log.article_id);
                         if (clickLogIdsToDelete.length > 0) {
                             const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
-                            const idChunks = chunkArray(clickLogIdsToDelete, CHUNK_SIZE_SQL_VARIABLES);
+                            const articleIdChunks = chunkArray(clickLogIdsToDelete, CHUNK_SIZE_SQL_VARIABLES);
+                            let allIdsToDelete: { id: number }[] = [];
 
-                            for (const chunk of idChunks) {
+                            for (const chunk of articleIdChunks) {
                                 const placeholders = chunk.map(() => '?').join(',');
-                                const { results: idsToDelete } = await env.USER_DB.prepare(
-                                    `SELECT id FROM click_logs WHERE user_id = ? AND article_id IN (${placeholders})`
-                                ).bind(userId, ...chunk).all<{ id: number }>();
+                                const query = `SELECT id FROM click_logs WHERE user_id = ? AND article_id IN (${placeholders})`;
+                                logInfo(`Executing D1 query: ${query} with ${1 + chunk.length} variables.`, { query, variableCount: 1 + chunk.length });
+                                const { results: idsToDeleteChunk } = await env.USER_DB.prepare(query).bind(userId, ...chunk).all<{ id: number }>();
+                                allIdsToDelete = allIdsToDelete.concat(idsToDeleteChunk);
+                            }
 
-                                if (idsToDelete && idsToDelete.length > 0) {
-                                    const deletePlaceholders = idsToDelete.map(() => '?').join(',');
+                            if (allIdsToDelete.length > 0) {
+                                const idChunksForDelete = chunkArray(allIdsToDelete.map(row => row.id), CHUNK_SIZE_SQL_VARIABLES);
+                                for (const chunk of idChunksForDelete) {
+                                    const deletePlaceholders = chunk.map(() => '?').join(',');
                                     const deleteStmt = env.USER_DB.prepare(
                                         `DELETE FROM click_logs WHERE id IN (${deletePlaceholders})`
                                     );
-                                    await deleteStmt.bind(...idsToDelete.map(row => row.id)).run();
-                                    logInfo(`Deleted ${idsToDelete.length} processed click logs from D1 for user ${userId}.`, { userId, deletedCount: idsToDelete.length });
+                                    await deleteStmt.bind(...chunk).run();
+                                    logInfo(`Deleted ${chunk.length} processed click logs from D1 for user ${userId}.`, { userId, deletedCount: chunk.length });
                                 }
+                                logInfo(`Total deleted ${allIdsToDelete.length} processed click logs for user ${userId}.`, { userId, totalDeletedCount: allIdsToDelete.length });
                             }
                         }
 
@@ -856,22 +869,29 @@ async function saveArticlesToD1(
   }[],
   env: Env
 ): Promise<void> {
-  const stmt = env.DB.prepare(`
-    INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding, content_hash)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  const batch = records.map((rec) => {
-    return stmt.bind(
-      rec.articleId,
-      rec.title,
-      rec.url,
-      rec.publishedAt,
-      rec.content,
-      rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null,
-      rec.contentHash
-    );
-  });
-  await env.DB.batch(batch);
+  const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
+  const recordChunks = chunkArray(records, CHUNK_SIZE_SQL_VARIABLES);
+
+  for (const chunk of recordChunks) {
+    const query = `
+      INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding, content_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `;
+    logInfo(`Executing D1 batch INSERT query for ${chunk.length} records.`, { query, recordCount: chunk.length });
+    const stmt = env.DB.prepare(query);
+    const batch = chunk.map((rec) => {
+      return stmt.bind(
+        rec.articleId,
+        rec.title,
+        rec.url,
+        rec.publishedAt,
+        rec.content,
+        rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null,
+        rec.contentHash
+      );
+    });
+    await env.DB.batch(batch);
+  }
 }
 
 async function updateArticleEmbeddingsInD1(
@@ -881,16 +901,23 @@ async function updateArticleEmbeddingsInD1(
   }[],
   env: Env
 ): Promise<void> {
-  const stmt = env.DB.prepare(`
-    UPDATE articles
-    SET embedding = ?
-    WHERE article_id = ?
-  `);
-  const batch = records.map((rec) => {
-    return stmt.bind(
-      JSON.stringify(rec.embedding),
-      rec.articleId
-    );
-  });
-  await env.DB.batch(batch);
+  const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
+  const recordChunks = chunkArray(records, CHUNK_SIZE_SQL_VARIABLES);
+
+  for (const chunk of recordChunks) {
+    const query = `
+      UPDATE articles
+      SET embedding = ?
+      WHERE article_id = ?
+    `;
+    logInfo(`Executing D1 batch UPDATE query for ${chunk.length} records.`, { query, recordCount: chunk.length });
+    const stmt = env.DB.prepare(query);
+    const batch = chunk.map((rec) => {
+      return stmt.bind(
+        JSON.stringify(rec.embedding),
+        rec.articleId
+      );
+    });
+    await env.DB.batch(batch);
+  }
 }
