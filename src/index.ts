@@ -59,7 +59,7 @@ export default {
 
             let newArticles: NewsArticle[] = [];
             if (contentHashes.length > 0) {
-                const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
+                const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
                 const contentHashChunks = chunkArray(contentHashes, CHUNK_SIZE_SQL_VARIABLES);
                 const existingHashes = new Set<string>();
 
@@ -334,7 +334,7 @@ export default {
                         // 処理済みのクリックログをD1から削除
                         const clickLogIdsToDelete = clickLogs.map(log => log.article_id);
                         if (clickLogIdsToDelete.length > 0) {
-                            const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
+                            const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
                             const articleIdChunks = chunkArray(clickLogIdsToDelete, CHUNK_SIZE_SQL_VARIABLES);
                             let allIdsToDelete: { id: number }[] = [];
 
@@ -869,7 +869,7 @@ async function saveArticlesToD1(
   }[],
   env: Env
 ): Promise<void> {
-  const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
+  const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
   const recordChunks = chunkArray(records, CHUNK_SIZE_SQL_VARIABLES);
 
   for (const chunk of recordChunks) {
@@ -901,7 +901,7 @@ async function updateArticleEmbeddingsInD1(
   }[],
   env: Env
 ): Promise<void> {
-  const CHUNK_SIZE_SQL_VARIABLES = 500; // SQLiteの変数制限を考慮してチャンクサイズを設定
+  const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
   const recordChunks = chunkArray(records, CHUNK_SIZE_SQL_VARIABLES);
 
   for (const chunk of recordChunks) {
