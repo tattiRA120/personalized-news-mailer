@@ -22,14 +22,15 @@ export async function getUserProfile(userId: string, env: EnvWithUserDB): Promis
     try {
         const { results } = await env.USER_DB.prepare(
             `SELECT user_id, email, embedding FROM users WHERE user_id = ?`
-        ).bind(userId).all<UserProfile>();
+        ).bind(userId).all<{ user_id: string; email: string; embedding: string | null; }>();
 
         if (results && results.length > 0) {
-            const userProfile = results[0];
-            // embeddingが文字列として保存されている場合、JSON.parseで配列に戻す
-            if (typeof userProfile.embedding === 'string') {
-                userProfile.embedding = JSON.parse(userProfile.embedding);
-            }
+            const rawProfile = results[0];
+            const userProfile: UserProfile = {
+                userId: rawProfile.user_id, // user_id を userId にマッピング
+                email: rawProfile.email,
+                embedding: rawProfile.embedding ? JSON.parse(rawProfile.embedding) : undefined,
+            };
             logInfo(`Retrieved user profile for ${userId}.`, { userId });
             return userProfile;
         } else {
