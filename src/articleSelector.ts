@@ -52,7 +52,7 @@ export async function selectPersonalizedArticles(
     // Durable Object から記事のUCB値を取得
     const articlesWithEmbeddings = articles
         .filter(article => article.embedding !== undefined) // embedding が存在する記事のみ
-        .map(article => ({ articleId: article.articleId, embedding: JSON.parse(article.embedding!) })); // articleId を使用
+        .map(article => ({ articleId: article.articleId, embedding: article.embedding! })); // articleId を使用
 
     let ucbValues: { articleId: string, ucb: number }[] = [];
     if (articlesWithEmbeddings.length > 0) {
@@ -89,7 +89,7 @@ export async function selectPersonalizedArticles(
         // ユーザーの興味関心との関連度を計算 (コサイン類似度を使用)
         let interestRelevance = 0;
         if (userInterestEmbedding && article.embedding) {
-            interestRelevance = cosineSimilarity(userInterestEmbedding, JSON.parse(article.embedding));
+            interestRelevance = cosineSimilarity(userInterestEmbedding, article.embedding);
         }
 
         // TODO: これらの重みは調整可能なハイパーパラメータとすることができます。
@@ -131,7 +131,7 @@ export async function selectPersonalizedArticles(
             if (currentArticle.embedding) {
                 for (const selectedArticle of selected) {
                     if (selectedArticle.embedding) {
-                        const similarity = cosineSimilarity(JSON.parse(currentArticle.embedding), JSON.parse(selectedArticle.embedding));
+                        const similarity = cosineSimilarity(currentArticle.embedding, selectedArticle.embedding);
                         maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarity);
                     }
                 }
