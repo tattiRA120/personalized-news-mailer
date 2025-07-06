@@ -151,7 +151,7 @@ export default {
                     const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
                     const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
-                    await batchQueueDOStub.fetch(new Request('http://dummy-host/start-polling', {
+                    await batchQueueDOStub.fetch(new Request('/start-polling', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
@@ -166,7 +166,7 @@ export default {
 
                     if (remainingChunks.length > 0) {
                         logInfo(`Delegating ${remainingChunks.length} remaining chunks to BatchQueueDO.`);
-                        await batchQueueDOStub.fetch(new Request('http://dummy-host/queue-chunks', {
+                        await batchQueueDOStub.fetch(new Request('/queue-chunks', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ chunks: remainingChunks }),
@@ -279,7 +279,7 @@ export default {
 					}));
 
 					// In scheduled task, request.url is not defined. Use relative path.
-					const logSentResponse = await clickLogger.fetch(new Request('http://dummy-host/log-sent-articles', {
+					const logSentResponse = await clickLogger.fetch(new Request('/log-sent-articles', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ userId: userId, sentArticles: sentArticlesData }),
@@ -313,7 +313,7 @@ export default {
 							if (articleEmbedding) {
 								// バンディットモデルを更新
 								const reward = 1.0; // クリックイベントなので報酬は 1.0
-								const updateResponse = await clickLogger.fetch(new Request('http://dummy-host/update-bandit-from-click', {
+								const updateResponse = await clickLogger.fetch(new Request('/update-bandit-from-click', {
 									method: 'POST',
 									headers: { 'Content-Type': 'application/json' },
 									body: JSON.stringify({ userId: userId, articleId: articleId, embedding: articleEmbedding, reward: reward }),
@@ -524,7 +524,7 @@ export default {
 
 				// Send a request to the Durable Object to log the click
 				// Use a relative path for the Durable Object fetch
-				const logClickResponse = await clickLogger.fetch(new Request('http://dummy-host/log-click', {
+				const logClickResponse = await clickLogger.fetch(new Request('/log-click', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ userId: userId, articleId: articleId, timestamp: Date.now() }),
@@ -694,7 +694,7 @@ export default {
 
 						// Send a request to the Durable Object to learn from selected articles
 						// Use a relative path for the Durable Object fetch
-						const learnResponse = await clickLogger.fetch(new Request('http://dummy-host/learn-from-education', {
+						const learnResponse = await clickLogger.fetch(new Request('/learn-from-education', {
 							method: 'POST',
 							headers: { 'Content-Type': 'application/json' },
 							body: JSON.stringify({ userId: userId, selectedArticles: batch }),
@@ -732,7 +732,7 @@ export default {
 				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-				const deleteResponse = await clickLogger.fetch(new Request('http://dummy-host/delete-all-data', {
+				const deleteResponse = await clickLogger.fetch(new Request('/delete-all-data', {
 					method: 'POST',
 				}));
 
@@ -822,7 +822,7 @@ export default {
                         const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
                         const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
-                        await batchQueueDOStub.fetch(new Request('http://dummy-host/start-polling', {
+                        await batchQueueDOStub.fetch(new Request('/start-polling', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ batchId: batchJob.id, inputFileId: uploadedFile.id }),

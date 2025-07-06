@@ -46,8 +46,14 @@ async function refreshAccessToken(userId: string, env: Env): Promise<string | nu
 
         if (!tokenResponse.ok) {
             const errorText = await tokenResponse.text();
-            logError(`Failed to refresh access token for user ${userId}: ${tokenResponse.statusText}`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
-            // TODO: Handle invalid or expired refresh tokens (e.g., prompt user to re-authorize)
+            // invalid_grant エラーの場合、リフレッシュトークンが無効であることを示す
+            if (errorText.includes('"error": "invalid_grant"')) {
+                logError(`Failed to refresh access token for user ${userId}: Invalid Grant. Refresh token might be expired or revoked. User needs to re-authorize.`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
+                // 無効なリフレッシュトークンをKVストアから削除
+                await env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
+            } else {
+                logError(`Failed to refresh access token for user ${userId}: ${tokenResponse.statusText}`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
+            }
             return null;
         }
 
