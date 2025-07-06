@@ -863,8 +863,8 @@ export default {
 
                 logInfo(`Debug: Deleting user data for user ${userId} from USER_DB...`, { userId });
 
-                // Delete from user_profiles table
-                await env.USER_DB.prepare(`DELETE FROM user_profiles WHERE user_id = ?`).bind(userId).run();
+                // Delete from users table
+                await env.USER_DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted user profile for ${userId}.`, { userId });
 
                 // Delete from click_logs table
