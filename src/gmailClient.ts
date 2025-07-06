@@ -20,9 +20,9 @@ interface Env {
     'mail-news-gmail-tokens': KVNamespace;
 }
 
-// リフレッシュトークンを使用して新しいアクセストークンを取得する関数
-async function refreshAccessToken(userId: string, env: Env): Promise<string | null> {
-    logInfo(`Attempting to refresh access token for user ${userId}.`, { userId });
+// リフレッシュトークンを使用して新しいアクセストークンを取得し、KVに保存する関数
+async function refreshAndStoreAccessToken(userId: string, env: Env): Promise<string | null> {
+    logInfo(`Attempting to refresh and store access token for user ${userId}.`, { userId });
     try {
         const refreshToken = await env['mail-news-gmail-tokens'].get(`refresh_token:${userId}`);
 
@@ -46,10 +46,8 @@ async function refreshAccessToken(userId: string, env: Env): Promise<string | nu
 
         if (!tokenResponse.ok) {
             const errorText = await tokenResponse.text();
-            // invalid_grant エラーの場合、リフレッシュトークンが無効であることを示す
             if (errorText.includes('"error": "invalid_grant"')) {
                 logError(`Failed to refresh access token for user ${userId}: Invalid Grant. Refresh token might be expired or revoked. User needs to re-authorize.`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
-                // 無効なリフレッシュトークンをKVストアから削除
                 await env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
             } else {
                 logError(`Failed to refresh access token for user ${userId}: ${tokenResponse.statusText}`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
@@ -59,13 +57,33 @@ async function refreshAccessToken(userId: string, env: Env): Promise<string | nu
 
         const tokenData: any = await tokenResponse.json();
         const newAccessToken = tokenData.access_token;
-        logInfo(`Successfully refreshed access token for user ${userId}.`, { userId });
+        const expiresIn = tokenData.expires_in; // 秒単位
+
+        // アクセストークンと有効期限をKVストアに保存
+        // 有効期限は現在時刻からの秒数で設定
+        await env['mail-news-gmail-tokens'].put(`access_token:${userId}`, newAccessToken, { expirationTtl: expiresIn - 300 }); // 5分前には期限切れとみなす
+
+        logInfo(`Successfully refreshed and stored access token for user ${userId}.`, { userId, expiresIn });
         return newAccessToken;
 
     } catch (error) {
-        logError(`Exception when refreshing access token for user ${userId}:`, error, { userId });
+        logError(`Exception when refreshing and storing access token for user ${userId}:`, error, { userId });
         return null;
     }
+}
+
+// アクセストークンを取得する関数 (KVから取得、またはリフレッシュ)
+async function getAccessToken(userId: string, env: Env): Promise<string | null> {
+    logInfo(`Attempting to get access token for user ${userId}.`, { userId });
+    const accessToken = await env['mail-news-gmail-tokens'].get(`access_token:${userId}`);
+
+    if (accessToken) {
+        logInfo(`Found valid access token in KV for user ${userId}.`, { userId });
+        return accessToken;
+    }
+
+    logInfo(`Access token not found or expired in KV for user ${userId}. Attempting to refresh.`, { userId });
+    return await refreshAndStoreAccessToken(userId, env);
 }
 
 // Base64 エンコード関数 (UTF-8対応、パディングあり)
@@ -119,11 +137,11 @@ export async function sendEmail(userId: string, params: SendEmailParams, env: En
   const GMAIL_API_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 
   try {
-    // リフレッシュトークンを使用してアクセストークンを取得
-    const accessToken = await refreshAccessToken(userId, env);
+    // アクセストークンを取得 (KVから、またはリフレッシュして取得)
+    const accessToken = await getAccessToken(userId, env);
 
     if (!accessToken) {
-        logError(`Failed to get access token for user ${userId}. Cannot send email.`, null, { userId });
+        logError(`Failed to get or refresh access token for user ${userId}. Cannot send email.`, null, { userId });
         return new Response('Error sending email: Could not obtain access token', { status: 500 });
     }
 
