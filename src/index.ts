@@ -845,6 +845,54 @@ export default {
                 logError('Debug: Error during force embedding process:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error during force embedding', { status: 500 });
             }
+        } else if (request.method === 'POST' && path === '/debug/delete-user-data') {
+            logInfo('Debug: Delete user data request received');
+            // Check for DEBUG_API_KEY for authentication
+            const debugApiKey = request.headers.get('X-Debug-Key');
+            if (debugApiKey !== env.DEBUG_API_KEY) {
+                logWarning('Debug: Unauthorized access attempt to /debug/delete-user-data', { providedKey: debugApiKey });
+                return new Response('Unauthorized', { status: 401 });
+            }
+
+            try {
+                const { userId } = await request.json() as { userId: string };
+                if (!userId) {
+                    logWarning('Debug: Delete user data failed: Missing userId in request body.');
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                logInfo(`Debug: Deleting user data for user ${userId} from USER_DB...`, { userId });
+
+                // Delete from user_profiles table
+                await env.USER_DB.prepare(`DELETE FROM user_profiles WHERE user_id = ?`).bind(userId).run();
+                logInfo(`Debug: Deleted user profile for ${userId}.`, { userId });
+
+                // Delete from click_logs table
+                await env.USER_DB.prepare(`DELETE FROM click_logs WHERE user_id = ?`).bind(userId).run();
+                logInfo(`Debug: Deleted click logs for ${userId}.`, { userId });
+
+                // Delete from sent_articles table
+                await env.USER_DB.prepare(`DELETE FROM sent_articles WHERE user_id = ?`).bind(userId).run();
+                logInfo(`Debug: Deleted sent articles for ${userId}.`, { userId });
+
+                // Delete from education_logs table
+                await env.USER_DB.prepare(`DELETE FROM education_logs WHERE user_id = ?`).bind(userId).run();
+                logInfo(`Debug: Deleted education logs for ${userId}.`, { userId });
+
+                // Delete refresh token from KV store
+                await env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
+                logInfo(`Debug: Deleted Gmail refresh token for ${userId}.`, { userId });
+
+                logInfo(`Debug: Successfully deleted all data for user ${userId}.`, { userId });
+                return new Response(JSON.stringify({ message: `User data for ${userId} deleted successfully.` }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                });
+
+            } catch (error) {
+                logError('Debug: Error during user data deletion:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error during user data deletion', { status: 500 });
+            }
         }
 
 
