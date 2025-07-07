@@ -183,9 +183,7 @@ export async function getOpenAIBatchJobResults(output_file_id: string, env: { OP
  */
 export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
     return articles.map(article => JSON.stringify({
-        custom_id: JSON.stringify({
-            articleId: article.articleId // custom_id に articleId のみを含める
-        }),
+        custom_id: article.articleId, // custom_id に articleId を直接含める
         method: "POST",
         url: "/v1/embeddings",
         body: {

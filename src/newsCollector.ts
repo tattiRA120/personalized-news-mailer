@@ -12,14 +12,13 @@ function stripHtmlTags(html: string): string {
 }
 
 export interface NewsArticle {
-    articleId: string; // Add articleId as UUID
+    articleId: string; // Add articleId as ContentHash
     title: string;
     link: string;
     sourceName: string;
     summary?: string; // Add summary field
     publishedAt: number; // Add publishedAt as Unix timestamp
     embedding?: number[]; // Add embedding field for temporary storage
-    contentHash?: string; // Add contentHash field
 }
 
 async function fetchRSSFeed(url: string): Promise<string | null> {
@@ -36,7 +35,7 @@ async function fetchRSSFeed(url: string): Promise<string | null> {
     }
 }
 
-function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
+async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<NewsArticle[]> {
     const articles: NewsArticle[] = [];
     const options = {
         ignoreAttributes: false,
@@ -58,9 +57,10 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
             if (item.title && item.link) {
                 const summary = item.description?.__cdata || item.description || item['content:encoded']?.__cdata || item['content:encoded'] || '';
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
+                const title = stripHtmlTags((item.title as any).__cdata || item.title);
                 articles.push({
-                    articleId: crypto.randomUUID(), // Generate UUID
-                    title: stripHtmlTags((item.title as any).__cdata || item.title), // HTMLタグを除去
+                    articleId: await generateContentHash(title), // Generate contentHash for articleId
+                    title: title, // HTMLタグを除去
                     link: item.link,
                     sourceName: '', // Will be filled later
                     summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
@@ -92,9 +92,10 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
             const pubDate = entry.updated || entry.published || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
+                const cleanedTitle = stripHtmlTags(title);
                 articles.push({
-                    articleId: crypto.randomUUID(), // Generate UUID
-                    title: stripHtmlTags(title), // HTMLタグを除去
+                    articleId: await generateContentHash(cleanedTitle), // Generate contentHash for articleId
+                    title: cleanedTitle, // HTMLタグを除去
                     link: link,
                     sourceName: '', // Will be filled later
                     summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
@@ -114,9 +115,10 @@ function parseFeedWithFastXmlParser(xml: string, url: string): NewsArticle[] {
             const pubDate = item['dc:date'] || item.date || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
+                const cleanedTitle = stripHtmlTags(title);
                 articles.push({
-                    articleId: crypto.randomUUID(), // Generate UUID
-                    title: stripHtmlTags(title), // HTMLタグを除去
+                    articleId: await generateContentHash(cleanedTitle), // Generate contentHash for articleId
+                    title: cleanedTitle, // HTMLタグを除去
                     link: link,
                     sourceName: '', // Will be filled later
                     summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
@@ -183,7 +185,7 @@ export async function collectNews(): Promise<NewsArticle[]> {
             }
 
 
-            const articles = parseFeedWithFastXmlParser(xml, url); // Use new parser
+            const articles = await parseFeedWithFastXmlParser(xml, url); // Use new parser and await it
             const articlesWithSource = articles.map(article => ({
                 ...article,
                 sourceName: sourceName
@@ -209,11 +211,6 @@ export async function collectNews(): Promise<NewsArticle[]> {
         title: cleanArticleText(article.title),
         summary: article.summary ? cleanArticleText(article.summary) : undefined,
     }));
-
-    // Calculate contentHash for all articles
-    for (const article of allArticles) {
-        article.contentHash = await generateContentHash(`${article.title} ${article.summary || ''}`);
-    }
 
     logInfo(`Collected ${allArticles.length} articles from ${NEWS_RSS_URLS.length} sources.`, { articleCount: allArticles.length, sourceCount: NEWS_RSS_URLS.length });
     return allArticles;
