@@ -135,13 +135,13 @@
                 {
                     "binding": "DB",
                     "database_name": "mail-news-articles-db",
-                    "database_id": "bd19a6ea-8a5a-4fc5-8996-d95e219e94cb",
+                    "database_id": "dfc53ac6-f067-4cd0-9a53-bc80d088688b",
                     "migrations_dir": "./migrations"
                 },
                 {
                     "binding": "USER_DB",
                     "database_name": "mail-news-user-db",
-                    "database_id": "6cee90bf-588c-43be-8c6e-a181761c09aa",
+                    "database_id": "be476eed-3bad-4138-8adb-93f474ad8973",
                     "migrations_dir": "./migrations"
                 }
             ],
