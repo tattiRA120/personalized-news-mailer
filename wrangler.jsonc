@@ -62,7 +62,7 @@
 		{
 			"binding": "USER_DB",
 			"database_name": "mail-news-user-db",
-			"database_id": "be476eed-3bad-4138-8adb-93f474ad8973",
+			"database_id": "937975ce-bb93-4115-92af-8c37b808a9ab",
 			"migrations_dir": "./migrations"
 		}
 	],
@@ -141,7 +141,7 @@
                 {
                     "binding": "USER_DB",
                     "database_name": "mail-news-user-db",
-                    "database_id": "be476eed-3bad-4138-8adb-93f474ad8973",
+                    "database_id": "937975ce-bb93-4115-92af-8c37b808a9ab",
                     "migrations_dir": "./migrations"
                 }
             ],
