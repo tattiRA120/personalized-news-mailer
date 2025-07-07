@@ -54,27 +54,27 @@ export default {
 			}
 
             // --- 1. 新規記事のみをD1に保存 ---
-            const contentHashes = articles.map(a => a.contentHash).filter(Boolean) as string[];
-            logInfo(`Collected ${contentHashes.length} content hashes from new articles.`, { count: contentHashes.length });
+            const articleIds = articles.map(a => a.articleId).filter(Boolean) as string[];
+            logInfo(`Collected ${articleIds.length} article IDs from new articles.`, { count: articleIds.length });
 
             let newArticles: NewsArticle[] = [];
-            if (contentHashes.length > 0) {
+            if (articleIds.length > 0) {
                 const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
-                const contentHashChunks = chunkArray(contentHashes, CHUNK_SIZE_SQL_VARIABLES);
-                const existingHashes = new Set<string>();
+                const articleIdChunks = chunkArray(articleIds, CHUNK_SIZE_SQL_VARIABLES);
+                const existingArticleIds = new Set<string>();
 
-                for (const chunk of contentHashChunks) {
+                for (const chunk of articleIdChunks) {
                     const placeholders = chunk.map(() => '?').join(',');
-                    const query = `SELECT content_hash FROM articles WHERE content_hash IN (${placeholders})`;
+                    const query = `SELECT article_id FROM articles WHERE article_id IN (${placeholders})`;
                     logInfo(`Executing D1 query: ${query} with ${chunk.length} variables.`, { query, variableCount: chunk.length });
                     const stmt = env.DB.prepare(query);
-                    const { results: existingRows } = await stmt.bind(...chunk).all<{ content_hash: string }>();
-                    existingRows.forEach(row => existingHashes.add(row.content_hash));
+                    const { results: existingRows } = await stmt.bind(...chunk).all<{ article_id: string }>();
+                    existingRows.forEach(row => existingArticleIds.add(row.article_id));
                 }
-                logInfo(`Found ${existingHashes.size} existing content hashes in D1.`, { count: existingHashes.size });
+                logInfo(`Found ${existingArticleIds.size} existing article IDs in D1.`, { count: existingArticleIds.size });
 
                 // 新規記事のみをフィルタリング
-                newArticles = articles.filter(article => article.contentHash && !existingHashes.has(article.contentHash));
+                newArticles = articles.filter(article => article.articleId && !existingArticleIds.has(article.articleId));
                 logInfo(`Filtered down to ${newArticles.length} new articles to be saved.`, { count: newArticles.length });
 
                 if (newArticles.length > 0) {
@@ -85,7 +85,6 @@ export default {
                         publishedAt: article.publishedAt,
                         content: article.summary || '',
                         embedding: undefined,
-                        contentHash: article.contentHash || '',
                     }));
                     await saveArticlesToD1(articlesToSaveToD1, env);
                     logInfo(`Saved ${articlesToSaveToD1.length} new articles to D1.`, { count: articlesToSaveToD1.length });
@@ -151,11 +150,11 @@ export default {
                     const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
                     const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
-                    await batchQueueDOStub.fetch(new Request('/start-polling', {
+                    await batchQueueDOStub.fetch('/start-polling', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
-                    }));
+                    });
                     logInfo(`Successfully delegated batch job ${job.id} to BatchQueueDO.`);
 
                     // 残りチャンクを分散処理用に委譲 (Durable Object を利用)
@@ -166,11 +165,11 @@ export default {
 
                     if (remainingChunks.length > 0) {
                         logInfo(`Delegating ${remainingChunks.length} remaining chunks to BatchQueueDO.`);
-                        await batchQueueDOStub.fetch(new Request('/queue-chunks', {
+                        await batchQueueDOStub.fetch('/queue-chunks', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ chunks: remainingChunks }),
-                        }));
+                        });
                         logInfo(`Successfully delegated ${remainingChunks.length} chunks to BatchQueueDO.`);
                     }
                 }
@@ -279,11 +278,11 @@ export default {
 					}));
 
 					// In scheduled task, request.url is not defined. Use relative path.
-					const logSentResponse = await clickLogger.fetch(new Request('/log-sent-articles', {
+					const logSentResponse = await clickLogger.fetch('/log-sent-articles', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
 						body: JSON.stringify({ userId: userId, sentArticles: sentArticlesData }),
-					}));
+					});
 
 					if (logSentResponse.ok) {
 						logInfo(`Successfully logged sent articles for user ${userId}.`, { userId });
@@ -313,11 +312,11 @@ export default {
 							if (articleEmbedding) {
 								// バンディットモデルを更新
 								const reward = 1.0; // クリックイベントなので報酬は 1.0
-								const updateResponse = await clickLogger.fetch(new Request('/update-bandit-from-click', {
+								const updateResponse = await clickLogger.fetch('/update-bandit-from-click', {
 									method: 'POST',
 									headers: { 'Content-Type': 'application/json' },
 									body: JSON.stringify({ userId: userId, articleId: articleId, embedding: articleEmbedding, reward: reward }),
-								}));
+								});
 
 								if (updateResponse.ok) {
 									logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}.`, { userId, articleId });
@@ -524,11 +523,11 @@ export default {
 
 				// Send a request to the Durable Object to log the click
 				// Use a relative path for the Durable Object fetch
-				const logClickResponse = await clickLogger.fetch(new Request('/log-click', {
+				const logClickResponse = await clickLogger.fetch('/log-click', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({ userId: userId, articleId: articleId, timestamp: Date.now() }),
-				}));
+				});
 
 				if (logClickResponse.ok) {
 					logInfo(`Click logged successfully for user ${userId}, article ${articleId}`, { userId, articleId });
@@ -694,11 +693,11 @@ export default {
 
 						// Send a request to the Durable Object to learn from selected articles
 						// Use a relative path for the Durable Object fetch
-						const learnResponse = await clickLogger.fetch(new Request('/learn-from-education', {
+						const learnResponse = await clickLogger.fetch('/learn-from-education', {
 							method: 'POST',
 							headers: { 'Content-Type': 'application/json' },
 							body: JSON.stringify({ userId: userId, selectedArticles: batch }),
-						}));
+						});
 
 						if (learnResponse.ok) {
 							logInfo(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
@@ -732,9 +731,9 @@ export default {
 				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-				const deleteResponse = await clickLogger.fetch(new Request('/delete-all-data', {
+				const deleteResponse = await clickLogger.fetch('/delete-all-data', {
 					method: 'POST',
-				}));
+				});
 
 				if (deleteResponse.ok) {
 					logInfo('Successfully triggered deletion of all bandit models.');
@@ -776,24 +775,23 @@ export default {
                     publishedAt: article.publishedAt,
                     content: article.summary || '',
                     embedding: undefined,
-                    contentHash: article.contentHash || '', // contentHash を割り当てる
                 }));
                 await saveArticlesToD1(articlesToSaveToD1, env);
                 logInfo(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
 
                 logInfo('Debug: Starting OpenAI Batch API embedding job creation for force embedding...');
 
-                // D1から既存の記事のcontent_hashとembeddingの有無を取得
-                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT content_hash, embedding FROM articles").all();
-                const existingArticleHashesWithEmbedding = new Set(
+                // D1から既存の記事のarticle_idとembeddingの有無を取得
+                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT article_id, embedding FROM articles").all();
+                const existingArticleIdsWithEmbedding = new Set(
                     (existingArticlesInDb as any[])
-                        .filter(row => row.embedding !== null && row.embedding !== undefined && row.content_hash !== null && row.content_hash !== undefined)
-                        .map(row => row.content_hash)
+                        .filter(row => row.embedding !== null && row.embedding !== undefined && row.article_id !== null && row.article_id !== undefined)
+                        .map(row => row.article_id)
                 );
-                logInfo(`Debug: Found ${existingArticleHashesWithEmbedding.size} articles with existing embeddings in D1 (based on content hash).`, { count: existingArticleHashesWithEmbedding.size });
+                logInfo(`Debug: Found ${existingArticleIdsWithEmbedding.size} articles with existing embeddings in D1 (based on article ID).`, { count: existingArticleIdsWithEmbedding.size });
 
-                // 収集した記事から、既にembeddingが存在する記事を除外 (contentHashで判断)
-                let articlesToEmbed = articles.filter(article => article.contentHash && !existingArticleHashesWithEmbedding.has(article.contentHash));
+                // 収集した記事から、既にembeddingが存在する記事を除外 (articleIdで判断)
+                let articlesToEmbed = articles.filter(article => article.articleId && !existingArticleIdsWithEmbedding.has(article.articleId));
                 logInfo(`Debug: Filtered down to ${articlesToEmbed.length} articles that need embedding for force embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
                 if (articlesToEmbed.length === 0) {
@@ -822,11 +820,11 @@ export default {
                         const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
                         const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
-                        await batchQueueDOStub.fetch(new Request('/start-polling', {
+                        await batchQueueDOStub.fetch('/start-polling', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ batchId: batchJob.id, inputFileId: uploadedFile.id }),
-                        }));
+                        });
                         logInfo(`Debug: Successfully delegated batch job ${batchJob.id} to BatchQueueDO.`);
 
                         return new Response(JSON.stringify({ message: 'Batch embedding job initiated successfully.', jobId: batchJob.id }), {
@@ -913,7 +911,6 @@ async function saveArticlesToD1(
     publishedAt: number;
     content: string;
     embedding: number[] | undefined; // embedding を undefined も許容するように変更
-    contentHash: string;
   }[],
   env: Env
 ): Promise<void> {
@@ -922,8 +919,8 @@ async function saveArticlesToD1(
 
   for (const chunk of recordChunks) {
     const query = `
-      INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding, content_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding)
+      VALUES (?, ?, ?, ?, ?, ?)
     `;
     logInfo(`Executing D1 batch INSERT query for ${chunk.length} records.`, { query, recordCount: chunk.length });
     const stmt = env.DB.prepare(query);
@@ -934,8 +931,7 @@ async function saveArticlesToD1(
         rec.url,
         rec.publishedAt,
         rec.content,
-        rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null,
-        rec.contentHash
+        rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null
       );
     });
     await env.DB.batch(batch);

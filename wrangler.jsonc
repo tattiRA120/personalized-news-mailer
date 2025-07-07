@@ -40,6 +40,15 @@
 			}
 		]
 	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_classes": [
+				"ClickLogger",
+				"BatchQueueDO"
+			]
+		}
+	],
 
 
 
