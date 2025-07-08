@@ -150,11 +150,13 @@ export default {
                     const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
                     const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
-                    await batchQueueDOStub.fetch('/start-polling', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
-                    });
+                    await batchQueueDOStub.fetch(
+                        new Request('/start-polling', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
+                        })
+                    );
                     logInfo(`Successfully delegated batch job ${job.id} to BatchQueueDO.`);
 
                     // 残りチャンクを分散処理用に委譲 (Durable Object を利用)
@@ -165,11 +167,13 @@ export default {
 
                     if (remainingChunks.length > 0) {
                         logInfo(`Delegating ${remainingChunks.length} remaining chunks to BatchQueueDO.`);
-                        await batchQueueDOStub.fetch('/queue-chunks', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ chunks: remainingChunks }),
-                        });
+                        await batchQueueDOStub.fetch(
+                            new Request('/queue-chunks', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ chunks: remainingChunks }),
+                            })
+                        );
                         logInfo(`Successfully delegated ${remainingChunks.length} chunks to BatchQueueDO.`);
                     }
                 }
@@ -278,11 +282,13 @@ export default {
 					}));
 
 					// In scheduled task, request.url is not defined. Use relative path.
-					const logSentResponse = await clickLogger.fetch('/log-sent-articles', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ userId: userId, sentArticles: sentArticlesData }),
-					});
+					const logSentResponse = await clickLogger.fetch(
+                        new Request('/log-sent-articles', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ userId: userId, sentArticles: sentArticlesData }),
+                        })
+                    );
 
 					if (logSentResponse.ok) {
 						logInfo(`Successfully logged sent articles for user ${userId}.`, { userId });
@@ -312,11 +318,13 @@ export default {
 							if (articleEmbedding) {
 								// バンディットモデルを更新
 								const reward = 1.0; // クリックイベントなので報酬は 1.0
-								const updateResponse = await clickLogger.fetch('/update-bandit-from-click', {
-									method: 'POST',
-									headers: { 'Content-Type': 'application/json' },
-									body: JSON.stringify({ userId: userId, articleId: articleId, embedding: articleEmbedding, reward: reward }),
-								});
+								const updateResponse = await clickLogger.fetch(
+                                    new Request('/update-bandit-from-click', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ userId: userId, articleId: articleId, embedding: articleEmbedding, reward: reward }),
+                                    })
+                                );
 
 								if (updateResponse.ok) {
 									logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}.`, { userId, articleId });
@@ -523,11 +531,13 @@ export default {
 
 				// Send a request to the Durable Object to log the click
 				// Use a relative path for the Durable Object fetch
-				const logClickResponse = await clickLogger.fetch('/log-click', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ userId: userId, articleId: articleId, timestamp: Date.now() }),
-				});
+				const logClickResponse = await clickLogger.fetch(
+                    new Request('/log-click', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId: userId, articleId: articleId, timestamp: Date.now() }),
+                    })
+                );
 
 				if (logClickResponse.ok) {
 					logInfo(`Click logged successfully for user ${userId}, article ${articleId}`, { userId, articleId });
@@ -693,11 +703,13 @@ export default {
 
 						// Send a request to the Durable Object to learn from selected articles
 						// Use a relative path for the Durable Object fetch
-						const learnResponse = await clickLogger.fetch('/learn-from-education', {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ userId: userId, selectedArticles: batch }),
-						});
+						const learnResponse = await clickLogger.fetch(
+                            new Request('/learn-from-education', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: userId, selectedArticles: batch }),
+                            })
+                        );
 
 						if (learnResponse.ok) {
 							logInfo(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
@@ -731,9 +743,11 @@ export default {
 				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-				const deleteResponse = await clickLogger.fetch('/delete-all-data', {
-					method: 'POST',
-				});
+				const deleteResponse = await clickLogger.fetch(
+                    new Request('/delete-all-data', {
+                        method: 'POST',
+                    })
+                );
 
 				if (deleteResponse.ok) {
 					logInfo('Successfully triggered deletion of all bandit models.');
@@ -820,11 +834,13 @@ export default {
                         const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
                         const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
-                        await batchQueueDOStub.fetch('/start-polling', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ batchId: batchJob.id, inputFileId: uploadedFile.id }),
-                        });
+                        await batchQueueDOStub.fetch(
+                            new Request('/start-polling', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ batchId: batchJob.id, inputFileId: uploadedFile.id }),
+                            })
+                        );
                         logInfo(`Debug: Successfully delegated batch job ${batchJob.id} to BatchQueueDO.`);
 
                         return new Response(JSON.stringify({ message: 'Batch embedding job initiated successfully.', jobId: batchJob.id }), {
