@@ -151,7 +151,7 @@ export default {
                     const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
                     await batchQueueDOStub.fetch(
-                        new Request('/start-polling', {
+                        new Request(`${env.WORKER_BASE_URL}/start-polling`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
@@ -168,7 +168,7 @@ export default {
                     if (remainingChunks.length > 0) {
                         logInfo(`Delegating ${remainingChunks.length} remaining chunks to BatchQueueDO.`);
                         await batchQueueDOStub.fetch(
-                            new Request('/queue-chunks', {
+                            new Request(`${env.WORKER_BASE_URL}/queue-chunks`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ chunks: remainingChunks }),
@@ -835,7 +835,7 @@ export default {
                         const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
                         await batchQueueDOStub.fetch(
-                            new Request('/start-polling', {
+                            new Request(`${env.WORKER_BASE_URL}/start-polling`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ batchId: batchJob.id, inputFileId: uploadedFile.id }),
