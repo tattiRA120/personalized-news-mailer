@@ -183,10 +183,10 @@ export async function getOpenAIBatchJobResults(output_file_id: string, env: { OP
  */
 export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
     return articles.map(article => JSON.stringify({
+        custom_id: article.articleId,
         method: "POST",
         url: "/v1/embeddings",
         body: {
-            custom_id: article.articleId,
             model: OPENAI_EMBEDDING_MODEL,
             input: `${article.title}. ${article.summary || ''}`, // タイトルとサマリーを結合
             encoding_format: "float"
