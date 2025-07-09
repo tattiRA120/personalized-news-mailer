@@ -182,22 +182,16 @@ export async function getOpenAIBatchJobResults(output_file_id: string, env: { OP
  * @returns A string formatted for OpenAI batch input file.
  */
 export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
-    const content = articles.map(article => {
-        const jsonString = JSON.stringify({
-            custom_id: article.articleId,
-            method: "POST",
-            url: "/v1/embeddings",
-            body: {
-                model: OPENAI_EMBEDDING_MODEL,
-                input: `${article.title}. ${article.summary || ''}`, // タイトルとサマリーを結合
-                encoding_format: "float"
-            }
-        });
-        logInfo(`Generated batch item: ${jsonString}`, { articleId: article.articleId });
-        return jsonString;
-    }).join('\n');
-    return content;
-
+    return articles.map(article => JSON.stringify({
+        custom_id: article.articleId,
+        method: "POST",
+        url: "/v1/embeddings",
+        body: {
+            model: OPENAI_EMBEDDING_MODEL,
+            input: `${article.title}. ${article.summary || ''}`, // タイトルとサマリーを結合
+            encoding_format: "float"
+        }
+    })).join('\n');
 }
 
 /**
