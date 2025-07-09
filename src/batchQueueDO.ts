@@ -237,8 +237,8 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
             logWarning(`Batch job ${jobInfo.batchId} completed but no results content received.`, { jobId: jobInfo.batchId });
           }
           completedJobs.push(jobInfo);
-        } else if (jobInfo.status === "failed" || jobInfo.status === "cancelled") {
-          logError(`Batch job ${jobInfo.batchId} failed or cancelled.`, new Error(`Batch job ${jobInfo.batchId} status: ${jobInfo.status}`), { jobId: jobInfo.batchId, status: jobInfo.status });
+        } else if (jobInfo.status === "failed" || jobInfo.status === "cancelled" || jobInfo.status === "cancelling") {
+          logError(`Batch job ${jobInfo.batchId} failed, cancelled, or is cancelling.`, new Error(`Batch job ${jobInfo.batchId} status: ${jobInfo.status}`), { jobId: jobInfo.batchId, status: jobInfo.status });
           failedJobs.push(jobInfo);
         } else {
           // pending, in_progress, finalizing など
