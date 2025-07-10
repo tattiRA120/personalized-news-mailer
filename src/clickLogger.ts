@@ -2,15 +2,7 @@
 
 import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
 import { DurableObject } from 'cloudflare:workers'; // DurableObject をインポート
-
-interface NewsArticle {
-    articleId: string; // D1のarticlesテーブルのPRIMARY KEY
-    title: string;
-    url: string;
-    published_at: number;
-    content?: string;
-    embedding?: string; // D1ではTEXTとして保存されるため
-}
+import { NewsArticle } from './newsCollector'; // Import NewsArticle from newsCollector.ts
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {

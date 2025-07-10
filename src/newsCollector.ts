@@ -56,16 +56,36 @@ async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<New
         const items = Array.isArray(rssChannel.item) ? rssChannel.item : (rssChannel.item ? [rssChannel.item] : []);
         for (const item of items) {
             if (item.title && item.link) {
-                const summary = item.description?.__cdata || item.description || item['content:encoded']?.__cdata || item['content:encoded'] || '';
+                let rawSummary = item.description?.__cdata || item.description || '';
+                let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
                 const title = stripHtmlTags((item.title as any).__cdata || item.title);
+
+                let finalSummary = stripHtmlTags(String(rawSummary).trim());
+                let finalContent = stripHtmlTags(String(rawContent).trim());
+
+                // summaryとcontentの重複・包含関係を調整
+                if (finalContent === finalSummary) {
+                    // 両方が完全に同じ場合はcontentを優先し、summaryはcontentの冒頭から生成
+                    finalSummary = finalContent.substring(0, Math.min(finalContent.length, 200)); // 例: 冒頭200文字
+                } else if (finalContent.startsWith(finalSummary) && finalContent.length > finalSummary.length) {
+                    // contentがsummaryを含んでいる場合、summaryはそのまま、contentはそのまま
+                    // summaryがcontentの冒頭部分と一致する場合、summaryはそのまま
+                } else if (!finalSummary && finalContent) {
+                    // summaryがないがcontentがある場合、contentの冒頭からsummaryを生成
+                    finalSummary = finalContent.substring(0, Math.min(finalContent.length, 200));
+                } else if (!finalContent && finalSummary) {
+                    // contentがないがsummaryがある場合、summaryをcontentとして扱う
+                    finalContent = finalSummary;
+                }
+
                 articles.push({
                     articleId: await generateContentHash(title), // Generate contentHash for articleId
                     title: title, // HTMLタグを除去
                     link: item.link,
                     sourceName: '', // Will be filled later
-                    summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
-                    content: stripHtmlTags(String(summary).trim()), // Add content field
+                    summary: finalSummary,
+                    content: finalContent,
                     publishedAt: Date.parse(pubDate),
                 });
             }
@@ -90,18 +110,33 @@ async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<New
                     link = (entry.link as any)['@_href'];
                 }
             }
-            const summary = entry.summary?.__cdata || entry.summary || entry.content?.__cdata || entry.content || '';
+            let rawSummary = entry.summary?.__cdata || entry.summary || '';
+            let rawContent = entry.content?.__cdata || entry.content || rawSummary; // contentを優先、なければsummary
             const pubDate = entry.updated || entry.published || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
                 const cleanedTitle = stripHtmlTags(title);
+                let finalSummary = stripHtmlTags(String(rawSummary).trim());
+                let finalContent = stripHtmlTags(String(rawContent).trim());
+
+                // summaryとcontentの重複・包含関係を調整
+                if (finalContent === finalSummary) {
+                    finalSummary = finalContent.substring(0, Math.min(finalContent.length, 200));
+                } else if (finalContent.startsWith(finalSummary) && finalContent.length > finalSummary.length) {
+                    // contentがsummaryを含んでいる場合、summaryはそのまま
+                } else if (!finalSummary && finalContent) {
+                    finalSummary = finalContent.substring(0, Math.min(finalContent.length, 200));
+                } else if (!finalContent && finalSummary) {
+                    finalContent = finalSummary;
+                }
+
                 articles.push({
                     articleId: await generateContentHash(cleanedTitle), // Generate contentHash for articleId
                     title: cleanedTitle, // HTMLタグを除去
                     link: link,
                     sourceName: '', // Will be filled later
-                    summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
-                    content: stripHtmlTags(String(summary).trim()), // Add content field
+                    summary: finalSummary,
+                    content: finalContent,
                     publishedAt: Date.parse(pubDate),
                 });
             }
@@ -114,18 +149,33 @@ async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<New
         for (const item of items) {
             const title = (item['dc:title'] as any)?.__cdata || item['dc:title'] || (item.title as any)?.__cdata || item.title;
             const link = item['link'] || item['@_rdf:about']; // linkまたはrdf:aboutを使用
-            const summary = item.description?.__cdata || item.description || '';
+            let rawSummary = item.description?.__cdata || item.description || '';
+            let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
             const pubDate = item['dc:date'] || item.date || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
                 const cleanedTitle = stripHtmlTags(title);
+                let finalSummary = stripHtmlTags(String(rawSummary).trim());
+                let finalContent = stripHtmlTags(String(rawContent).trim());
+
+                // summaryとcontentの重複・包含関係を調整
+                if (finalContent === finalSummary) {
+                    finalSummary = finalContent.substring(0, Math.min(finalContent.length, 200));
+                } else if (finalContent.startsWith(finalSummary) && finalContent.length > finalSummary.length) {
+                    // contentがsummaryを含んでいる場合、summaryはそのまま
+                } else if (!finalSummary && finalContent) {
+                    finalSummary = finalContent.substring(0, Math.min(finalContent.length, 200));
+                } else if (!finalContent && finalSummary) {
+                    finalContent = finalSummary;
+                }
+
                 articles.push({
                     articleId: await generateContentHash(cleanedTitle), // Generate contentHash for articleId
                     title: cleanedTitle, // HTMLタグを除去
                     link: link,
                     sourceName: '', // Will be filled later
-                    summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
-                    content: stripHtmlTags(String(summary).trim()), // Add content field
+                    summary: finalSummary,
+                    content: finalContent,
                     publishedAt: Date.parse(pubDate),
                 });
             }

@@ -83,7 +83,7 @@ export default {
                         title: article.title,
                         url: article.link,
                         publishedAt: article.publishedAt,
-                        content: article.summary || '',
+                        content: article.content, // contentを優先して保存
                         embedding: undefined,
                     }));
                     await saveArticlesToD1(articlesToSaveToD1, env);
@@ -116,7 +116,8 @@ export default {
                 title: row.title,
                 link: row.url,
                 sourceName: '', // D1から取得したデータにはsourceNameがないため、空文字列で初期化
-                summary: row.content, // Assuming 'content' column stores summary/full text
+                summary: row.content ? row.content.substring(0, Math.min(row.content.length, 200)) : '', // contentの冒頭からsummaryを生成
+                content: row.content, // Add content property
                 embedding: row.embedding ? JSON.parse(row.embedding) : undefined, // Parse JSON string back to array, handle null/undefined
                 publishedAt: row.published_at, // Use publishedAt
             }));
@@ -329,14 +330,26 @@ export default {
             if (scheduledHourUTC === 23) { // Check if it's the email sending cron
                 logInfo('Starting D1 article cleanup...');
                 try {
-                    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000); // 30 days in milliseconds
-                    const { success, error, meta } = await env.DB.prepare("DELETE FROM articles WHERE published_at < ?").bind(thirtyDaysAgo).run() as D1Result;
+                    // 24時間以上経過し、かつembeddingがNULLの記事を削除
+                    const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000); // 24 hours in milliseconds
+                    const { success, error, meta } = await env.DB.prepare("DELETE FROM articles WHERE published_at < ? AND embedding IS NULL").bind(twentyFourHoursAgo).run() as D1Result;
 
                     if (success) {
-                        logInfo(`Successfully deleted old articles from D1. Rows affected: ${meta?.changes || 0}`, { deletedCount: meta?.changes || 0 });
+                        logInfo(`Successfully deleted old un-embedded articles from D1. Rows affected: ${meta?.changes || 0}`, { deletedCount: meta?.changes || 0 });
                     } else {
-                        logError(`Failed to delete old articles from D1: ${error}`, null, { error });
+                        logError(`Failed to delete old un-embedded articles from D1: ${error}`, null, { error });
                     }
+
+                    // 30日以上経過した全ての記事を削除
+                    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000); // 30 days in milliseconds
+                    const { success: oldArticleCleanupSuccess, error: oldArticleCleanupError, meta: oldArticleCleanupMeta } = await env.DB.prepare("DELETE FROM articles WHERE published_at < ?").bind(thirtyDaysAgo).run() as D1Result;
+
+                    if (oldArticleCleanupSuccess) {
+                        logInfo(`Successfully deleted very old articles from D1. Rows affected: ${oldArticleCleanupMeta?.changes || 0}`, { deletedCount: oldArticleCleanupMeta?.changes || 0 });
+                    } else {
+                        logError(`Failed to delete very old articles from D1: ${oldArticleCleanupError}`, null, { error: oldArticleCleanupError });
+                    }
+
                 } catch (cleanupError) {
                     logError('Error during D1 article cleanup:', cleanupError);
                 }
