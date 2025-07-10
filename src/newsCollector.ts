@@ -17,6 +17,7 @@ export interface NewsArticle {
     link: string;
     sourceName: string;
     summary?: string; // Add summary field
+    content: string; // Add content field
     publishedAt: number; // Add publishedAt as Unix timestamp
     embedding?: number[]; // Add embedding field for temporary storage
 }
@@ -64,6 +65,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<New
                     link: item.link,
                     sourceName: '', // Will be filled later
                     summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
+                    content: stripHtmlTags(String(summary).trim()), // Add content field
                     publishedAt: Date.parse(pubDate),
                 });
             }
@@ -99,6 +101,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<New
                     link: link,
                     sourceName: '', // Will be filled later
                     summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
+                    content: stripHtmlTags(String(summary).trim()), // Add content field
                     publishedAt: Date.parse(pubDate),
                 });
             }
@@ -122,6 +125,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<New
                     link: link,
                     sourceName: '', // Will be filled later
                     summary: stripHtmlTags(String(summary).trim()), // HTMLタグを除去
+                    content: stripHtmlTags(String(summary).trim()), // Add content field
                     publishedAt: Date.parse(pubDate),
                 });
             }

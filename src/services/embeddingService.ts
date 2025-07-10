@@ -80,12 +80,38 @@ export async function generateAndSaveEmbeddings(articles: NewsArticle[], env: En
     );
     logInfo(`${isDebug ? 'Debug: ' : ''}Found ${existingArticleIdsWithEmbedding.size} articles with existing embeddings in D1 (based on article ID).`, { count: existingArticleIdsWithEmbedding.size });
 
-    // 収集した記事から、既にembeddingが存在する記事を除外 (articleIdで判断)
-    let articlesToEmbed = articles.filter(article => article.articleId && !existingArticleIdsWithEmbedding.has(article.articleId));
+    // D1からembeddingがNULLの記事を取得
+    const { results: articlesMissingEmbeddingInD1 } = await env.DB.prepare("SELECT article_id, title, url, published_at, content FROM articles WHERE embedding IS NULL").all();
+    logInfo(`${isDebug ? 'Debug: ' : ''}Found ${articlesMissingEmbeddingInD1.length} articles missing embeddings in D1.`, { count: articlesMissingEmbeddingInD1.length });
+
+    // 新しく収集された記事と、D1から取得した未embedding記事を結合
+    // 重複を避けるため、Mapを使用してarticleIdでユニークなリストを作成
+    const combinedArticlesMap = new Map<string, NewsArticle>();
+    articles.forEach(article => {
+        if (article.articleId) {
+            combinedArticlesMap.set(article.articleId, article);
+        }
+    });
+    (articlesMissingEmbeddingInD1 as any[]).forEach(row => {
+        if (row.article_id && !combinedArticlesMap.has(row.article_id)) { // 新しい記事にない場合のみ追加
+            combinedArticlesMap.set(row.article_id, {
+                articleId: row.article_id,
+                title: row.title,
+                link: row.url,
+                publishedAt: row.published_at,
+                content: row.content, // D1から取得したcontentを割り当てる
+                sourceName: 'D1_missing_embedding', // 識別用にソースを追加 (NewsArticleにsourceNameがあるので)
+            });
+        }
+    });
+
+    let articlesToEmbed = Array.from(combinedArticlesMap.values())
+        .filter(article => article.articleId && !existingArticleIdsWithEmbedding.has(article.articleId));
+
     logInfo(`${isDebug ? 'Debug: ' : ''}Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
     if (articlesToEmbed.length === 0) {
-        logInfo(`${isDebug ? 'Debug: ' : ''}No new articles found that need embedding. Skipping batch job creation.`);
+        logInfo(`${isDebug ? 'Debug: ' : ''}No articles found that need embedding. Skipping batch job creation.`);
         return;
     }
 
