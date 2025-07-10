@@ -1,13 +1,11 @@
-import { collectNews, NewsArticle } from './newsCollector';
-import { getUserProfile, updateUserProfile, UserProfile, getAllUserIds, createUserProfile } from './userProfile';
-import { selectPersonalizedArticles } from './articleSelector';
-import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
+import { getUserProfile, createUserProfile } from './userProfile';
 import { ClickLogger } from './clickLogger';
 import { BatchQueueDO } from './batchQueueDO';
 import { logError, logInfo, logWarning } from './logger';
-import { CHUNK_SIZE } from './config';
-import { cleanArticleText, generateContentHash, chunkArray } from './utils/textProcessor';
-import { generateAndSaveEmbeddings, saveArticlesToD1, updateArticleEmbeddingsInD1 } from './services/embeddingService';
+import { collectNews, NewsArticle } from './newsCollector';
+import { generateAndSaveEmbeddings } from './services/embeddingService';
+import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding } from './services/d1Service';
+import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	USER_DB: D1Database;
@@ -30,337 +28,9 @@ interface EmailRecipient {
     name?: string;
 }
 
-interface D1Result {
-    success: boolean;
-    error?: string;
-    results?: any[]; // all() や first() の結果
-    meta?: { duration?: number; served_by?: string; changes?: number; last_row_id?: number; size_after?: number; }; // run() の結果
-}
-
-
 export default {
 	async scheduled(controller: ScheduledController, env: Env): Promise<void> {
-		logInfo('Scheduled task started', { scheduledTime: controller.scheduledTime });
-
-		try {
-			// --- 1. News Collection ---
-			logInfo('Starting news collection...');
-			const articles = await collectNews();
-			logInfo(`Collected ${articles.length} articles.`, { articleCount: articles.length });
-
-			if (articles.length === 0) {
-				logInfo('No articles collected. Skipping further steps.');
-				return;
-			}
-
-            // --- 1. 新規記事のみをD1に保存 ---
-            const articleIds = articles.map(a => a.articleId).filter(Boolean) as string[];
-            logInfo(`Collected ${articleIds.length} article IDs from new articles.`, { count: articleIds.length });
-
-            let newArticles: NewsArticle[] = [];
-            if (articleIds.length > 0) {
-                const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
-                const articleIdChunks = chunkArray(articleIds, CHUNK_SIZE_SQL_VARIABLES);
-                const existingArticleIds = new Set<string>();
-
-                for (const chunk of articleIdChunks) {
-                    const placeholders = chunk.map(() => '?').join(',');
-                    const query = `SELECT article_id FROM articles WHERE article_id IN (${placeholders})`;
-                    logInfo(`Executing D1 query: ${query} with ${chunk.length} variables.`, { query, variableCount: chunk.length });
-                    const stmt = env.DB.prepare(query);
-                    const { results: existingRows } = await stmt.bind(...chunk).all<{ article_id: string }>();
-                    existingRows.forEach(row => existingArticleIds.add(row.article_id));
-                }
-                logInfo(`Found ${existingArticleIds.size} existing article IDs in D1.`, { count: existingArticleIds.size });
-
-                // 新規記事のみをフィルタリング
-                newArticles = articles.filter(article => article.articleId && !existingArticleIds.has(article.articleId));
-                logInfo(`Filtered down to ${newArticles.length} new articles to be saved.`, { count: newArticles.length });
-
-                if (newArticles.length > 0) {
-                    const articlesToSaveToD1 = newArticles.map(article => ({
-                        articleId: article.articleId,
-                        title: article.title,
-                        url: article.link,
-                        publishedAt: article.publishedAt,
-                        content: article.content, // contentを優先して保存
-                        embedding: undefined,
-                    }));
-                    await saveArticlesToD1(articlesToSaveToD1, env);
-                    logInfo(`Saved ${articlesToSaveToD1.length} new articles to D1.`, { count: articlesToSaveToD1.length });
-                }
-            }
-
-
-            // 日本時間22時（UTC 13時）のCronトリガーでのみ埋め込みバッチジョブを作成
-            const scheduledHourUTC = new Date(controller.scheduledTime).getUTCHours();
-            if (scheduledHourUTC === 13) { // 22:00 JST is 13:00 UTC
-                // D1からembeddingがまだない記事を取得
-                const { results: articlesMissingEmbedding } = await env.DB.prepare("SELECT * FROM articles WHERE embedding IS NULL").all<NewsArticle>();
-                logInfo(`Found ${articlesMissingEmbedding.length} articles missing embeddings in D1.`, { count: articlesMissingEmbedding.length });
-
-                if (articlesMissingEmbedding.length > 0) {
-                    await generateAndSaveEmbeddings(articlesMissingEmbedding, env);
-                } else {
-                    logInfo('No new articles found that need embedding. Skipping batch job creation.');
-                }
-            }
-
-            // --- Fetch articles from D1 ---
-            logInfo('Fetching articles from D1.');
-
-            // For now, fetch all articles. In a real scenario, you might fetch recent ones or those not yet processed.
-            const { results } = await env.DB.prepare("SELECT * FROM articles ORDER BY published_at DESC LIMIT 1000").all(); // Fetch recent 1000 articles
-            const articlesFromD1: NewsArticle[] = (results as any[]).map(row => ({
-                articleId: row.article_id, // Add articleId
-                title: row.title,
-                link: row.url,
-                sourceName: '', // D1から取得したデータにはsourceNameがないため、空文字列で初期化
-                summary: row.content ? row.content.substring(0, Math.min(row.content.length, 200)) : '', // contentの冒頭からsummaryを生成
-                content: row.content, // Add content property
-                embedding: row.embedding ? JSON.parse(row.embedding) : undefined, // Parse JSON string back to array, handle null/undefined
-                publishedAt: row.published_at, // Use publishedAt
-            }));
-            logInfo(`Fetched ${articlesFromD1.length} articles from D1.`, { count: articlesFromD1.length });
-
-            if (articlesFromD1.length === 0) {
-                logInfo('No articles found in D1 for email sending. Skipping further steps.');
-                return;
-            }
-
-            // Filter out articles without embeddings (should not happen if batch job completed successfully)
-            const articlesWithEmbeddings = articlesFromD1.filter(article => article.embedding && article.embedding.length > 0);
-            logInfo(`Found ${articlesWithEmbeddings.length} articles with embeddings from D1.`, { count: articlesWithEmbeddings.length });
-
-            if (articlesWithEmbeddings.length === 0) {
-                logWarning('No articles with embeddings found in D1. Cannot proceed with personalization.', null);
-                return;
-            }
-
-
-			// --- 2. Get all users ---
-			logInfo('Fetching all user IDs...');
-			const userIds = await getAllUserIds(env); // env を直接渡す
-			logInfo(`Found ${userIds.length} users to process.`, { userCount: userIds.length });
-
-			if (userIds.length === 0) {
-				logInfo('No users found. Skipping email sending.');
-				return;
-			}
-
-			// --- Process each user ---
-			logInfo('Processing news for each user...');
-			for (const userId of userIds) {
-				try {
-					logInfo(`Processing user: ${userId}`);
-
-					const userProfile = await getUserProfile(userId, env); // env を直接渡す
-
-					if (!userProfile) {
-						logError(`User profile not found for ${userId}. Skipping email sending for this user.`, null, { userId });
-						continue; // Skip to the next user
-					}
-					logInfo(`Loaded user profile for ${userId}.`);
-
-					// Durable Object (ClickLogger) のグローバルインスタンスを取得
-					const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
-					const clickLogger: DurableObjectStub<ClickLogger> = env.CLICK_LOGGER.get(clickLoggerId);
-
-					// --- 3. Article Selection (MMR + Bandit) ---
-					logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
-
-					// selectPersonalizedArticles 関数に embedding が付与された記事リストを渡す
-					const numberOfArticlesToSend = 5; // Define how many articles to send
-					const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5);
-					logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
-
-					if (selectedArticles.length === 0) {
-						logInfo('No articles selected. Skipping email sending for this user.', { userId });
-						continue; // Skip to the next user
-					}
-
-					// --- 4. Email Generation & Sending ---
-					logInfo(`Generating and sending email for user ${userId}...`, { userId });
-					const emailSubject = 'Your Daily Personalized News Update';
-					const recipientEmail = userProfile.email; // Use actual user email from profile
-					if (!recipientEmail) {
-						logError(`User profile for ${userId} does not contain an email address. Skipping email sending.`, null, { userId });
-						continue;
-					}
-					const sender: EmailRecipient = { email: recipientEmail, name: 'Mailify News' }; // Use recipient email as sender for Gmail API
-
-					// generateNewsEmail 関数に userId を渡す
-					const htmlEmailContent = generateNewsEmail(selectedArticles, userId);
-
-					// Pass the sender object and env to sendNewsEmail (now using Gmail API)
-					const emailResponse = await sendNewsEmail(env, recipientEmail, userId, selectedArticles, sender);
-
-					if (emailResponse.ok) {
-						logInfo(`Personalized news email sent to ${recipientEmail} via Gmail API.`, { userId, email: recipientEmail });
-					} else {
-						logError(`Failed to send email to ${recipientEmail} via Gmail API: ${emailResponse.statusText}`, null, { userId, email: recipientEmail, status: emailResponse.status, statusText: emailResponse.statusText });
-					}
-
-					// --- 5. Log Sent Articles to Durable Object ---
-					logInfo(`Logging sent articles to ClickLogger for user ${userId}...`, { userId });
-					const sentArticlesData = selectedArticles.map(article => ({
-						articleId: article.articleId, // articleId を使用
-						timestamp: Date.now(), // 送信時のタイムスタンプ
-                        embedding: article.embedding, // embedding を含める
-					}));
-
-					// In scheduled task, request.url is not defined. Use relative path.
-					const logSentResponse = await clickLogger.fetch(
-                        new Request('/log-sent-articles', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ userId: userId, sentArticles: sentArticlesData }),
-                        })
-                    );
-
-					if (logSentResponse.ok) {
-						logInfo(`Successfully logged sent articles for user ${userId}.`, { userId });
-					} else {
-						logError(`Failed to log sent articles for user ${userId}: ${logSentResponse.statusText}`, null, { userId, status: logSentResponse.status, statusText: logSentResponse.statusText });
-					}
-
-
-					// --- 6. Process Click Logs and Update Bandit Model ---
-					logInfo(`Processing click logs and updating bandit model for user ${userId}...`, { userId });
-					
-                    // D1から未処理のクリックログを取得
-                    const { results: clickLogs } = await env.USER_DB.prepare(
-                        `SELECT article_id, timestamp FROM click_logs WHERE user_id = ?`
-                    ).bind(userId).all<{ article_id: string, timestamp: number }>();
-
-                    logInfo(`Found ${clickLogs.length} click logs to process for user ${userId}.`, { userId, count: clickLogs.length });
-
-					if (clickLogs.length > 0) {
-						const updatePromises = clickLogs.map(async clickLog => {
-							const articleId = clickLog.article_id;
-
-							// D1から記事データ（embeddingを含む）を取得
-							const { results } = await env.DB.prepare("SELECT embedding FROM articles WHERE article_id = ?").bind(articleId).all();
-							const articleEmbedding = results && results.length > 0 ? JSON.parse((results[0] as any).embedding) : null;
-
-							if (articleEmbedding) {
-								// バンディットモデルを更新
-								const reward = 1.0; // クリックイベントなので報酬は 1.0
-								const updateResponse = await clickLogger.fetch(
-                                    new Request('/update-bandit-from-click', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ userId: userId, articleId: articleId, embedding: articleEmbedding, reward: reward }),
-                                    })
-                                );
-
-								if (updateResponse.ok) {
-									logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}.`, { userId, articleId });
-								} else {
-									logError(`Failed to update bandit model from click for article ${articleId} for user ${userId}: ${updateResponse.statusText}`, null, { userId, articleId, status: updateResponse.status, statusText: updateResponse.statusText });
-								}
-							} else {
-								logWarning(`Article embedding not found in D1 for clicked article ${articleId} for user ${userId}. Cannot update bandit model.`, { userId, articleId });
-							}
-						});
-						await Promise.all(updatePromises);
-						logInfo(`Finished processing click logs and updating bandit model for user ${userId}.`, { userId });
-
-                        // 処理済みのクリックログをD1から削除
-                        const clickLogIdsToDelete = clickLogs.map(log => log.article_id);
-                        if (clickLogIdsToDelete.length > 0) {
-                            const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
-                            const articleIdChunks = chunkArray(clickLogIdsToDelete, CHUNK_SIZE_SQL_VARIABLES);
-                            let allIdsToDelete: { id: number }[] = [];
-
-                            for (const chunk of articleIdChunks) {
-                                const placeholders = chunk.map(() => '?').join(',');
-                                const query = `SELECT id FROM click_logs WHERE user_id = ? AND article_id IN (${placeholders})`;
-                                logInfo(`Executing D1 query: ${query} with ${1 + chunk.length} variables.`, { query, variableCount: 1 + chunk.length });
-                                const { results: idsToDeleteChunk } = await env.USER_DB.prepare(query).bind(userId, ...chunk).all<{ id: number }>();
-                                allIdsToDelete = allIdsToDelete.concat(idsToDeleteChunk);
-                            }
-
-                            if (allIdsToDelete.length > 0) {
-                                const idChunksForDelete = chunkArray(allIdsToDelete.map(row => row.id), CHUNK_SIZE_SQL_VARIABLES);
-                                for (const chunk of idChunksForDelete) {
-                                    const deletePlaceholders = chunk.map(() => '?').join(',');
-                                    const deleteStmt = env.USER_DB.prepare(
-                                        `DELETE FROM click_logs WHERE id IN (${deletePlaceholders})`
-                                    );
-                                    await deleteStmt.bind(...chunk).run();
-                                    logInfo(`Deleted ${chunk.length} processed click logs from D1 for user ${userId}.`, { userId, deletedCount: chunk.length });
-                                }
-                                logInfo(`Total deleted ${allIdsToDelete.length} processed click logs for user ${userId}.`, { userId, totalDeletedCount: allIdsToDelete.length });
-                            }
-                        }
-
-					} else {
-						logInfo(`No click logs to process for user ${userId}.`, { userId });
-					}
-
-                    // --- 7. Clean up old logs in D1 ---
-                    logInfo(`Starting cleanup of old logs for user ${userId}...`, { userId });
-                    const daysToKeepLogs = 30; // ログを保持する日数 (調整可能)
-                    const cutoffTimestamp = Date.now() - daysToKeepLogs * 24 * 60 * 60 * 1000; // 指定日数より前のタイムスタンプ
-
-                    // click_logs, sent_articles, education_logs から古いデータを削除
-                    const cleanupPromises = [
-                        env.USER_DB.prepare(`DELETE FROM click_logs WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run(),
-                        env.USER_DB.prepare(`DELETE FROM sent_articles WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run(),
-                        env.USER_DB.prepare(`DELETE FROM education_logs WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run(),
-                    ];
-                    await Promise.all(cleanupPromises);
-                    logInfo(`Finished cleanup of old logs for user ${userId} in D1.`, { userId });
-
-
-					// userProfile.sentArticleIds は userProfile から削除されたため、このロジックは不要
-					// userProfile に他の更新があれば updateUserProfile を呼び出すが、このフローでは不要
-					logInfo(`Finished processing user ${userId}.`, { userId });
-
-
-				} catch (userProcessError) {
-					logError(`Error processing user ${userId}:`, userProcessError, { userId });
-					// Continue to the next user even if one user's process fails
-				}
-			} // End of user loop
-
-            // --- 8. Clean up old articles in D1 ---
-            // This should run only for the email sending cron (08:00 JST, 23:00 UTC previous day)
-            if (scheduledHourUTC === 23) { // Check if it's the email sending cron
-                logInfo('Starting D1 article cleanup...');
-                try {
-                    // 24時間以上経過し、かつembeddingがNULLの記事を削除
-                    const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000); // 24 hours in milliseconds
-                    const { success, error, meta } = await env.DB.prepare("DELETE FROM articles WHERE published_at < ? AND embedding IS NULL").bind(twentyFourHoursAgo).run() as D1Result;
-
-                    if (success) {
-                        logInfo(`Successfully deleted old un-embedded articles from D1. Rows affected: ${meta?.changes || 0}`, { deletedCount: meta?.changes || 0 });
-                    } else {
-                        logError(`Failed to delete old un-embedded articles from D1: ${error}`, null, { error });
-                    }
-
-                    // 30日以上経過した全ての記事を削除
-                    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000); // 30 days in milliseconds
-                    const { success: oldArticleCleanupSuccess, error: oldArticleCleanupError, meta: oldArticleCleanupMeta } = await env.DB.prepare("DELETE FROM articles WHERE published_at < ?").bind(thirtyDaysAgo).run() as D1Result;
-
-                    if (oldArticleCleanupSuccess) {
-                        logInfo(`Successfully deleted very old articles from D1. Rows affected: ${oldArticleCleanupMeta?.changes || 0}`, { deletedCount: oldArticleCleanupMeta?.changes || 0 });
-                    } else {
-                        logError(`Failed to delete very old articles from D1: ${oldArticleCleanupError}`, null, { error: oldArticleCleanupError });
-                    }
-
-                } catch (cleanupError) {
-                    logError('Error during D1 article cleanup:', cleanupError);
-                }
-            }
-
-			logInfo('Scheduled task finished.');
-
-		} catch (mainError) {
-			logError('Error during scheduled task execution:', mainError);
-			// Optionally send an alert or log to an external service
-		}
+		await orchestrateMailDelivery(env, new Date(controller.scheduledTime));
 	},
 
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -368,29 +38,21 @@ export default {
 		const path = url.pathname;
 
 		// --- Static File Server ---
-		// Use env.ASSETS to serve static files from the 'public' directory
-		// The ASSETS binding is automatically configured by Wrangler for static deployments
 		if (path.startsWith('/public/')) {
-			// Remove the leading '/public' to get the asset path
 			const assetPath = path.replace('/public', '');
-			// Fetch the asset using the ASSETS binding
 			const response = await env.ASSETS.fetch(new Request(new URL(assetPath, request.url)));
 
 			if (response.status === 404) {
-				// If the specific asset is not found, try serving index.html for the root of /public/
 				if (assetPath === '/') {
 					const indexHtmlResponse = await env.ASSETS.fetch(new Request(new URL('/index.html', request.url)));
 					if (indexHtmlResponse.ok) {
 						return indexHtmlResponse;
 					}
 				}
-				// If index.html is also not found or it wasn't the root request, return 404
 				return new Response('Not Found', { status: 404 });
 			}
-
 			return response;
 		}
-
 
 		// --- User Registration Handler ---
 		if (request.method === 'POST' && path === '/register') {
@@ -403,7 +65,6 @@ export default {
 					return new Response('Missing email', { status: 400 });
 				}
 
-				// Generate a simple user ID (e.g., hash of email)
 				const encoder = new TextEncoder();
 				const data = encoder.encode(email);
 				const hashBuffer = await crypto.subtle.digest('SHA-256', data);
@@ -411,19 +72,15 @@ export default {
 					.map(b => b.toString(16).padStart(2, '0'))
 					.join('');
 
-				// Check if user already exists
-				const existingUser = await getUserProfile(userId, env); // env を直接渡す
+				const existingUser = await getUserProfile(userId, env);
 				if (existingUser) {
 					logWarning(`Registration failed: User with email ${email} already exists.`, { email, userId });
 					return new Response('User already exists', { status: 409 });
 				}
 
-				// Create user profile
-				const newUserProfile = await createUserProfile(userId, email, env); // env を直接渡す
-
+				await createUserProfile(userId, email, env);
 				logInfo(`User registered successfully: ${userId}`, { userId, email });
 
-				// Generate OAuth consent URL
 				if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) {
 					logError('Missing Google OAuth environment variables for consent URL generation.', null);
 					return new Response('Server configuration error', { status: 500 });
@@ -433,14 +90,13 @@ export default {
 				authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
 				authUrl.searchParams.set('redirect_uri', env.GOOGLE_REDIRECT_URI);
 				authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.send');
-				authUrl.searchParams.set('access_type', 'offline'); // To get a refresh token
-				authUrl.searchParams.set('prompt', 'consent'); // To ensure refresh token is returned
+				authUrl.searchParams.set('access_type', 'offline');
+				authUrl.searchParams.set('prompt', 'consent');
 				authUrl.searchParams.set('response_type', 'code');
-				authUrl.searchParams.set('state', userId); // Include userId in state parameter
+				authUrl.searchParams.set('state', userId);
 
 				logInfo(`Generated OAuth consent URL for user ${userId}`, { userId, authUrl: authUrl.toString() });
 
-				// Return the consent URL to the user
 				return new Response(JSON.stringify({ message: 'User registered. Please authorize Gmail access.', authUrl: authUrl.toString() }), {
 					status: 201,
 					headers: { 'Content-Type': 'application/json' },
@@ -465,12 +121,9 @@ export default {
 			}
 
 			try {
-				// Get the global Durable Object instance
 				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-				// Send a request to the Durable Object to log the click
-				// Use a relative path for the Durable Object fetch
 				const logClickResponse = await clickLogger.fetch(
                     new Request('/log-click', {
                         method: 'POST',
@@ -485,7 +138,6 @@ export default {
 					logError(`Failed to log click for user ${userId}, article ${articleId}: ${logClickResponse.statusText}`, null, { userId, articleId, status: logClickResponse.status, statusText: logClickResponse.statusText });
 				}
 
-				// Redirect the user to the original article URL
 				return Response.redirect(redirectUrl, 302);
 
 			} catch (error) {
@@ -499,7 +151,7 @@ export default {
 			logInfo('OAuth2 callback request received');
 
 			const code = url.searchParams.get('code');
-			const userId = url.searchParams.get('state'); // Get userId from state parameter
+			const userId = url.searchParams.get('state');
 
 			if (!code) {
 				logWarning('OAuth2 callback failed: Missing authorization code.');
@@ -511,15 +163,12 @@ export default {
 				return new Response('Missing state parameter', { status: 400 });
 			}
 
-			// TODO: Implement state parameter verification for CSRF protection
-
 			if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI || !env['mail-news-gmail-tokens']) {
 				logError('Missing Google OAuth environment variables or KV binding.', null);
 				return new Response('Server configuration error', { status: 500 });
 			}
 
 			try {
-				// Exchange authorization code for tokens
 				const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
 					method: 'POST',
 					headers: {
@@ -541,15 +190,12 @@ export default {
 				}
 
 				const tokenData: any = await tokenResponse.json();
-				const accessToken = tokenData.access_token;
-				const refreshToken = tokenData.refresh_token; // This will only be returned on the first exchange with access_type=offline
+				const refreshToken = tokenData.refresh_token;
 
 				if (!refreshToken) {
 					logWarning('No refresh token received. Ensure access_type=offline was requested and this is the first authorization.');
-					// Depending on the flow, this might be expected if already authorized
 				}
 
-				// Securely store the refresh token, associated with the user ID.
 				await env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken);
 				logInfo(`Successfully stored refresh token for user ${userId}.`, { userId });
 
@@ -565,15 +211,13 @@ export default {
 		if (request.method === 'GET' && path === '/get-articles-for-education') {
 			logInfo('Request received for articles for education');
 			try {
-				const articles = await collectNews();
+				const articles: NewsArticle[] = await collectNews();
 				logInfo(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
-				// 記事オブジェクトを返す
-				const articlesForEducation = articles.map(article => ({
-					articleId: article.articleId, // 記事IDとして articleId を使用
+				const articlesForEducation = articles.map((article: NewsArticle) => ({
+					articleId: article.articleId,
 					title: article.title,
 					summary: article.summary,
-					// link: article.link, // 必要であれば追加
 				}));
 
 				return new Response(JSON.stringify(articlesForEducation), {
@@ -591,7 +235,6 @@ export default {
 		if (request.method === 'POST' && path === '/submit-interests') {
 			logInfo('Submit interests request received');
 			try {
-				// リクエストボディから userId と selectedArticles (記事オブジェクトの配列) を取得
 				const { userId, selectedArticles } = await request.json() as { userId: string, selectedArticles: NewsArticle[] };
 
 				if (!userId || !Array.isArray(selectedArticles)) {
@@ -599,7 +242,6 @@ export default {
 					return new Response('Missing parameters', { status: 400 });
 				}
 
-				// Get user profile from D1
 				const userProfile = await getUserProfile(userId, env);
 
 				if (!userProfile) {
@@ -607,20 +249,16 @@ export default {
 					return new Response('User not found', { status: 404 });
 				}
 
-				// Save updated user profile to D1 (if there were other updates to userProfile, though not in this specific flow)
-
 				logInfo(`User education articles processed successfully for user ${userId}.`, { userId });
 
-				// --- Learn from User Education (Send to Durable Object) ---
 				logInfo(`Learning from user education for user ${userId}...`, { userId });
 
 				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
 
-				// 選択された記事ごとにD1からembeddingを取得
 				for (const selectedArticle of selectedArticles) {
 					const articleId = selectedArticle.articleId;
-					const { results } = await env.DB.prepare("SELECT embedding FROM articles WHERE article_id = ?").bind(articleId).all();
-					const embedding = results && results.length > 0 ? JSON.parse((results[0] as any).embedding) : null;
+					const article: ArticleWithEmbedding[] = await getArticlesFromD1(env, 1, 0, "article_id = ?", [articleId]);
+					const embedding = article.length > 0 ? article[0].embedding : undefined;
 
 					if (embedding) {
 						selectedArticlesWithEmbeddings.push({ articleId: articleId, embedding: embedding });
@@ -630,19 +268,16 @@ export default {
 				}
 
 				if (selectedArticlesWithEmbeddings.length > 0) {
-					// Get the global Durable Object instance
 					const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-					const batchSize = 10; // バッチサイズを定義 (調整可能)
+					const batchSize = 10;
 					logInfo(`Sending selected articles for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length, batchSize });
 
 					for (let i = 0; i < selectedArticlesWithEmbeddings.length; i += batchSize) {
 						const batch = selectedArticlesWithEmbeddings.slice(i, i + batchSize);
 						logInfo(`Sending batch ${Math.floor(i / batchSize) + 1} with ${batch.length} articles for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1, batchCount: batch.length });
 
-						// Send a request to the Durable Object to learn from selected articles
-						// Use a relative path for the Durable Object fetch
 						const learnResponse = await clickLogger.fetch(
                             new Request('/learn-from-education', {
                                 method: 'POST',
@@ -655,17 +290,12 @@ export default {
 							logInfo(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
 						} else {
 							logError(`Failed to send batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, batchNumber: Math.floor(i / batchSize) + 1, status: learnResponse.status, statusText: learnResponse.statusText });
-							// エラーが発生した場合、後続のバッチ処理を中断するか継続するか検討
-							// ここではエラーをログに出力し、処理を継続します。
 						}
 					}
-
 					logInfo(`Finished sending all batches for learning to ClickLogger for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length });
-
 				} else {
 					logWarning(`No selected articles with embeddings to send for learning for user ${userId}.`, { userId });
 				}
-
 
 				return new Response(JSON.stringify({ message: '興味関心が更新されました。' }), {
 					headers: { 'Content-Type': 'application/json' },
@@ -679,7 +309,6 @@ export default {
 		} else if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
 			logInfo('Request received to delete all Durable Object data');
 			try {
-				// This now deletes the single aggregated R2 object via the global DO instance.
 				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
@@ -703,7 +332,6 @@ export default {
 			}
 		} else if (request.method === 'POST' && path === '/debug/force-embed-articles') {
             logInfo('Debug: Force embed articles request received');
-            // Check for DEBUG_API_KEY for authentication
             const debugApiKey = request.headers.get('X-Debug-Key');
             if (debugApiKey !== env.DEBUG_API_KEY) {
                 logWarning('Debug: Unauthorized access attempt to /debug/force-embed-articles', { providedKey: debugApiKey });
@@ -712,7 +340,7 @@ export default {
 
             try {
                 logInfo('Debug: Starting news collection for force embedding...');
-                const articles = await collectNews();
+                const articles: NewsArticle[] = await collectNews();
                 logInfo(`Debug: Collected ${articles.length} articles for force embedding.`, { articleCount: articles.length });
 
                 if (articles.length === 0) {
@@ -720,11 +348,11 @@ export default {
                     return new Response('No articles collected', { status: 200 });
                 }
 
-                // D1への仮保存はembeddingService内で処理されるため、ここでは不要
-                // ただし、収集した記事をD1に保存するロジックは必要
                 const articlesToSaveToD1 = articles.map(article => ({
                     articleId: article.articleId,
                     title: article.title,
+                    link: article.link,
+                    sourceName: article.sourceName,
                     url: article.link,
                     publishedAt: article.publishedAt,
                     content: article.summary || '',
@@ -733,7 +361,7 @@ export default {
                 await saveArticlesToD1(articlesToSaveToD1, env);
                 logInfo(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
 
-                await generateAndSaveEmbeddings(articles, env, true); // isDebug を true に設定
+                await generateAndSaveEmbeddings(articles, env, true);
 
                 return new Response(JSON.stringify({ message: 'Batch embedding job initiated successfully (debug mode).' }), {
                     status: 200,
@@ -745,7 +373,6 @@ export default {
             }
         } else if (request.method === 'POST' && path === '/debug/delete-user-data') {
             logInfo('Debug: Delete user data request received');
-            // Check for DEBUG_API_KEY for authentication
             const debugApiKey = request.headers.get('X-Debug-Key');
             if (debugApiKey !== env.DEBUG_API_KEY) {
                 logWarning('Debug: Unauthorized access attempt to /debug/delete-user-data', { providedKey: debugApiKey });
@@ -761,23 +388,18 @@ export default {
 
                 logInfo(`Debug: Deleting user data for user ${userId} from USER_DB...`, { userId });
 
-                // Delete from users table
                 await env.USER_DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted user profile for ${userId}.`, { userId });
 
-                // Delete from click_logs table
                 await env.USER_DB.prepare(`DELETE FROM click_logs WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted click logs for ${userId}.`, { userId });
 
-                // Delete from sent_articles table
                 await env.USER_DB.prepare(`DELETE FROM sent_articles WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted sent articles for ${userId}.`, { userId });
 
-                // Delete from education_logs table
                 await env.USER_DB.prepare(`DELETE FROM education_logs WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted education logs for ${userId}.`, { userId });
 
-                // Delete refresh token from KV store
                 await env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
                 logInfo(`Debug: Deleted Gmail refresh token for ${userId}.`, { userId });
 
