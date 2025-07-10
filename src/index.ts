@@ -5,9 +5,9 @@ import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
 import { ClickLogger } from './clickLogger';
 import { BatchQueueDO } from './batchQueueDO';
 import { logError, logInfo, logWarning } from './logger';
-import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResults, prepareBatchInputFileContent } from './openaiClient';
 import { CHUNK_SIZE } from './config';
 import { cleanArticleText, generateContentHash, chunkArray } from './utils/textProcessor';
+import { generateAndSaveEmbeddings, saveArticlesToD1, updateArticleEmbeddingsInD1 } from './services/embeddingService';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	USER_DB: D1Database;
@@ -95,87 +95,14 @@ export default {
             // 日本時間22時（UTC 13時）のCronトリガーでのみ埋め込みバッチジョブを作成
             const scheduledHourUTC = new Date(controller.scheduledTime).getUTCHours();
             if (scheduledHourUTC === 13) { // 22:00 JST is 13:00 UTC
-                logInfo('Starting OpenAI Batch API embedding job creation...');
-
                 // D1からembeddingがまだない記事を取得
                 const { results: articlesMissingEmbedding } = await env.DB.prepare("SELECT * FROM articles WHERE embedding IS NULL").all<NewsArticle>();
                 logInfo(`Found ${articlesMissingEmbedding.length} articles missing embeddings in D1.`, { count: articlesMissingEmbedding.length });
 
-                const articlesToEmbed = articlesMissingEmbedding;
-
-                if (articlesToEmbed.length === 0) {
-                    logInfo('No new articles found that need embedding. Skipping batch job creation.');
+                if (articlesMissingEmbedding.length > 0) {
+                    await generateAndSaveEmbeddings(articlesMissingEmbedding, env);
                 } else {
-                    // チャンク分割
-                    const chunks = chunkArray(articlesToEmbed, CHUNK_SIZE);
-                    logInfo(`Total chunks: ${chunks.length} (each up to ${CHUNK_SIZE} articles)`);
-
-                    // 最初のチャンクをCron内で処理
-                    const firstChunk = chunks[0];
-                    // JSONL 生成
-                    const jsonl = prepareBatchInputFileContent(firstChunk);
-                    const blob = new Blob([jsonl], { type: "application/jsonl" });
-                    const filename = `articles_chunk0_${Date.now()}.jsonl`;
-
-                    // ファイルアップロード
-                    let uploaded;
-                    try {
-                        uploaded = await uploadOpenAIFile(filename, blob, "batch", env);
-                    } catch (e) {
-                        logError("Chunk 0 upload failed", e, { chunkIndex: 0 });
-                        return; // Cron を終了
-                    }
-                    if (!uploaded || !uploaded.id) {
-                        logError("Chunk 0 upload returned no file ID.", null, { chunkIndex: 0 });
-                        return;
-                    }
-                    logInfo("Chunk 0 uploaded. File ID:", { fileId: uploaded.id });
-
-                    // バッチジョブ作成
-                    let job;
-                    try {
-                        job = await createOpenAIBatchEmbeddingJob(uploaded.id, env);
-                        if (!job || !job.id) {
-                            logError("Chunk 0 batch job creation returned no job ID.", null, { chunkIndex: 0 });
-                            return;
-                        }
-                        logInfo("Chunk 0 batch job created.", { jobId: job.id });
-                    } catch (e) {
-                        logError("Chunk 0 batch job creation failed", e, { chunkIndex: 0 });
-                        return;
-                    }
-
-                    // Durable Object にバッチジョブIDを渡し、ポーリングを委譲
-                    logInfo(`Delegating batch job ${job.id} to BatchQueueDO for polling.`);
-                    const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
-                    const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
-
-                    await batchQueueDOStub.fetch(
-                        new Request(`${env.WORKER_BASE_URL}/start-polling`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
-                        })
-                    );
-                    logInfo(`Successfully delegated batch job ${job.id} to BatchQueueDO.`);
-
-                    // 残りチャンクを分散処理用に委譲 (Durable Object を利用)
-                    const remainingChunks = chunks.slice(1).map((articles: NewsArticle[], index: number) => ({
-                        chunkIndex: index + 1, // チャンクインデックスを調整
-                        articles: articles
-                    }));
-
-                    if (remainingChunks.length > 0) {
-                        logInfo(`Delegating ${remainingChunks.length} remaining chunks to BatchQueueDO.`);
-                        await batchQueueDOStub.fetch(
-                            new Request(`${env.WORKER_BASE_URL}/queue-chunks`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ chunks: remainingChunks }),
-                            })
-                        );
-                        logInfo(`Successfully delegated ${remainingChunks.length} chunks to BatchQueueDO.`);
-                    }
+                    logInfo('No new articles found that need embedding. Skipping batch job creation.');
                 }
             }
 
@@ -780,8 +707,8 @@ export default {
                     return new Response('No articles collected', { status: 200 });
                 }
 
-                // --- D1への仮保存 (Debug Endpoint) ---
-                logInfo('Debug: Saving collected articles to D1 temporarily for force embedding...');
+                // D1への仮保存はembeddingService内で処理されるため、ここでは不要
+                // ただし、収集した記事をD1に保存するロジックは必要
                 const articlesToSaveToD1 = articles.map(article => ({
                     articleId: article.articleId,
                     title: article.title,
@@ -793,68 +720,12 @@ export default {
                 await saveArticlesToD1(articlesToSaveToD1, env);
                 logInfo(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
 
-                logInfo('Debug: Starting OpenAI Batch API embedding job creation for force embedding...');
+                await generateAndSaveEmbeddings(articles, env, true); // isDebug を true に設定
 
-                // D1から既存の記事のarticle_idとembeddingの有無を取得
-                const { results: existingArticlesInDb } = await env.DB.prepare("SELECT article_id, embedding FROM articles").all();
-                const existingArticleIdsWithEmbedding = new Set(
-                    (existingArticlesInDb as any[])
-                        .filter(row => row.embedding !== null && row.embedding !== undefined && row.article_id !== null && row.article_id !== undefined)
-                        .map(row => row.article_id)
-                );
-                logInfo(`Debug: Found ${existingArticleIdsWithEmbedding.size} articles with existing embeddings in D1 (based on article ID).`, { count: existingArticleIdsWithEmbedding.size });
-
-                // 収集した記事から、既にembeddingが存在する記事を除外 (articleIdで判断)
-                let articlesToEmbed = articles.filter(article => article.articleId && !existingArticleIdsWithEmbedding.has(article.articleId));
-                logInfo(`Debug: Filtered down to ${articlesToEmbed.length} articles that need embedding for force embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
-
-                if (articlesToEmbed.length === 0) {
-                    logInfo('Debug: No new articles found that need embedding for force embedding. Skipping batch job creation.');
-                    return new Response('No articles collected that need embedding', { status: 200 });
-                }
-
-                // デバッグ目的で記事数を5に制限
-                articlesToEmbed = articlesToEmbed.slice(0, 5);
-                logInfo(`Debug: Limiting force embedding to ${articlesToEmbed.length} articles for debugging purposes.`, { limitedCount: articlesToEmbed.length });
-
-                const batchInputContent = prepareBatchInputFileContent(articlesToEmbed); // フィルタリングされた articlesToEmbed を渡す
-                const batchInputBlob = new Blob([batchInputContent], { type: 'application/jsonl' });
-                const filename = `articles_for_embedding_force_${Date.now()}.jsonl`;
-
-                const uploadedFile = await uploadOpenAIFile(filename, batchInputBlob, 'batch', env);
-
-                if (uploadedFile && uploadedFile.id) {
-                    const batchJob = await createOpenAIBatchEmbeddingJob(uploadedFile.id, env);
-
-                    if (batchJob && batchJob.id) {
-                        logInfo(`Debug: OpenAI Batch API job created successfully for force embedding. Job ID: ${batchJob.id}`, { jobId: batchJob.id });
-
-                        // Durable Object にバッチジョブIDを渡し、ポーリングを委譲
-                        logInfo(`Debug: Delegating batch job ${batchJob.id} to BatchQueueDO for polling.`);
-                        const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
-                        const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
-
-                        await batchQueueDOStub.fetch(
-                            new Request(`${env.WORKER_BASE_URL}/start-polling`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ batchId: batchJob.id, inputFileId: uploadedFile.id }),
-                            })
-                        );
-                        logInfo(`Debug: Successfully delegated batch job ${batchJob.id} to BatchQueueDO.`);
-
-                        return new Response(JSON.stringify({ message: 'Batch embedding job initiated successfully.', jobId: batchJob.id }), {
-                            status: 200,
-                            headers: { 'Content-Type': 'application/json' },
-                        });
-                    } else {
-                        logError('Debug: Failed to create OpenAI Batch API job for force embedding.', null, { debug: true });
-                        return new Response('Failed to create batch embedding job', { status: 500 });
-                    }
-                } else {
-                    logError('Debug: Failed to upload file to OpenAI for force batch embedding.', null, { debug: true });
-                    return new Response('Failed to upload file for batch embedding', { status: 500 });
-                }
+                return new Response(JSON.stringify({ message: 'Batch embedding job initiated successfully (debug mode).' }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                });
             } catch (error) {
                 logError('Debug: Error during force embedding process:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error during force embedding', { status: 500 });
@@ -907,6 +778,33 @@ export default {
                 logError('Debug: Error during user data deletion:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error during user data deletion', { status: 500 });
             }
+        } else if (request.method === 'POST' && path === '/debug/trigger-batch-alarm') {
+            logInfo('Debug: Trigger BatchQueueDO alarm request received');
+            const debugApiKey = request.headers.get('X-Debug-Key');
+            if (debugApiKey !== env.DEBUG_API_KEY) {
+                logWarning('Debug: Unauthorized access attempt to /debug/trigger-batch-alarm', { providedKey: debugApiKey });
+                return new Response('Unauthorized', { status: 401 });
+            }
+            try {
+                const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
+                const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
+                const doResponse = await batchQueueDOStub.fetch(
+                    new Request(`${env.WORKER_BASE_URL}/debug/trigger-alarm`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+                if (doResponse.ok) {
+                    logInfo('Debug: Successfully triggered BatchQueueDO alarm.');
+                    return new Response('BatchQueueDO alarm triggered successfully.', { status: 200 });
+                } else {
+                    logError(`Debug: Failed to trigger BatchQueueDO alarm: ${doResponse.statusText}`, null, { status: doResponse.status, statusText: doResponse.statusText });
+                    return new Response(`Failed to trigger BatchQueueDO alarm: ${doResponse.statusText}`, { status: doResponse.status });
+                }
+            } catch (error) {
+                logError('Debug: Error triggering BatchQueueDO alarm:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error during BatchQueueDO alarm trigger', { status: 500 });
+            }
         }
 
 
@@ -918,66 +816,3 @@ export default {
 // Durable Object class definition (must be exported)
 export { ClickLogger } from './clickLogger';
 export { BatchQueueDO } from './batchQueueDO'; // BatchQueueDO をエクスポート
-
-async function saveArticlesToD1(
-  records: {
-    articleId: string;
-    title: string;
-    url: string;
-    publishedAt: number;
-    content: string;
-    embedding: number[] | undefined; // embedding を undefined も許容するように変更
-  }[],
-  env: Env
-): Promise<void> {
-  const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
-  const recordChunks = chunkArray(records, CHUNK_SIZE_SQL_VARIABLES);
-
-  for (const chunk of recordChunks) {
-    const query = `
-      INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
-    logInfo(`Executing D1 batch INSERT query for ${chunk.length} records.`, { query, recordCount: chunk.length });
-    const stmt = env.DB.prepare(query);
-    const batch = chunk.map((rec) => {
-      return stmt.bind(
-        rec.articleId,
-        rec.title,
-        rec.url,
-        rec.publishedAt,
-        rec.content,
-        rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null
-      );
-    });
-    await env.DB.batch(batch);
-  }
-}
-
-async function updateArticleEmbeddingsInD1(
-  records: {
-    articleId: string;
-    embedding: number[];
-  }[],
-  env: Env
-): Promise<void> {
-  const CHUNK_SIZE_SQL_VARIABLES = 50; // SQLiteの変数制限を考慮してチャンクサイズを設定
-  const recordChunks = chunkArray(records, CHUNK_SIZE_SQL_VARIABLES);
-
-  for (const chunk of recordChunks) {
-    const query = `
-      UPDATE articles
-      SET embedding = ?
-      WHERE article_id = ?
-    `;
-    logInfo(`Executing D1 batch UPDATE query for ${chunk.length} records.`, { query, recordCount: chunk.length });
-    const stmt = env.DB.prepare(query);
-    const batch = chunk.map((rec) => {
-      return stmt.bind(
-        JSON.stringify(rec.embedding),
-        rec.articleId
-      );
-    });
-    await env.DB.batch(batch);
-  }
-}

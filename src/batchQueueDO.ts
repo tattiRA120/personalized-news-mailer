@@ -131,6 +131,10 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         logError("Failed to start polling in BatchQueueDO", error);
         return new Response("Internal Server Error", { status: 500 });
       }
+    } else if (path === "/debug/trigger-alarm" && request.method === "POST") {
+      logInfo("BatchQueueDO: Debug alarm trigger request received.");
+      await this.alarm(); // 直接 alarm() メソッドを呼び出す
+      return new Response("Alarm triggered manually.", { status: 200 });
     }
 
     return new Response("Not found", { status: 404 });
@@ -204,13 +208,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                         return null;
                     }
 
-                    let articleId: string | undefined;
-                    try {
-                        articleId = JSON.parse(r.custom_id).articleId;
-                    } catch (e) {
-                        logWarning(`Failed to parse custom_id for batch result item. Skipping.`, { error: e, custom_id: r.custom_id });
-                        return null;
-                    }
+                    const articleId: string = r.custom_id; // custom_id は既に articleId の文字列
 
                     const embedding = r.response?.body?.data?.[0]?.embedding;
 

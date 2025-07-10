@@ -22,13 +22,13 @@ build/
 Thumbs.db
 
 # Editor files
-.vscode/ # VS Codeの設定ファイルなど、共有しない場合
+.vscode/
 
 # Local environment variables
 .dev.vars
 
-#Refactoring Plan
-refactoring_plan/
+# Review results
+review_results/
 
-#archive
+# archive
 archive/
