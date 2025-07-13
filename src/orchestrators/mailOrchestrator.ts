@@ -130,7 +130,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
                 // --- 3. Article Selection (MMR + Bandit) ---
                 logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
                 const numberOfArticlesToSend = 5;
-                const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5) as NewsArticleWithEmbedding[];
+                const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5, env) as NewsArticleWithEmbedding[];
                 logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
 
                 if (selectedArticles.length === 0) {
@@ -164,7 +164,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
                 }));
 
                 const logSentResponse = await clickLogger.fetch(
-                    new Request('/log-sent-articles', {
+                    new Request(`${env.WORKER_BASE_URL}/log-sent-articles`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ userId: userId, sentArticles: sentArticlesData }),

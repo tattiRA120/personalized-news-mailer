@@ -6,21 +6,10 @@ import { NewsArticle } from './newsCollector'; // Import NewsArticle from newsCo
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
-    // LinUCB のパラメータ
-    // A: 各アームの特徴量の外積の和 (d x d 行列)
-    // b: 各アームの特徴量と報酬の積の和 (d x 1 ベクトル)
-    // ここでは簡略化のため、各アーム（記事ID）ごとに A と b を持つ構造を考えます。
-    // より効率的な実装では、グローバルな A と b を持ち、アームごとに特徴量ベクトル x を管理します。
-    // Durable Object のストレージに保存するため、シリアライズ可能な形式である必要があります。
-    // 例: { articleId: { A: number[][], b: number[] } }
-    // または、グローバルな A, b と、各記事IDに対応する特徴量ベクトル x を別途管理
-    // 今回は、ユーザーごとに Durable Object があるため、グローバルな A, b を Durable Object の状態として持ちます。
     A: number[][]; // d x d 行列
+    A_inv: number[][]; // A の逆行列 (d x d 行列)
     b: number[];   // d x 1 ベクトル
-    // 各アーム（記事）の特徴量ベクトル x は、記事データ自体に含まれる embedding を使用します。
-    // バンディットモデルの次元 d は、embedding ベクトルの次元に一致します。
     dimension: number; // 特徴量ベクトルの次元 (embedding の次元)
-    // その他のバンディット関連パラメータ (例: alpha for UCB)
     alpha: number;
 }
 
@@ -66,70 +55,6 @@ function transposeMatrix(matrix: number[][]): number[][] {
 }
 
 
-// Helper function to invert a matrix using Gaussian elimination with partial pivoting
-// NOTE: This is a basic implementation and may not be numerically stable for all matrices,
-// especially large or ill-conditioned ones. For production use with high-dimensional
-// embeddings, consider a dedicated numerical library or a more robust implementation
-// like Cholesky decomposition if the matrix is guaranteed to be symmetric positive definite.
-function invertMatrix(matrix: number[][]): number[][] {
-    const n = matrix.length;
-    if (n === 0 || matrix[0].length !== n) {
-        throw new Error("Matrix must be square and non-empty.");
-    }
-
-    // Create an augmented matrix [matrix | Identity]
-    const augmentedMatrix: number[][] = Array(n).fill(0).map(() => Array(2 * n).fill(0));
-    for (let i = 0; i < n; i++) {
-        for (let j = 0; j < n; j++) {
-            augmentedMatrix[i][j] = matrix[i][j];
-        }
-        augmentedMatrix[i][i + n] = 1; // Add identity matrix
-    }
-
-    // Apply Gaussian elimination
-    for (let i = 0; i < n; i++) {
-        // Find pivot row (partial pivoting)
-        let maxRow = i;
-        for (let k = i + 1; k < n; k++) {
-            if (Math.abs(augmentedMatrix[k][i]) > Math.abs(augmentedMatrix[maxRow][i])) {
-                maxRow = k;
-            }
-        }
-        // Swap rows
-        [augmentedMatrix[i], augmentedMatrix[maxRow]] = [augmentedMatrix[maxRow], augmentedMatrix[i]];
-
-        // Check for singular matrix
-        if (augmentedMatrix[i][i] === 0) {
-            throw new Error("Matrix is singular and cannot be inverted.");
-        }
-
-        // Normalize pivot row
-        const pivot = augmentedMatrix[i][i];
-        for (let j = i; j < 2 * n; j++) {
-            augmentedMatrix[i][j] /= pivot;
-        }
-
-        // Eliminate other rows
-        for (let k = 0; k < n; k++) {
-            if (k !== i) {
-                const factor = augmentedMatrix[k][i];
-                for (let j = i; j < 2 * n; j++) {
-                    augmentedMatrix[k][j] -= factor * augmentedMatrix[i][j];
-                }
-            }
-        }
-    }
-
-    // Extract the inverse matrix (the right half of the augmented matrix)
-    const inverse: number[][] = Array(n).fill(0).map(() => Array(n).fill(0));
-    for (let i = 0; i < n; i++) {
-        for (let j = 0; j < n; j++) {
-            inverse[i][j] = augmentedMatrix[i][j + n];
-        }
-    }
-
-    return inverse;
-}
 
 
 // Durable Object class for managing click logs and bandit model per user
@@ -201,13 +126,15 @@ export class ClickLogger extends DurableObject {
         const dimension = 1536; // Dimension for text-embedding-3-small
         const newModel: BanditModelState = {
             A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
+            A_inv: Array(dimension).fill(0).map(() => Array(dimension).fill(0)), // A_inv を初期化
             b: Array(dimension).fill(0),
             dimension: dimension,
             alpha: 0.1, // UCB parameter
         };
-        // Initialize A as an identity matrix
+        // Initialize A and A_inv as identity matrices
         for (let i = 0; i < dimension; i++) {
             newModel.A[i][i] = 1.0;
+            newModel.A_inv[i][i] = 1.0; // A_inv も単位行列で初期化
         }
         this.inMemoryModels.set(userId, newModel);
         this.dirty = true;
@@ -431,12 +358,10 @@ export class ClickLogger extends DurableObject {
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
         }
 
-        const { A, b, alpha, dimension } = banditModel;
+        const { A_inv, b, alpha, dimension } = banditModel; // A_inv を使用
         const ucbResults: { articleId: string, ucb: number }[] = [];
 
         try {
-            const A_inv = invertMatrix(A);
-
             for (const article of articles) {
                 const x = article.embedding;
 
@@ -474,19 +399,53 @@ export class ClickLogger extends DurableObject {
             return;
         }
 
-        const { A, b, dimension } = banditModel;
+        const { A, A_inv, b, dimension } = banditModel; // A_inv を追加
         const x = embedding;
 
-        // A = A + x * x^T
+        // Sherman-Morrison formula を使用して A_inv を更新
+        // A_new_inv = A_old_inv - (A_old_inv * x * x^T * A_old_inv) / (1 + x^T * A_old_inv * x)
+
+        // 1. A_old_inv * x
+        const A_inv_x = multiplyMatrixVector(A_inv, x); // d x 1 ベクトル
+
+        // 2. x^T * A_old_inv * x
+        const x_T_A_inv_x = dotProduct(x, A_inv_x); // スカラー
+
+        // 3. denominator = 1 + x^T * A_old_inv * x
+        const denominator = 1 + x_T_A_inv_x;
+
+        if (denominator === 0) {
+            logError("Denominator is zero in Sherman-Morrison update. Skipping update.", null, { userId: 'N/A', embeddingLength: embedding.length, reward });
+            return;
+        }
+
+        // 4. numerator_matrix = (A_old_inv * x) * (x^T * A_old_inv)
+        // (d x 1) * (1 x d) = d x d 行列
+        const numerator_matrix: number[][] = Array(dimension).fill(0).map(() => Array(dimension).fill(0));
         for (let i = 0; i < dimension; i++) {
             for (let j = 0; j < dimension; j++) {
-                A[i][j] += x[i] * x[j];
+                numerator_matrix[i][j] = A_inv_x[i] * A_inv_x[j];
+            }
+        }
+
+        // 5. A_new_inv = A_old_inv - numerator_matrix / denominator
+        for (let i = 0; i < dimension; i++) {
+            for (let j = 0; j < dimension; j++) {
+                A_inv[i][j] -= numerator_matrix[i][j] / denominator;
             }
         }
 
         // b = b + reward * x
         for (let i = 0; i < dimension; i++) {
             b[i] += reward * x[i];
+        }
+
+        // A は明示的に更新する必要はないが、整合性のため更新する
+        // A = A + x * x^T
+        for (let i = 0; i < dimension; i++) {
+            for (let j = 0; j < dimension; j++) {
+                A[i][j] += x[i] * x[j];
+            }
         }
     }
 }

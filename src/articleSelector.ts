@@ -41,7 +41,8 @@ export async function selectPersonalizedArticles(
     clickLogger: DurableObjectStub<ClickLogger>, // Durable Object インスタンスを受け取る
     userId: string,
     count: number,
-    lambda: number = 0.5 // MMR パラメータ
+    lambda: number = 0.5, // MMR パラメータ
+    env: Env
 ): Promise<NewsArticle[]> {
     if (articles.length === 0 || count <= 0) {
         logInfo("No articles or count is zero, returning empty selection.", { articleCount: articles.length, count });
@@ -61,7 +62,7 @@ export async function selectPersonalizedArticles(
             // Durable Objectへのリクエストは、ワーカーのベースURLを考慮する必要があるため、
             // ここではダミーホストではなく、相対パスで指定します。
             // Durable Objectは同じワーカー内で動作するため、ホストは不要です。
-            const response = await clickLogger.fetch(new Request('/get-ucb-values', {
+            const response = await clickLogger.fetch(new Request(`${env.WORKER_BASE_URL}/get-ucb-values`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userId: userId, articlesWithEmbeddings: articlesWithEmbeddings }),
