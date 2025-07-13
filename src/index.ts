@@ -125,7 +125,7 @@ export default {
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
 				const logClickResponse = await clickLogger.fetch(
-                    new Request('/log-click', {
+                    new Request(`${env.WORKER_BASE_URL}/log-click`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ userId: userId, articleId: articleId, timestamp: Date.now() }),
