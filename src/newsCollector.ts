@@ -19,7 +19,6 @@ export interface NewsArticle {
     summary?: string; // Add summary field
     content: string; // Add content field
     publishedAt: number; // Add publishedAt as Unix timestamp
-    embedding?: number[]; // Add embedding field for temporary storage
 }
 
 async function fetchRSSFeed(url: string): Promise<string | null> {

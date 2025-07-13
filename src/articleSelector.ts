@@ -2,10 +2,11 @@
 // src/articleSelector.ts
 
 import { UserProfile } from './userProfile';
-import { ClickLogger } from './clickLogger'; // ClickLogger型が必要なのでimport
-import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
-
-import { NewsArticle } from './newsCollector'; // Import NewsArticle from newsCollector.ts
+import { ClickLogger } from './clickLogger';
+import { logError, logInfo, logWarning } from './logger';
+import { NewsArticle } from './newsCollector';
+import { getArticleByIdFromD1 } from './services/d1Service'; // D1ServiceからgetArticleByIdFromD1をインポート
+import { Env } from './index'; // Env型をインポート
 
 // コサイン類似度を計算するヘルパー関数
 function cosineSimilarity(vec1: number[], vec2: number[]): number {
@@ -40,7 +41,8 @@ export async function selectPersonalizedArticles(
     clickLogger: DurableObjectStub<ClickLogger>, // Durable Object インスタンスを受け取る
     userId: string,
     count: number,
-    lambda: number = 0.5 // MMR パラメータ
+    lambda: number = 0.5, // MMR パラメータ
+    env: Env
 ): Promise<NewsArticle[]> {
     if (articles.length === 0 || count <= 0) {
         logInfo("No articles or count is zero, returning empty selection.", { articleCount: articles.length, count });
@@ -57,7 +59,10 @@ export async function selectPersonalizedArticles(
     let ucbValues: { articleId: string, ucb: number }[] = [];
     if (articlesWithEmbeddings.length > 0) {
         try {
-            const response = await clickLogger.fetch(new Request('http://dummy-host/get-ucb-values', {
+            // Durable Objectへのリクエストは、ワーカーのベースURLを考慮する必要があるため、
+            // ここではダミーホストではなく、相対パスで指定します。
+            // Durable Objectは同じワーカー内で動作するため、ホストは不要です。
+            const response = await clickLogger.fetch(new Request(`${env.WORKER_BASE_URL}/get-ucb-values`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userId: userId, articlesWithEmbeddings: articlesWithEmbeddings }),

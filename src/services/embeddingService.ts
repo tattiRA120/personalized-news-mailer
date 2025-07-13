@@ -4,71 +4,14 @@ import { logError, logInfo, logWarning } from '../logger';
 import { chunkArray } from '../utils/textProcessor';
 import { CHUNK_SIZE } from '../config';
 import { Env } from '../index'; // Env インターフェースをインポート
+import { updateArticleEmbeddingInD1 } from './d1Service'; // d1ServiceからupdateArticleEmbeddingInD1をインポート
 
-async function saveArticlesToD1(
-  records: {
-    articleId: string;
-    title: string;
-    url: string;
-    publishedAt: number;
-    content: string;
-    embedding: number[] | undefined;
-  }[],
-  env: Env
-): Promise<void> {
-  const CHUNK_SIZE_SQL_VARIABLES = 50;
-  const recordChunks = chunkArray(records, CHUNK_SIZE_SQL_VARIABLES);
-
-  for (const chunk of recordChunks) {
-    const query = `
-      INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `;
-    logInfo(`Executing D1 batch INSERT query for ${chunk.length} records.`, { query, recordCount: chunk.length });
-    const stmt = env.DB.prepare(query);
-    const batch = chunk.map((rec) => {
-      return stmt.bind(
-        rec.articleId,
-        rec.title,
-        rec.url,
-        rec.publishedAt,
-        rec.content,
-        rec.embedding !== undefined ? JSON.stringify(rec.embedding) : null
-      );
-    });
-    await env.DB.batch(batch);
-  }
+// NewsArticle型を拡張してembeddingプロパティを持つように定義
+interface NewsArticleWithEmbedding extends NewsArticle {
+    embedding?: number[];
 }
 
-async function updateArticleEmbeddingsInD1(
-  records: {
-    articleId: string;
-    embedding: number[];
-  }[],
-  env: Env
-): Promise<void> {
-  const CHUNK_SIZE_SQL_VARIABLES = 50;
-  const recordChunks = chunkArray(records, CHUNK_SIZE_SQL_VARIABLES);
-
-  for (const chunk of recordChunks) {
-    const query = `
-      UPDATE articles
-      SET embedding = ?
-      WHERE article_id = ?
-    `;
-    logInfo(`Executing D1 batch UPDATE query for ${chunk.length} records.`, { query, recordCount: chunk.length });
-    const stmt = env.DB.prepare(query);
-    const batch = chunk.map((rec) => {
-      return stmt.bind(
-        JSON.stringify(rec.embedding),
-        rec.articleId
-      );
-    });
-    await env.DB.batch(batch);
-  }
-}
-
-export async function generateAndSaveEmbeddings(articles: NewsArticle[], env: Env, isDebug: boolean = false): Promise<void> {
+export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbedding[], env: Env, isDebug: boolean = false): Promise<void> {
     logInfo(`${isDebug ? 'Debug: ' : ''}Starting OpenAI Batch API embedding job creation...`);
 
     // D1から既存の記事のarticle_idとembeddingの有無を取得
@@ -86,7 +29,7 @@ export async function generateAndSaveEmbeddings(articles: NewsArticle[], env: En
 
     // 新しく収集された記事と、D1から取得した未embedding記事を結合
     // 重複を避けるため、Mapを使用してarticleIdでユニークなリストを作成
-    const combinedArticlesMap = new Map<string, NewsArticle>();
+    const combinedArticlesMap = new Map<string, NewsArticleWithEmbedding>();
     articles.forEach(article => {
         if (article.articleId) {
             combinedArticlesMap.set(article.articleId, article);
@@ -171,5 +114,3 @@ export async function generateAndSaveEmbeddings(articles: NewsArticle[], env: En
         logInfo(`${isDebug ? 'Debug: ' : ''}Successfully delegated batch job ${job.id} (Chunk ${i}) to BatchQueueDO.`);
     }
 }
-
-export { saveArticlesToD1, updateArticleEmbeddingsInD1 };
