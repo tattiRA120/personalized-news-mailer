@@ -253,12 +253,25 @@ export class ClickLogger extends DurableObject {
                     return new Response('Invalid input: userId and sentArticles array are required', { status: 400 });
                 }
 
-                const statements = sentArticles.map(article => 
-                    this.env.USER_DB.prepare(
-                        `INSERT INTO sent_articles (user_id, article_id, timestamp, embedding) VALUES (?, ?, ?, ?)`
-                    ).bind(userId, article.articleId, article.timestamp, article.embedding ? JSON.stringify(article.embedding) : null)
-                );
-                await this.env.USER_DB.batch(statements);
+                const statements = [];
+                for (const article of sentArticles) {
+                    // sent_articles に挿入する前に、articles テーブルに article_id が存在するか確認
+                    const articleExists = await this.env.DB.prepare(`SELECT article_id FROM articles WHERE article_id = ?`).bind(article.articleId).all();
+                    if (articleExists.results && articleExists.results.length > 0) {
+                        statements.push(
+                            this.env.USER_DB.prepare(
+                                `INSERT INTO sent_articles (user_id, article_id, timestamp, embedding) VALUES (?, ?, ?, ?)`
+                            ).bind(userId, article.articleId, article.timestamp, article.embedding ? JSON.stringify(article.embedding) : null)
+                        );
+                    } else {
+                        logWarning(`Skipping logging sent article ${article.articleId} for user ${userId} due to missing article in 'articles' table.`, { userId, articleId: article.articleId });
+                    }
+                }
+                if (statements.length > 0) {
+                    await this.env.USER_DB.batch(statements);
+                } else {
+                    logInfo(`No valid sent articles to log for user ${userId}.`, { userId });
+                }
 
                 logInfo(`Successfully logged ${sentArticles.length} sent articles for user ${userId}`);
                 return new Response('Sent articles logged', { status: 200 });

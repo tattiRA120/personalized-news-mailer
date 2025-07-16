@@ -83,17 +83,9 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
     }
 
     // --- Fetch articles from D1 ---
-    logInfo('Fetching articles from D1 for email sending.');
-    const articlesFromD1 = await getArticlesFromD1(env, 1000) as NewsArticleWithEmbedding[]; // d1ServiceのgetArticlesFromD1を使用
-    logInfo(`Fetched ${articlesFromD1.length} articles from D1.`, { count: articlesFromD1.length });
-
-    if (articlesFromD1.length === 0) {
-        logInfo('No articles found in D1 for email sending. Skipping further steps.');
-        return;
-    }
-
-    const articlesWithEmbeddings = articlesFromD1.filter(article => article.embedding && article.embedding.length > 0) as NewsArticleWithEmbedding[];
-    logInfo(`Found ${articlesWithEmbeddings.length} articles with embeddings from D1.`, { count: articlesWithEmbeddings.length });
+    logInfo('Fetching articles from D1 for email sending (only articles with embeddings).');
+    const articlesWithEmbeddings = await getArticlesFromD1(env, 1000) as NewsArticleWithEmbedding[]; // d1ServiceのgetArticlesFromD1を使用
+    logInfo(`Fetched ${articlesWithEmbeddings.length} articles with embeddings from D1.`, { count: articlesWithEmbeddings.length });
 
     if (articlesWithEmbeddings.length === 0) {
         logWarning('No articles with embeddings found in D1. Cannot proceed with personalization.', null);
@@ -130,7 +122,10 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
                 // --- 3. Article Selection (MMR + Bandit) ---
                 logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
                 const numberOfArticlesToSend = 5;
-                const selectedArticles = await selectPersonalizedArticles(articlesWithEmbeddings, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5, env) as NewsArticleWithEmbedding[];
+                // UCB計算の負荷を軽減するため、最新の100件の記事に制限
+                const articlesForSelection = articlesWithEmbeddings.slice(0, 100);
+                logInfo(`Selecting personalized articles for user ${userId} from ${articlesForSelection.length} candidates.`, { userId, candidateCount: articlesForSelection.length });
+                const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5, env) as NewsArticleWithEmbedding[];
                 logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
 
                 if (selectedArticles.length === 0) {

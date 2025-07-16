@@ -50,7 +50,8 @@ async function refreshAndStoreAccessToken(userId: string, env: Env): Promise<str
                 logError(`Failed to refresh access token for user ${userId}: Invalid Grant. Refresh token might be expired or revoked. User needs to re-authorize.`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
                 await env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
             } else {
-                logError(`Failed to refresh access token for user ${userId}: ${tokenResponse.statusText}`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
+                // invalid_grant 以外のエラーの場合、詳細なエラーテキストをログに出力
+                logError(`Failed to refresh access token for user ${userId}: ${tokenResponse.statusText}. Details: ${errorText}`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
             }
             return null;
         }
@@ -180,7 +181,9 @@ export async function sendEmail(userId: string, params: SendEmailParams, env: En
 
     if (!sendResponse.ok) {
       const errorText = await sendResponse.text();
-      logError(`Gmail API returned an error for user ${userId}: ${sendResponse.statusText}`, null, { userId, status: sendResponse.status, statusText: sendResponse.statusText, errorText, emailParams: params });
+      // rawEmailContent の一部をログに出力し、機密情報を避ける
+      const rawEmailContentSnippet = rawEmailContent.substring(0, Math.min(rawEmailContent.length, 500)); // 最初の500文字
+      logError(`Gmail API returned an error for user ${userId}: ${sendResponse.statusText}`, null, { userId, status: sendResponse.status, statusText: sendResponse.statusText, errorText, emailParams: params, rawEmailContentSnippet });
     } else {
       logInfo(`Email sent successfully for user ${userId} via Gmail API.`, { userId, emailParams: params });
     }

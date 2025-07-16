@@ -41,7 +41,7 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
 
         for (const chunk of articleChunks) {
             const placeholders = chunk.map(() => '(?, ?, ?, ?, ?)').join(','); // articleId, title, url, publishedAt, content
-            const query = `INSERT INTO articles (article_id, title, url, published_at, content) VALUES ${placeholders} ON CONFLICT(article_id) DO NOTHING`;
+            const query = `INSERT INTO articles (article_id, title, url, published_at, content) VALUES ${placeholders} ON CONFLICT(url) DO UPDATE SET title=EXCLUDED.title, published_at=EXCLUDED.published_at, content=EXCLUDED.content WHERE embedding IS NULL`;
             const stmt = env.DB.prepare(query);
 
             const bindParams: (string | number | undefined)[] = [];
@@ -86,9 +86,9 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
     logInfo(`Fetching articles from D1 with limit ${limit}, offset ${offset}, where: ${whereClause}.`);
     try {
         let query = `SELECT article_id, title, url, published_at, content, embedding FROM articles`;
-        if (whereClause) {
-            query += ` WHERE ${whereClause}`;
-        }
+        // embeddingがNULLではない記事のみをデフォルトで取得
+        const effectiveWhereClause = whereClause ? `(${whereClause}) AND embedding IS NOT NULL` : `embedding IS NOT NULL`;
+        query += ` WHERE ${effectiveWhereClause}`;
         query += ` ORDER BY published_at DESC LIMIT ? OFFSET ?`;
 
         const stmt = env.DB.prepare(query);
