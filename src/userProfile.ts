@@ -1,6 +1,6 @@
 // src/userProfile.ts
 
-import { logError, logInfo, logWarning } from './logger'; // Import logging helpers
+import { logError, logInfo, logWarning } from './logger';
 
 // NewsArticleWithCategory インターフェースの定義
 interface NewsArticleWithCategory {
@@ -18,9 +18,9 @@ export interface UserProfile {
     embedding?: number[]; // ユーザーの興味を表す埋め込みベクトル
 }
 
-export async function getUserProfile(userId: string, env: EnvWithDB): Promise<UserProfile | null> { // EnvWithUserDB を EnvWithDB に変更
+export async function getUserProfile(userId: string, env: EnvWithDB): Promise<UserProfile | null> {
     try {
-        const { results } = await env.DB.prepare( // env.USER_DB を env.DB に変更
+        const { results } = await env.DB.prepare(
             `SELECT user_id, email, embedding FROM users WHERE user_id = ?`
         ).bind(userId).all<{ user_id: string; email: string; embedding: string | null; }>();
 
@@ -43,11 +43,11 @@ export async function getUserProfile(userId: string, env: EnvWithDB): Promise<Us
     }
 }
 
-export async function updateUserProfile(profile: UserProfile, env: EnvWithDB): Promise<void> { // EnvWithUserDB を EnvWithDB に変更
+export async function updateUserProfile(profile: UserProfile, env: EnvWithDB): Promise<void> {
     try {
         // embeddingを文字列として保存
         const embeddingString = profile.embedding ? JSON.stringify(profile.embedding) : null;
-        await env.DB.prepare( // env.USER_DB を env.DB に変更
+        await env.DB.prepare(
             `UPDATE users SET email = ?, embedding = ? WHERE user_id = ?`
         ).bind(profile.email, embeddingString, profile.userId).run();
         logInfo(`Updated user profile for ${profile.userId}.`, { userId: profile.userId });
@@ -56,7 +56,7 @@ export async function updateUserProfile(profile: UserProfile, env: EnvWithDB): P
     }
 }
 
-export async function createUserProfile(userId: string, email: string, env: EnvWithDB): Promise<UserProfile> { // EnvWithUserDB を EnvWithDB に変更
+export async function createUserProfile(userId: string, email: string, env: EnvWithDB): Promise<UserProfile> {
     const newUserProfile: UserProfile = {
         userId: userId,
         email: email,
@@ -64,7 +64,7 @@ export async function createUserProfile(userId: string, email: string, env: EnvW
     };
 
     try {
-        await env.DB.prepare( // env.USER_DB を env.DB に変更
+        await env.DB.prepare(
             `INSERT INTO users (user_id, email, embedding) VALUES (?, ?, ?)`
         ).bind(newUserProfile.userId, newUserProfile.email, null).run();
         logInfo(`Created new user profile for ${userId} with email ${email}`, { userId, email });
@@ -75,9 +75,9 @@ export async function createUserProfile(userId: string, email: string, env: EnvW
     }
 }
 
-export async function getUserIdByEmail(email: string, env: EnvWithDB): Promise<string | null> { // EnvWithUserDB を EnvWithDB に変更
+export async function getUserIdByEmail(email: string, env: EnvWithDB): Promise<string | null> {
     try {
-        const { results } = await env.DB.prepare( // env.USER_DB を env.DB に変更
+        const { results } = await env.DB.prepare(
             `SELECT user_id FROM users WHERE email = ?`
         ).bind(email).all<{ user_id: string }>();
 
@@ -95,9 +95,9 @@ export async function getUserIdByEmail(email: string, env: EnvWithDB): Promise<s
     }
 }
 
-export async function getAllUserIds(env: EnvWithDB): Promise<string[]> { // EnvWithUserDB を EnvWithDB に変更
+export async function getAllUserIds(env: EnvWithDB): Promise<string[]> {
     try {
-        const { results } = await env.DB.prepare( // env.USER_DB を env.DB に変更
+        const { results } = await env.DB.prepare(
             `SELECT user_id FROM users`
         ).all<{ user_id: string }>();
 

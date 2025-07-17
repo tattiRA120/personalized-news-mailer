@@ -1,7 +1,7 @@
 import { D1Database } from '@cloudflare/workers-types';
 import { logError, logInfo, logWarning } from '../logger';
-import { NewsArticle } from '../newsCollector'; // NewsArticle型をインポート
-import { chunkArray } from '../utils/textProcessor'; // chunkArrayをインポート
+import { NewsArticle } from '../newsCollector';
+import { chunkArray } from '../utils/textProcessor';
 
 export interface Env {
     DB: D1Database; // articlesテーブルとユーザー関連テーブル用
@@ -205,12 +205,12 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
  * @returns 削除されたログエントリの数
  */
 export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimestamp: number): Promise<number> {
-    logInfo(`Cleaning up old logs for user ${userId} in DB older than ${new Date(cutoffTimestamp).toISOString()}.`); // USER_DB を DB に変更
+    logInfo(`Cleaning up old logs for user ${userId} in DB older than ${new Date(cutoffTimestamp).toISOString()}.`);
     let totalDeleted = 0;
     try {
         const tables = ['click_logs', 'sent_articles', 'education_logs'];
         for (const table of tables) {
-            const { success, error, meta } = await env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run() as D1Result; // env.USER_DB を env.DB に変更
+            const { success, error, meta } = await env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run() as D1Result; 
             if (success) {
                 totalDeleted += meta?.changes || 0;
                 logInfo(`Deleted ${meta?.changes || 0} old entries from ${table} for user ${userId}.`, { table, userId, deletedCount: meta?.changes || 0 });
@@ -218,7 +218,7 @@ export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimesta
                 logError(`Failed to delete old entries from ${table} for user ${userId}: ${error}`, null, { table, userId, error });
             }
         }
-        logInfo(`Finished cleanup of old logs for user ${userId} in DB. Total deleted: ${totalDeleted}.`, { userId, totalDeleted }); // USER_DB を DB に変更
+        logInfo(`Finished cleanup of old logs for user ${userId} in DB. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
         return totalDeleted;
     } catch (error) {
         logError(`Error during cleanup of old user logs for user ${userId}:`, error);
@@ -233,15 +233,15 @@ export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimesta
  * @returns 未処理のクリックログの配列
  */
 export async function getClickLogsForUser(env: Env, userId: string): Promise<{ article_id: string, timestamp: number }[]> {
-    logInfo(`Fetching click logs for user ${userId} from DB.`); // USER_DB を DB に変更
+    logInfo(`Fetching click logs for user ${userId} from DB.`);
     try {
-        const { results } = await env.DB.prepare( // env.USER_DB を env.DB に変更
+        const { results } = await env.DB.prepare( 
             `SELECT article_id, timestamp FROM click_logs WHERE user_id = ?`
         ).bind(userId).all<{ article_id: string, timestamp: number }>();
         logInfo(`Found ${results.length} click logs for user ${userId}.`, { userId, count: results.length });
         return results;
     } catch (error) {
-        logError(`Error fetching click logs for user ${userId} from DB:`, error); // USER_DB を DB に変更
+        logError(`Error fetching click logs for user ${userId} from DB:`, error);
         return [];
     }
 }
@@ -258,7 +258,7 @@ export async function deleteProcessedClickLogs(env: Env, userId: string, article
         logInfo('No click logs to delete. Skipping.');
         return 0;
     }
-    logInfo(`Deleting ${articleIdsToDelete.length} processed click logs for user ${userId} from DB.`); // USER_DB を DB に変更
+    logInfo(`Deleting ${articleIdsToDelete.length} processed click logs for user ${userId} from DB.`);
     let totalDeleted = 0;
     try {
         const CHUNK_SIZE_SQL_VARIABLES = 50;
@@ -267,7 +267,7 @@ export async function deleteProcessedClickLogs(env: Env, userId: string, article
         for (const chunk of articleIdChunks) {
             const placeholders = chunk.map(() => '?').join(',');
             const query = `DELETE FROM click_logs WHERE user_id = ? AND article_id IN (${placeholders})`;
-            const stmt = env.DB.prepare(query); // env.USER_DB を env.DB に変更
+            const stmt = env.DB.prepare(query);
             const { success, error, meta } = await stmt.bind(userId, ...chunk).run() as D1Result;
 
             if (success) {
@@ -277,10 +277,10 @@ export async function deleteProcessedClickLogs(env: Env, userId: string, article
                 logError(`Failed to delete click logs in batch for user ${userId}: ${error}`, null, { userId, error });
             }
         }
-        logInfo(`Finished deleting processed click logs for user ${userId}. Total deleted: ${totalDeleted}.`, { userId, totalDeleted }); // USER_DB を DB に変更
+        logInfo(`Finished deleting processed click logs for user ${userId}. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
         return totalDeleted;
     } catch (error) {
-        logError(`Error deleting processed click logs for user ${userId} from DB:`, error); // USER_DB を DB に変更
+        logError(`Error deleting processed click logs for user ${userId} from DB:`, error);
         return totalDeleted;
     }
 }
