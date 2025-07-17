@@ -58,12 +58,6 @@
 			"database_name": "mail-news-articles-db",
 			"database_id": "685d507a-a34b-48d7-8ed0-feb483a19f4e",
 			"migrations_dir": "./migrations"
-		},
-		{
-			"binding": "USER_DB",
-			"database_name": "mail-news-user-db",
-			"database_id": "4cc479cc-b25f-499a-b312-fcde08c9a191",
-			"migrations_dir": "./migrations"
 		}
 	],
 

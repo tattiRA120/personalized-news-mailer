@@ -60,8 +60,7 @@ function transposeMatrix(matrix: number[][]): number[][] {
 // Durable Object class for managing click logs and bandit model per user
 interface EnvWithDurableObjects {
     BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
-    USER_DB: D1Database; // D1 Database binding for user profiles and logs
-    DB: D1Database; // D1 Database binding for articles
+    DB: D1Database; // D1 Database binding for all tables (articles, users, logs)
 }
 
 // Durable Object class for managing click logs and bandit models for ALL users.
@@ -213,7 +212,7 @@ export class ClickLogger extends DurableObject {
                     return new Response('Missing parameters', { status: 400 });
                 }
 
-                await this.env.USER_DB.prepare(
+                await this.env.DB.prepare(
                     `INSERT INTO click_logs (user_id, article_id, timestamp) VALUES (?, ?, ?)`
                 ).bind(userId, articleId, timestamp).run();
 
@@ -259,7 +258,7 @@ export class ClickLogger extends DurableObject {
                     const articleExists = await this.env.DB.prepare(`SELECT article_id FROM articles WHERE article_id = ?`).bind(article.articleId).all();
                     if (articleExists.results && articleExists.results.length > 0) {
                         statements.push(
-                            this.env.USER_DB.prepare(
+                            this.env.DB.prepare(
                                 `INSERT INTO sent_articles (user_id, article_id, timestamp, embedding) VALUES (?, ?, ?, ?)`
                             ).bind(userId, article.articleId, article.timestamp, article.embedding ? JSON.stringify(article.embedding) : null)
                         );
@@ -268,7 +267,7 @@ export class ClickLogger extends DurableObject {
                     }
                 }
                 if (statements.length > 0) {
-                    await this.env.USER_DB.batch(statements);
+                    await this.env.DB.batch(statements);
                 } else {
                     logInfo(`No valid sent articles to log for user ${userId}.`, { userId });
                 }
@@ -301,7 +300,7 @@ export class ClickLogger extends DurableObject {
                     if (article.embedding) {
                         this.updateBanditModel(banditModel, article.embedding, 1.0);
                         logStatements.push(
-                            this.env.USER_DB.prepare(
+                            this.env.DB.prepare(
                                 `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
                             ).bind(userId, article.articleId, Date.now(), 'selected')
                         );
@@ -309,7 +308,7 @@ export class ClickLogger extends DurableObject {
                 }
                 
                 if (logStatements.length > 0) {
-                    await this.env.USER_DB.batch(logStatements);
+                    await this.env.DB.batch(logStatements);
                     this.dirty = true;
                     logInfo(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
                 }
