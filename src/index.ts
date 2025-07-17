@@ -8,7 +8,7 @@ import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding } from './ser
 import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
-	USER_DB: D1Database;
+	DB: D1Database;
 	CLICK_LOGGER: DurableObjectNamespace<ClickLogger>;
     BATCH_QUEUE_DO: DurableObjectNamespace<BatchQueueDO>;
 	OPENAI_API_KEY?: string;
@@ -17,7 +17,6 @@ export interface Env {
 	GOOGLE_REDIRECT_URI?: string;
 	'mail-news-gmail-tokens': KVNamespace;
     BATCH_CALLBACK_TOKENS: KVNamespace;
-    DB: D1Database;
     WORKER_BASE_URL?: string;
     DEBUG_API_KEY?: string;
     ASSETS: Fetcher; // ASSETS binding for static assets
@@ -386,18 +385,18 @@ export default {
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                logInfo(`Debug: Deleting user data for user ${userId} from USER_DB...`, { userId });
+                logInfo(`Debug: Deleting user data for user ${userId} from DB...`, { userId });
 
-                await env.USER_DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(userId).run();
+                await env.DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted user profile for ${userId}.`, { userId });
 
-                await env.USER_DB.prepare(`DELETE FROM click_logs WHERE user_id = ?`).bind(userId).run();
+                await env.DB.prepare(`DELETE FROM click_logs WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted click logs for ${userId}.`, { userId });
 
-                await env.USER_DB.prepare(`DELETE FROM sent_articles WHERE user_id = ?`).bind(userId).run();
+                await env.DB.prepare(`DELETE FROM sent_articles WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted sent articles for ${userId}.`, { userId });
 
-                await env.USER_DB.prepare(`DELETE FROM education_logs WHERE user_id = ?`).bind(userId).run();
+                await env.DB.prepare(`DELETE FROM education_logs WHERE user_id = ?`).bind(userId).run();
                 logInfo(`Debug: Deleted education logs for ${userId}.`, { userId });
 
                 await env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
