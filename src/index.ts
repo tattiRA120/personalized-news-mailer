@@ -278,7 +278,7 @@ export default {
 						logInfo(`Sending batch ${Math.floor(i / batchSize) + 1} with ${batch.length} articles for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1, batchCount: batch.length });
 
 						const learnResponse = await clickLogger.fetch(
-                            new Request('/learn-from-education', {
+                            new Request(`${env.WORKER_BASE_URL}/learn-from-education`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ userId: userId, selectedArticles: batch }),
