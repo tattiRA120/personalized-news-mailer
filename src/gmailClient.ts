@@ -1,10 +1,6 @@
 // Gmail API を使用してメールを送信するクライアント
-import { logError, logInfo, logWarning } from './logger';
-
-interface EmailRecipient {
-    email: string;
-    name?: string;
-}
+import { initLogger } from './logger';
+import { Env } from './index'; 
 
 interface SendEmailParams {
   to: string; // Gmail APIではtoは単一のメールアドレスまたはカンマ区切り文字列
@@ -13,7 +9,8 @@ interface SendEmailParams {
   from: string; // 送信元メールアドレス (認証に使用するGmailアドレス)
 }
 
-interface Env {
+// Gmail APIに必要なEnvプロパティを定義するインターフェース
+export interface GmailClientEnv extends Env {
     GOOGLE_CLIENT_ID: string;
     GOOGLE_CLIENT_SECRET: string;
     GOOGLE_REDIRECT_URI: string;
@@ -21,7 +18,8 @@ interface Env {
 }
 
 // リフレッシュトークンを使用して新しいアクセストークンを取得し、KVに保存する関数
-async function refreshAndStoreAccessToken(userId: string, env: Env): Promise<string | null> {
+async function refreshAndStoreAccessToken(userId: string, env: GmailClientEnv): Promise<string | null> {
+    const { logError, logInfo, logWarning } = initLogger(env);
     logInfo(`Attempting to refresh and store access token for user ${userId}.`, { userId });
     try {
         const refreshToken = await env['mail-news-gmail-tokens'].get(`refresh_token:${userId}`);
@@ -74,7 +72,8 @@ async function refreshAndStoreAccessToken(userId: string, env: Env): Promise<str
 }
 
 // アクセストークンを取得する関数 (KVから取得、またはリフレッシュ)
-async function getAccessToken(userId: string, env: Env): Promise<string | null> {
+async function getAccessToken(userId: string, env: GmailClientEnv): Promise<string | null> {
+    const { logError, logInfo, logWarning } = initLogger(env);
     logInfo(`Attempting to get access token for user ${userId}.`, { userId });
     const accessToken = await env['mail-news-gmail-tokens'].get(`access_token:${userId}`);
 
@@ -133,7 +132,8 @@ function base64urlEncode(str: string): string {
 
 
 // Gmail API を使用してメールを送信する関数
-export async function sendEmail(userId: string, params: SendEmailParams, env: Env): Promise<Response> {
+export async function sendEmail(userId: string, params: SendEmailParams, env: GmailClientEnv): Promise<Response> {
+  const { logError, logInfo } = initLogger(env);
   logInfo(`Attempting to send email for user ${userId} via Gmail API.`, { userId, emailParams: params });
   const GMAIL_API_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 

@@ -1,7 +1,8 @@
 // src/emailGenerator.ts
-import { logError, logInfo } from './logger';
+import { initLogger } from './logger';
 
 import { sendEmail as sendEmailWithGmail } from './gmailClient';
+import { Env } from './index';
 
 interface EmailRecipient {
     email: string;
@@ -16,7 +17,8 @@ interface NewsArticle {
     summary?: string;
 }
 
-export function generateNewsEmail(articles: NewsArticle[], userId: string): string {
+export function generateNewsEmail(articles: NewsArticle[], userId: string, env: Env): string {
+    const { logError, logInfo } = initLogger(env);
     logInfo(`Generating email content for user ${userId}`, { userId, articleCount: articles.length });
     let htmlContent = '';
     try {
@@ -50,7 +52,7 @@ export function generateNewsEmail(articles: NewsArticle[], userId: string): stri
         articles.forEach(article => {
             // クリックトラッキング用の情報を記事リンクに追加
             // 新しい /track-click エンドポイントを使用
-            const trackingLink = `https://mail-news-worker.tattira120.workers.dev/track-click?userId=${userId}&articleId=${encodeURIComponent(article.articleId)}&redirectUrl=${encodeURIComponent(article.link)}`;
+            const trackingLink = `${env.WORKER_BASE_URL}/track-click?userId=${userId}&articleId=${encodeURIComponent(article.articleId)}&redirectUrl=${encodeURIComponent(article.link)}`;
 
             htmlContent += `
                 <div class="article">
@@ -79,16 +81,19 @@ export function generateNewsEmail(articles: NewsArticle[], userId: string): stri
 }
 
 // Gmail API を使用してニュースメールを送信する
+import { GmailClientEnv } from './gmailClient';
+
 export async function sendNewsEmail(
-  env: any, // Use any for now to avoid strict type issues with Env interface
+  env: GmailClientEnv,
   toEmail: string,
   userId: string,
   articles: NewsArticle[],
   sender: EmailRecipient // Add sender as an argument
 ): Promise<Response> {
+  const { logError, logInfo } = initLogger(env);
   logInfo(`Attempting to send email to ${toEmail} from ${sender.email} for user ${userId} via Gmail API.`, { userId, email: toEmail, senderEmail: sender.email });
   const subject = 'あなたのパーソナライズドニュース';
-  const htmlContent = generateNewsEmail(articles, userId);
+  const htmlContent = generateNewsEmail(articles, userId, env);
 
   const params = {
     to: toEmail, // Gmail APIではtoは単一のメールアドレス文字列

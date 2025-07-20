@@ -1,7 +1,8 @@
 import { NEWS_RSS_URLS } from './config';
-import { logError, logInfo } from './logger'; // Import logging helpers
-import { XMLParser } from 'fast-xml-parser'; // Import XMLParser
-import { cleanArticleText, generateContentHash } from './utils/textProcessor'; // Import text cleaning utility
+import { initLogger } from './logger';
+import { XMLParser } from 'fast-xml-parser';
+import { cleanArticleText, generateContentHash } from './utils/textProcessor';
+import { Env } from './index';
 
 // HTMLタグを除去するヘルパー関数
 function stripHtmlTags(html: string): string {
@@ -21,7 +22,8 @@ export interface NewsArticle {
     publishedAt: number; // Add publishedAt as Unix timestamp
 }
 
-async function fetchRSSFeed(url: string): Promise<string | null> {
+async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
+    const { logError } = initLogger(env);
     try {
         const response = await fetch(url);
         if (!response.ok) {
@@ -35,7 +37,8 @@ async function fetchRSSFeed(url: string): Promise<string | null> {
     }
 }
 
-async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<NewsArticle[]> {
+async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
+    const { logError } = initLogger(env);
     const articles: NewsArticle[] = [];
     const options = {
         ignoreAttributes: false,
@@ -187,11 +190,12 @@ async function parseFeedWithFastXmlParser(xml: string, url: string): Promise<New
     return articles;
 }
 
-export async function collectNews(): Promise<NewsArticle[]> {
+export async function collectNews(env: Env): Promise<NewsArticle[]> {
+    const { logError, logInfo } = initLogger(env);
     let allArticles: NewsArticle[] = [];
 
     for (const url of NEWS_RSS_URLS) {
-        const xml = await fetchRSSFeed(url);
+        const xml = await fetchRSSFeed(url, env);
         if (xml) {
             // Determine source name from URL
             let sourceName = new URL(url).hostname;
@@ -238,7 +242,7 @@ export async function collectNews(): Promise<NewsArticle[]> {
             }
 
 
-            const articles = await parseFeedWithFastXmlParser(xml, url); // Use new parser and await it
+            const articles = await parseFeedWithFastXmlParser(xml, url, env); // Use new parser and await it, pass env
             const articlesWithSource = articles.map(article => ({
                 ...article,
                 sourceName: sourceName

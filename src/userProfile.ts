@@ -1,16 +1,7 @@
 // src/userProfile.ts
 
-import { logError, logInfo, logWarning } from './logger';
-
-// NewsArticleWithCategory インターフェースの定義
-interface NewsArticleWithCategory {
-    title: string;
-    link: string;
-}
-
-interface EnvWithDB {
-    DB: D1Database;
-}
+import { initLogger } from './logger';
+import { Env } from './index';
 
 export interface UserProfile {
     userId: string;
@@ -18,7 +9,8 @@ export interface UserProfile {
     embedding?: number[]; // ユーザーの興味を表す埋め込みベクトル
 }
 
-export async function getUserProfile(userId: string, env: EnvWithDB): Promise<UserProfile | null> {
+export async function getUserProfile(userId: string, env: Env): Promise<UserProfile | null> {
+    const { logError, logInfo, logWarning } = initLogger(env);
     try {
         const { results } = await env.DB.prepare(
             `SELECT user_id, email, embedding FROM users WHERE user_id = ?`
@@ -43,7 +35,8 @@ export async function getUserProfile(userId: string, env: EnvWithDB): Promise<Us
     }
 }
 
-export async function updateUserProfile(profile: UserProfile, env: EnvWithDB): Promise<void> {
+export async function updateUserProfile(profile: UserProfile, env: Env): Promise<void> {
+    const { logError, logInfo } = initLogger(env);
     try {
         // embeddingを文字列として保存
         const embeddingString = profile.embedding ? JSON.stringify(profile.embedding) : null;
@@ -56,7 +49,8 @@ export async function updateUserProfile(profile: UserProfile, env: EnvWithDB): P
     }
 }
 
-export async function createUserProfile(userId: string, email: string, env: EnvWithDB): Promise<UserProfile> {
+export async function createUserProfile(userId: string, email: string, env: Env): Promise<UserProfile> {
+    const { logError, logInfo } = initLogger(env);
     const newUserProfile: UserProfile = {
         userId: userId,
         email: email,
@@ -75,7 +69,8 @@ export async function createUserProfile(userId: string, email: string, env: EnvW
     }
 }
 
-export async function getUserIdByEmail(email: string, env: EnvWithDB): Promise<string | null> {
+export async function getUserIdByEmail(email: string, env: Env): Promise<string | null> {
+    const { logError, logInfo } = initLogger(env);
     try {
         const { results } = await env.DB.prepare(
             `SELECT user_id FROM users WHERE email = ?`
@@ -95,7 +90,8 @@ export async function getUserIdByEmail(email: string, env: EnvWithDB): Promise<s
     }
 }
 
-export async function getAllUserIds(env: EnvWithDB): Promise<string[]> {
+export async function getAllUserIds(env: Env): Promise<string[]> {
+    const { logError, logInfo } = initLogger(env);
     try {
         const { results } = await env.DB.prepare(
             `SELECT user_id FROM users`

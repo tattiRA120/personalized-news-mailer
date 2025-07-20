@@ -1,7 +1,13 @@
 // src/openaiClient.ts
-import { logError, logWarning, logInfo } from './logger'; // Import logging helpers
-import { OPENAI_EMBEDDING_MODEL } from './config'; // Import the model name from config
-import { NewsArticle } from './newsCollector'; // Import NewsArticle interface
+/**
+ * OpenAI API との連携を管理するモジュール。
+ * ファイルアップロード、バッチ埋め込みジョブの作成、結果の取得、ジョブステータスの確認を行う。
+ */
+
+import { initLogger } from './logger';
+import { OPENAI_EMBEDDING_MODEL } from './config';
+import { NewsArticle } from './newsCollector';
+import { Env } from './index';
 
 interface OpenAIEmbeddingResponse {
     data: Array<{
@@ -54,7 +60,8 @@ interface OpenAIFile {
  * @param env Environment variables containing OPENAI_API_KEY.
  * @returns The uploaded file object or null on failure.
  */
-async function uploadOpenAIFile(filename: string, content: Blob, purpose: string, env: { OPENAI_API_KEY?: string }): Promise<OpenAIFile | null> {
+async function uploadOpenAIFile(filename: string, content: Blob, purpose: string, env: Env): Promise<OpenAIFile | null> {
+    const { logError, logInfo } = initLogger(env);
     if (!env.OPENAI_API_KEY) {
         logError('OPENAI_API_KEY is not set for file upload.', null);
         return null;
@@ -74,7 +81,7 @@ async function uploadOpenAIFile(filename: string, content: Blob, purpose: string
             body: formData,
         });
 
-        const data: OpenAIFile = await response.json(); // Explicitly cast to OpenAIFile
+        const data: OpenAIFile = await response.json();
         if (response.ok) {
             logInfo(`Successfully uploaded file ${filename} to OpenAI. File ID: ${data.id}`, { fileId: data.id, filename });
             return data;
@@ -91,11 +98,11 @@ async function uploadOpenAIFile(filename: string, content: Blob, purpose: string
 /**
  * Creates an OpenAI batch embedding job.
  * @param inputFileId The ID of the uploaded input file.
- * @param callbackUrl The URL where OpenAI should send the callback when the job is complete.
  * @param env Environment variables containing OPENAI_API_KEY.
  * @returns The created batch job object or null on failure.
  */
-export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: { OPENAI_API_KEY?: string }): Promise<OpenAIBatchJob | null> {
+export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: Env): Promise<OpenAIBatchJob | null> {
+    const { logError, logInfo } = initLogger(env);
     if (!env.OPENAI_API_KEY) {
         logError('OPENAI_API_KEY is not set for batch job creation.', null);
         return null;
@@ -105,13 +112,8 @@ export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: { 
     const requestBody = {
         input_file_id: inputFileId,
         endpoint: "/v1/embeddings",
-        completion_window: "24h", // Or "48h"
-        metadata: {
-            // 必要に応じて他のメタデータをここに保持
-        },
-        // For embeddings, the model is specified in the input file for each request
-        // but we can also specify a default model here if needed.
-        // model: OPENAI_EMBEDDING_MODEL, // This might not be needed for embeddings batch endpoint
+        completion_window: "24h",
+        metadata: {},
     };
 
     try {
@@ -124,7 +126,7 @@ export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: { 
             body: JSON.stringify(requestBody),
         });
 
-        const data: OpenAIBatchJob = await response.json(); // Explicitly cast to OpenAIBatchJob
+        const data: OpenAIBatchJob = await response.json();
         if (response.ok) {
             logInfo(`Successfully created OpenAI batch embedding job. Job ID: ${data.id}`, { jobId: data.id, inputFileId });
             return data;
@@ -144,7 +146,8 @@ export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: { 
  * @param env Environment variables containing OPENAI_API_KEY.
  * @returns The results as a string or null on failure.
  */
-export async function getOpenAIBatchJobResults(output_file_id: string, env: { OPENAI_API_KEY?: string }): Promise<string | null> {
+export async function getOpenAIBatchJobResults(output_file_id: string, env: Env): Promise<string | null> {
+    const { logError, logInfo } = initLogger(env);
     if (!env.OPENAI_API_KEY) {
         logError('OPENAI_API_KEY is not set for batch job results retrieval.', null);
         return null;
@@ -182,13 +185,14 @@ export async function getOpenAIBatchJobResults(output_file_id: string, env: { OP
  * @returns A string formatted for OpenAI batch input file.
  */
 export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
+    // この関数はenvを直接使用しないため、initLoggerは不要
     return articles.map(article => JSON.stringify({
         custom_id: article.articleId,
         method: "POST",
         url: "/v1/embeddings",
         body: {
             model: OPENAI_EMBEDDING_MODEL,
-            input: `${article.title}. ${article.summary || ''}`, // タイトルとサマリーを結合
+            input: `${article.title}. ${article.summary || ''}`,
             encoding_format: "float"
         }
     })).join('\n');
@@ -200,7 +204,8 @@ export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
  * @param env Environment variables containing OPENAI_API_KEY.
  * @returns The batch job object or null on failure.
  */
-export async function getOpenAIBatchJobStatus(batchId: string, env: { OPENAI_API_KEY?: string }): Promise<OpenAIBatchJob | null> {
+export async function getOpenAIBatchJobStatus(batchId: string, env: Env): Promise<OpenAIBatchJob | null> {
+    const { logError, logInfo } = initLogger(env);
     if (!env.OPENAI_API_KEY) {
         logError('OPENAI_API_KEY is not set for batch job status retrieval.', null);
         return null;
@@ -232,17 +237,3 @@ export async function getOpenAIBatchJobStatus(batchId: string, env: { OPENAI_API
 
 // Export the upload function as well, as it will be used by index.ts
 export { uploadOpenAIFile };
-
-/**
- * Chunks an array into smaller arrays.
- * @param array The array to chunk.
- * @param size The maximum size of each chunk.
- * @returns An array of chunks.
- */
-export function chunkArray<T>(array: T[], size: number): T[][] {
-    const chunkedArr: T[][] = [];
-    for (let i = 0; i < array.length; i += size) {
-        chunkedArr.push(array.slice(i, i + size));
-    }
-    return chunkedArr;
-}

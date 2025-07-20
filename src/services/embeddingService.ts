@@ -1,9 +1,9 @@
 import { NewsArticle } from '../newsCollector';
 import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResults, prepareBatchInputFileContent, getOpenAIBatchJobStatus } from '../openaiClient';
-import { logError, logInfo, logWarning } from '../logger';
+import { initLogger } from '../logger';
 import { chunkArray } from '../utils/textProcessor';
 import { CHUNK_SIZE } from '../config';
-import { Env } from '../index'; // Env インターフェースをインポート
+import { Env } from '../index';
 import { updateArticleEmbeddingInD1 } from './d1Service'; // d1ServiceからupdateArticleEmbeddingInD1をインポート
 
 // NewsArticle型を拡張してembeddingプロパティを持つように定義
@@ -12,6 +12,7 @@ interface NewsArticleWithEmbedding extends NewsArticle {
 }
 
 export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbedding[], env: Env, isDebug: boolean = false): Promise<void> {
+    const { logError, logInfo, logWarning } = initLogger(env);
     logInfo(`${isDebug ? 'Debug: ' : ''}Starting OpenAI Batch API embedding job creation...`);
 
     // D1から既存の記事のarticle_idとembeddingの有無を取得

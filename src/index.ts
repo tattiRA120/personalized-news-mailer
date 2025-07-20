@@ -1,7 +1,7 @@
 import { getUserProfile, createUserProfile } from './userProfile';
 import { ClickLogger } from './clickLogger';
 import { BatchQueueDO } from './batchQueueDO';
-import { logError, logInfo, logWarning } from './logger';
+import { initLogger } from './logger';
 import { collectNews, NewsArticle } from './newsCollector';
 import { generateAndSaveEmbeddings } from './services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding } from './services/d1Service';
@@ -20,6 +20,7 @@ export interface Env {
     WORKER_BASE_URL?: string;
     DEBUG_API_KEY?: string;
     ASSETS: Fetcher; // ASSETS binding for static assets
+    LOG_LEVEL?: string;
 }
 
 interface EmailRecipient {
@@ -29,10 +30,12 @@ interface EmailRecipient {
 
 export default {
 	async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+        const { logError, logInfo, logWarning, logDebug } = initLogger(env);
 		await orchestrateMailDelivery(env, new Date(controller.scheduledTime));
 	},
 
 	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+        const { logError, logInfo, logWarning, logDebug } = initLogger(env);
 		const url = new URL(request.url);
 		const path = url.pathname;
 
