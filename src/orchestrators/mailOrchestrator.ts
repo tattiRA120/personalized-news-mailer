@@ -33,7 +33,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
     try {
         // --- 1. News Collection ---
         logInfo('Starting news collection...');
-        const articles = await collectNews();
+        const articles = await collectNews(env);
         logInfo(`Collected ${articles.length} articles.`, { articleCount: articles.length });
 
         if (articles.length === 0) {

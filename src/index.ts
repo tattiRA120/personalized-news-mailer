@@ -213,7 +213,7 @@ export default {
 		if (request.method === 'GET' && path === '/get-articles-for-education') {
 			logInfo('Request received for articles for education');
 			try {
-				const articles: NewsArticle[] = await collectNews();
+				const articles: NewsArticle[] = await collectNews(env);
 				logInfo(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
 				const articlesForEducation = articles.map((article: NewsArticle) => ({
@@ -342,7 +342,7 @@ export default {
 
             try {
                 logInfo('Debug: Starting news collection for force embedding...');
-                const articles: NewsArticle[] = await collectNews();
+                const articles: NewsArticle[] = await collectNews(env);
                 logInfo(`Debug: Collected ${articles.length} articles for force embedding.`, { articleCount: articles.length });
 
                 if (articles.length === 0) {

@@ -6,7 +6,7 @@ import { ClickLogger } from './clickLogger';
 import { logError, logInfo, logWarning } from './logger';
 import { NewsArticle } from './newsCollector';
 import { getArticleByIdFromD1 } from './services/d1Service'; // D1ServiceからgetArticleByIdFromD1をインポート
-import { Env } from './index'; // Env型をインポート
+import { Env } from './index';
 
 // コサイン類似度を計算するヘルパー関数
 function cosineSimilarity(vec1: number[], vec2: number[]): number {
@@ -73,7 +73,7 @@ export async function selectPersonalizedArticles(
                 logInfo(`Received ${ucbValues.length} UCB values from ClickLogger.`, { userId: userProfile.userId, ucbCount: ucbValues.length });
             } else {
                 const errorText = await response.text();
-                logError(`Failed to get UCB values from ClickLogger: ${response.statusText}`, null, { userId: userProfile.userId, status: response.status, statusText: response.statusText, errorText });
+                logError(`Failed to get UCB values from ClickLogger: ${response.statusText}`, undefined, { userId: userProfile.userId, status: response.status, statusText: response.statusText, errorText });
             }
         } catch (error) {
             logError('Error fetching UCB values from ClickLogger:', error, { userId: userProfile.userId });
