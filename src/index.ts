@@ -12,9 +12,9 @@ export interface Env {
 	CLICK_LOGGER: DurableObjectNamespace<ClickLogger>;
     BATCH_QUEUE_DO: DurableObjectNamespace<BatchQueueDO>;
 	OPENAI_API_KEY?: string;
-	GOOGLE_CLIENT_ID?: string;
-	GOOGLE_CLIENT_SECRET?: string;
-	GOOGLE_REDIRECT_URI?: string;
+	GOOGLE_CLIENT_ID: string;
+	GOOGLE_CLIENT_SECRET: string;
+	GOOGLE_REDIRECT_URI: string;
 	'mail-news-gmail-tokens': KVNamespace;
     BATCH_CALLBACK_TOKENS: KVNamespace;
     WORKER_BASE_URL?: string;

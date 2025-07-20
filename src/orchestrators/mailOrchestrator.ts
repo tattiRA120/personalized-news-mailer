@@ -1,4 +1,4 @@
-import { Env } from '../index'; // Env型をインポート
+import { Env } from '../index';
 import { collectNews, NewsArticle } from '../newsCollector';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs } from '../services/d1Service';
@@ -8,6 +8,7 @@ import { generateNewsEmail, sendNewsEmail } from '../emailGenerator';
 import { ClickLogger } from '../clickLogger';
 import { initLogger } from '../logger';
 import { chunkArray } from '../utils/textProcessor';
+import { DurableObjectStub } from '@cloudflare/workers-types';
 
 interface EmailRecipient {
     email: string;
@@ -121,7 +122,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
                     logInfo(`Loaded user profile for ${userId}.`);
 
                     const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
-                    const clickLogger: DurableObjectStub<ClickLogger> = env.CLICK_LOGGER.get(clickLoggerId);
+                    const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
                     // --- 3. Article Selection (MMR + Bandit) ---
                     logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
@@ -146,7 +147,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
                     }
                     const sender: EmailRecipient = { email: recipientEmail, name: 'Mailify News' };
 
-                    const emailResponse = await sendNewsEmail(env, recipientEmail, userId, selectedArticles, sender);
+                    const emailResponse = await sendNewsEmail(env as any, recipientEmail, userId, selectedArticles, sender);
 
                     if (emailResponse.ok) {
                         logInfo(`Personalized news email sent to ${recipientEmail} via Gmail API.`, { userId, email: recipientEmail });
