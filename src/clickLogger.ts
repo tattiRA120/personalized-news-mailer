@@ -151,13 +151,16 @@ export class ClickLogger extends DurableObject {
     }
 
     async alarm() {
-        // This alarm is triggered periodically to save dirty models to R2.
+        // This alarm is triggered periodically to save dirty models to R2 and process unclicked articles.
         if (this.dirty) {
             this.logInfo('Alarm triggered. Saving dirty models to R2.');
             await this.saveModelsToR2();
         } else {
             this.logInfo('Alarm triggered, but no changes to save.');
         }
+
+        // Process unclicked articles
+        await this.processUnclickedArticles();
     }
 
     // Helper to ensure an alarm is set.
@@ -370,6 +373,47 @@ export class ClickLogger extends DurableObject {
 
         // Handle other requests
         return new Response('Not Found', { status: 404 });
+    }
+
+    // Process unclicked articles and update bandit models
+    private async processUnclickedArticles(): Promise<void> {
+        this.logInfo('Starting to process unclicked articles.');
+        try {
+            // Get all user IDs that have sent articles
+            const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM sent_articles`).all<{ user_id: string }>();
+            const userIds = results.map(row => row.user_id);
+
+            const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000); // 24時間前
+
+            for (const userId of userIds) {
+                const unclickedArticles = await this.env.DB.prepare(
+                    `SELECT sa.article_id, sa.embedding
+                     FROM sent_articles sa
+                     LEFT JOIN click_logs cl ON sa.user_id = cl.user_id AND sa.article_id = cl.article_id
+                     WHERE sa.user_id = ? AND sa.timestamp >= ? AND cl.id IS NULL`
+                ).bind(userId, twentyFourHoursAgo).all<{ article_id: string, embedding: string }>();
+
+                if (unclickedArticles.results && unclickedArticles.results.length > 0) {
+                    let banditModel = this.inMemoryModels.get(userId);
+                    if (!banditModel) {
+                        this.logWarning(`No bandit model found for user ${userId} during unclicked article processing. Initializing a new one.`);
+                        banditModel = this.initializeNewBanditModel(userId);
+                    }
+
+                    for (const article of unclickedArticles.results) {
+                        if (article.embedding) {
+                            // クリックされなかった記事には負の報酬を与える (例: -0.1)
+                            this.updateBanditModel(banditModel, JSON.parse(article.embedding) as number[], -0.1);
+                            this.dirty = true;
+                            this.logInfo(`Updated bandit model for user ${userId} with -0.1 reward for unclicked article ${article.article_id}.`);
+                        }
+                    }
+                }
+            }
+            this.logInfo('Finished processing unclicked articles.');
+        } catch (error) {
+            this.logError('Error processing unclicked articles:', error);
+        }
     }
 
     // Calculate UCB values for a list of articles for a specific user model.
