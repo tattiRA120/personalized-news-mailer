@@ -59,6 +59,8 @@ jobs:
           wranglerVersion: 'latest' # 最新のWranglerを使用
           vars: |
             WORKER_BASE_URL
+            LOG_LEVEL
         env:
           WORKER_BASE_URL: ${{ vars.WORKER_BASE_URL }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           # プロジェクト名はwrangler.jsoncで指定済みのため不要
