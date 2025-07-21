@@ -12,8 +12,8 @@ interface NewsArticleWithEmbedding extends NewsArticle {
 }
 
 export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbedding[], env: Env, isDebug: boolean = false): Promise<void> {
-    const { logError, logInfo, logWarning } = initLogger(env);
-    logInfo(`${isDebug ? 'Debug: ' : ''}Starting OpenAI Batch API embedding job creation...`);
+    const { logError, logInfo, logWarning, logDebug } = initLogger(env);
+    logDebug(`${isDebug ? 'Debug: ' : ''}Starting OpenAI Batch API embedding job creation...`);
 
     // D1から既存の記事のarticle_idとembeddingの有無を取得
     const { results: existingArticlesInDb } = await env.DB.prepare("SELECT article_id, embedding FROM articles").all();
@@ -22,11 +22,11 @@ export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbeddi
             .filter(row => row.embedding !== null && row.embedding !== undefined && row.article_id !== null && row.article_id !== undefined)
             .map(row => row.article_id)
     );
-    logInfo(`${isDebug ? 'Debug: ' : ''}Found ${existingArticleIdsWithEmbedding.size} articles with existing embeddings in D1 (based on article ID).`, { count: existingArticleIdsWithEmbedding.size });
+    logDebug(`${isDebug ? 'Debug: ' : ''}Found ${existingArticleIdsWithEmbedding.size} articles with existing embeddings in D1 (based on article ID).`, { count: existingArticleIdsWithEmbedding.size });
 
     // D1からembeddingがNULLの記事を取得
     const { results: articlesMissingEmbeddingInD1 } = await env.DB.prepare("SELECT article_id, title, url, published_at, content FROM articles WHERE embedding IS NULL").all();
-    logInfo(`${isDebug ? 'Debug: ' : ''}Found ${articlesMissingEmbeddingInD1.length} articles missing embeddings in D1.`, { count: articlesMissingEmbeddingInD1.length });
+    logDebug(`${isDebug ? 'Debug: ' : ''}Found ${articlesMissingEmbeddingInD1.length} articles missing embeddings in D1.`, { count: articlesMissingEmbeddingInD1.length });
 
     // 新しく収集された記事と、D1から取得した未embedding記事を結合
     // 重複を避けるため、Mapを使用してarticleIdでユニークなリストを作成
@@ -52,21 +52,21 @@ export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbeddi
     let articlesToEmbed = Array.from(combinedArticlesMap.values())
         .filter(article => article.articleId && !existingArticleIdsWithEmbedding.has(article.articleId));
 
-    logInfo(`${isDebug ? 'Debug: ' : ''}Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
+    logDebug(`${isDebug ? 'Debug: ' : ''}Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
 
     if (articlesToEmbed.length === 0) {
-        logInfo(`${isDebug ? 'Debug: ' : ''}No articles found that need embedding. Skipping batch job creation.`);
+        logDebug(`${isDebug ? 'Debug: ' : ''}No articles found that need embedding. Skipping batch job creation.`);
         return;
     }
 
     if (isDebug) {
         // デバッグ時はembeddingする記事数を3に制限
         articlesToEmbed = articlesToEmbed.slice(0, 3);
-        logInfo(`Debug: Limiting force embedding to ${articlesToEmbed.length} articles for debugging purposes.`, { limitedCount: articlesToEmbed.length });
+        logDebug(`Debug: Limiting force embedding to ${articlesToEmbed.length} articles for debugging purposes.`, { limitedCount: articlesToEmbed.length });
     }
 
     const chunks = chunkArray(articlesToEmbed, CHUNK_SIZE);
-    logInfo(`${isDebug ? 'Debug: ' : ''}Total chunks: ${chunks.length} (each up to ${CHUNK_SIZE} articles)`);
+    logDebug(`${isDebug ? 'Debug: ' : ''}Total chunks: ${chunks.length} (each up to ${CHUNK_SIZE} articles)`);
 
     for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
@@ -85,7 +85,7 @@ export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbeddi
             logError(`${isDebug ? 'Debug: ' : ''}Chunk ${i} upload returned no file ID.`, null, { chunkIndex: i });
             continue;
         }
-        logInfo(`${isDebug ? 'Debug: ' : ''}Chunk ${i} uploaded. File ID:`, { fileId: uploaded.id, chunkIndex: i });
+        logDebug(`${isDebug ? 'Debug: ' : ''}Chunk ${i} uploaded. File ID:`, { fileId: uploaded.id, chunkIndex: i });
 
         let job;
         try {
@@ -94,14 +94,14 @@ export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbeddi
                 logError(`${isDebug ? 'Debug: ' : ''}Chunk ${i} batch job creation returned no job ID.`, null, { chunkIndex: i });
                 continue;
             }
-            logInfo(`${isDebug ? 'Debug: ' : ''}Chunk ${i} batch job created.`, { jobId: job.id, chunkIndex: i });
+            logDebug(`${isDebug ? 'Debug: ' : ''}Chunk ${i} batch job created.`, { jobId: job.id, chunkIndex: i });
         } catch (e) {
             logError(`${isDebug ? 'Debug: ' : ''}Chunk ${i} batch job creation failed`, e, { chunkIndex: i });
             continue;
         }
 
         // Durable Object にバッチジョブIDを渡し、ポーリングを委譲
-        logInfo(`${isDebug ? 'Debug: ' : ''}Delegating batch job ${job.id} (Chunk ${i}) to BatchQueueDO for polling.`);
+        logDebug(`${isDebug ? 'Debug: ' : ''}Delegating batch job ${job.id} (Chunk ${i}) to BatchQueueDO for polling.`);
         const batchQueueDOId = env.BATCH_QUEUE_DO.idFromName("batch-embedding-queue");
         const batchQueueDOStub = env.BATCH_QUEUE_DO.get(batchQueueDOId);
 
@@ -112,6 +112,6 @@ export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbeddi
                 body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
             })
         );
-        logInfo(`${isDebug ? 'Debug: ' : ''}Successfully delegated batch job ${job.id} (Chunk ${i}) to BatchQueueDO.`);
+        logDebug(`${isDebug ? 'Debug: ' : ''}Successfully delegated batch job ${job.id} (Chunk ${i}) to BatchQueueDO.`);
     }
 }

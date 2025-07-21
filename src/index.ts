@@ -333,7 +333,7 @@ export default {
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		} else if (request.method === 'POST' && path === '/debug/force-embed-articles') {
-            logInfo('Debug: Force embed articles request received');
+            logDebug('Debug: Force embed articles request received');
             const debugApiKey = request.headers.get('X-Debug-Key');
             if (debugApiKey !== env.DEBUG_API_KEY) {
                 logWarning('Debug: Unauthorized access attempt to /debug/force-embed-articles', { providedKey: debugApiKey });
@@ -341,12 +341,12 @@ export default {
             }
 
             try {
-                logInfo('Debug: Starting news collection for force embedding...');
+                logDebug('Debug: Starting news collection for force embedding...');
                 const articles: NewsArticle[] = await collectNews(env);
-                logInfo(`Debug: Collected ${articles.length} articles for force embedding.`, { articleCount: articles.length });
+                logDebug(`Debug: Collected ${articles.length} articles for force embedding.`, { articleCount: articles.length });
 
                 if (articles.length === 0) {
-                    logInfo('Debug: No articles collected for force embedding. Skipping further steps.');
+                    logDebug('Debug: No articles collected for force embedding. Skipping further steps.');
                     return new Response('No articles collected', { status: 200 });
                 }
 
@@ -361,7 +361,7 @@ export default {
                     embedding: undefined,
                 }));
                 await saveArticlesToD1(articlesToSaveToD1, env);
-                logInfo(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
+                logDebug(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
 
                 await generateAndSaveEmbeddings(articles, env, true);
 
@@ -374,7 +374,7 @@ export default {
                 return new Response('Internal Server Error during force embedding', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/debug/delete-user-data') {
-            logInfo('Debug: Delete user data request received');
+            logDebug('Debug: Delete user data request received');
             const debugApiKey = request.headers.get('X-Debug-Key');
             if (debugApiKey !== env.DEBUG_API_KEY) {
                 logWarning('Debug: Unauthorized access attempt to /debug/delete-user-data', { providedKey: debugApiKey });
@@ -388,24 +388,24 @@ export default {
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                logInfo(`Debug: Deleting user data for user ${userId} from DB...`, { userId });
+                logDebug(`Debug: Deleting user data for user ${userId} from DB...`, { userId });
 
                 await env.DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(userId).run();
-                logInfo(`Debug: Deleted user profile for ${userId}.`, { userId });
+                logDebug(`Debug: Deleted user profile for ${userId}.`, { userId });
 
                 await env.DB.prepare(`DELETE FROM click_logs WHERE user_id = ?`).bind(userId).run();
-                logInfo(`Debug: Deleted click logs for ${userId}.`, { userId });
+                logDebug(`Debug: Deleted click logs for ${userId}.`, { userId });
 
                 await env.DB.prepare(`DELETE FROM sent_articles WHERE user_id = ?`).bind(userId).run();
-                logInfo(`Debug: Deleted sent articles for ${userId}.`, { userId });
+                logDebug(`Debug: Deleted sent articles for ${userId}.`, { userId });
 
                 await env.DB.prepare(`DELETE FROM education_logs WHERE user_id = ?`).bind(userId).run();
-                logInfo(`Debug: Deleted education logs for ${userId}.`, { userId });
+                logDebug(`Debug: Deleted education logs for ${userId}.`, { userId });
 
                 await env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
-                logInfo(`Debug: Deleted Gmail refresh token for ${userId}.`, { userId });
+                logDebug(`Debug: Deleted Gmail refresh token for ${userId}.`, { userId });
 
-                logInfo(`Debug: Successfully deleted all data for user ${userId}.`, { userId });
+                logDebug(`Debug: Successfully deleted all data for user ${userId}.`, { userId });
                 return new Response(JSON.stringify({ message: `User data for ${userId} deleted successfully.` }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' },
@@ -416,7 +416,7 @@ export default {
                 return new Response('Internal Server Error during user data deletion', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/debug/trigger-batch-alarm') {
-            logInfo('Debug: Trigger BatchQueueDO alarm request received');
+            logDebug('Debug: Trigger BatchQueueDO alarm request received');
             const debugApiKey = request.headers.get('X-Debug-Key');
             if (debugApiKey !== env.DEBUG_API_KEY) {
                 logWarning('Debug: Unauthorized access attempt to /debug/trigger-batch-alarm', { providedKey: debugApiKey });
@@ -432,7 +432,7 @@ export default {
                     })
                 );
                 if (doResponse.ok) {
-                    logInfo('Debug: Successfully triggered BatchQueueDO alarm.');
+                    logDebug('Debug: Successfully triggered BatchQueueDO alarm.');
                     return new Response('BatchQueueDO alarm triggered successfully.', { status: 200 });
                 } else {
                     logError(`Debug: Failed to trigger BatchQueueDO alarm: ${doResponse.statusText}`, null, { status: doResponse.status, statusText: doResponse.statusText });
