@@ -127,8 +127,8 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
                     // --- 3. Article Selection (MMR + Bandit) ---
                     logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
                     const numberOfArticlesToSend = 5;
-                    // UCB計算の負荷を軽減するため、最新の100件の記事に制限
-                    const articlesForSelection = articlesWithEmbeddings.slice(0, 100);
+                    // UCB計算の負荷を軽減しつつ、より多くの記事を対象とするため、最新の200件の記事に制限
+                    const articlesForSelection = articlesWithEmbeddings.slice(0, 200);
                     logInfo(`Selecting personalized articles for user ${userId} from ${articlesForSelection.length} candidates.`, { userId, candidateCount: articlesForSelection.length });
                     const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5, env) as NewsArticleWithEmbedding[];
                     logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });

@@ -193,7 +193,8 @@ export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
         body: {
             model: OPENAI_EMBEDDING_MODEL,
             input: `${article.title}. ${article.summary || ''}`,
-            encoding_format: "float"
+            encoding_format: "float",
+            dimensions: 256
         }
     })).join('\n');
 }
