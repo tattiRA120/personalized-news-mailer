@@ -37,21 +37,22 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
         const articleChunks = chunkArray(articles, CHUNK_SIZE_SQL_VARIABLES); // 記事の配列をチャンクに分割
 
         for (const chunk of articleChunks) {
-            const placeholders = chunk.map(() => '(?, ?, ?, ?, ?)').join(','); // articleId, title, url, publishedAt, content
+            const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(','); // articleId, title, url, publishedAt, content, embedding
             // ON CONFLICT(url) DO UPDATE SET ...: URLが重複する場合、title, published_at, contentを更新。
             // contentが変更された場合、embeddingをNULLにリセットして再生成を促す。
             // embedding IS NULL の条件を削除し、常に更新を試みる
-            const query = `INSERT INTO articles (article_id, title, url, published_at, content) VALUES ${placeholders} ON CONFLICT(url) DO UPDATE SET title=EXCLUDED.title, published_at=EXCLUDED.published_at, content=EXCLUDED.content, embedding=CASE WHEN EXCLUDED.content IS NOT articles.content THEN NULL ELSE articles.embedding END`;
+            const query = `INSERT INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders} ON CONFLICT(url) DO UPDATE SET title=EXCLUDED.title, published_at=EXCLUDED.published_at, content=EXCLUDED.content, embedding=CASE WHEN EXCLUDED.content IS NOT articles.content THEN NULL ELSE articles.embedding END`;
             const stmt = env.DB.prepare(query);
 
-            const bindParams: (string | number | undefined)[] = [];
+            const bindParams: (string | number | undefined | null)[] = []; // nullを許容するように型を変更
             for (const article of chunk) {
                 bindParams.push(
                     article.articleId,
                     article.title,
                     article.link,
                     article.publishedAt,
-                    article.content || '' // contentがundefinedの場合は空文字列
+                    article.content || '', // contentがundefinedの場合は空文字列
+                    null // 新しい記事のembeddingはNULLに設定
                 );
             }
 
