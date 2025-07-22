@@ -1,4 +1,5 @@
 # .github/workflows/dev-to-main-pr.yml
+# テスト
 name: dev → main 自動 PR & 自動マージ
 
 on:
