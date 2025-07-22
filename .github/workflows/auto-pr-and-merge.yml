@@ -1,35 +1,51 @@
 # .github/workflows/auto-pr-and-merge.yml
-name: Dev → Main 自動 PR & Auto‑Merge
+name: dev → main 自動 PR & 自動マージ
+
 on:
   push:
-    branches:
-      - dev
+    branches: [ dev ]
 
 permissions:
+  contents: write
   pull-requests: write
-  contents: read
 
 jobs:
-  create-and-automerge-pr:
+  pr-and-automerge:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: コードをチェックアウト（全履歴取得）
         uses: actions/checkout@v4
-
-      - name: Create Pull Request
-        id: cpr
-        uses: peter-evans/create-pull-request@v5
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          base: main
-          head: dev
-          title: '🛠️ Sync dev → main'
-          commit-message: 'chore: sync dev into main'
-          labels: automerge
+          fetch-depth: 0
 
-      - name: Enable Auto‑Merge
+      - name: PRを作成または更新
+        id: pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --base main \
+            --head dev \
+            --title "dev → main 自動PR" \
+            --body "devの変更をmainに同期" \
+            --label automerge \
+            --fill || true
+
+          PR_NUM=$(gh pr list \
+            --base main \
+            --head dev \
+            --json number \
+            --jq '.[0].number')
+
+          if [ -z "$PR_NUM" ]; then
+            echo "Error: PRが見つかりませんでした" >&2
+            exit 1
+          fi
+          echo "number=$PR_NUM" >> $GITHUB_OUTPUT
+
+      - name: 自動マージを有効化
         uses: peter-evans/enable-pull-request-automerge@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
+          pull-request-number: ${{ steps.pr.outputs.number }}
           merge-method: squash

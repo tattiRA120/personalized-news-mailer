@@ -1,43 +1,56 @@
 # .github/workflows/ai-review-and-autoapprove.yml
 name: AI Review & Auto‑Approve via Gemini
+
 on:
-  pull_request:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["dev → main 自動 PR & 自動マージ"]
     types:
-      - opened
-      - synchronize
+      - completed
 
 permissions:
-  pull-requests: write
   contents: read
+  pull-requests: write
 
 jobs:
-  request-gemini-review:
+  ai-review-and-approve:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout PR
+      - name: リポジトリをチェックアウト
         uses: actions/checkout@v4
 
-      - name: Request Gemini Review
-        # Gemini App に `/gemini review` コメントを投げる
+      - name: 開いている PR を取得（dev → main）
+        id: get_pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prs = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              base: "main",
+              head: "dev"
+            });
+
+            if (prs.data.length === 0) {
+              core.setFailed("dev → main のPRが見つかりませんでした");
+            } else {
+              core.setOutput("pr_number", prs.data[0].number);
+            }
+
+      - name: Gemini にレビューを依頼
         uses: peter-evans/create-or-update-comment@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          issue-number: ${{ github.event.pull_request.number }}
+          issue-number: ${{ steps.get_pr.outputs.pr_number }}
           body: "/gemini review"
 
-  auto-approve:
-    needs: request-gemini-review
-    runs-on: ubuntu-latest
-    # レビュー完了まで最大 10 分待つ
-    timeout-minutes: 10
-    steps:
-      - name: Wait for Gemini to finish review
-        run: sleep 300  # 5 分待機。必要に応じて調整してください。
+      - name: Gemini のレビュー完了を待機
+        run: sleep 300  # 5分待ち（必要に応じて調整）
 
-      - name: Approve Pull Request
+      - name: PR を承認
         uses: peter-evans/approve-pull-request@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          pull-request-number: ${{ github.event.pull_request.number }}
+          pull-request-number: ${{ steps.get_pr.outputs.pr_number }}
