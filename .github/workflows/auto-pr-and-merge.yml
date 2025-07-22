@@ -1,8 +1,10 @@
 # .github/workflows/dev-to-main-pr.yml
 name: dev → main 自動 PR & 自動マージ
+
 on:
   push:
     branches: [ dev ]
+
 permissions:
   contents: write
   pull-requests: write
@@ -14,13 +16,10 @@ jobs:
       - name: コードをチェックアウト
         uses: actions/checkout@v4
 
-      - name: GitHub CLI をセットアップ
-        uses: actions/setup-gh@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: PRを作成または更新
         id: pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr create \
             --base main \
@@ -30,7 +29,7 @@ jobs:
             --label automerge \
             --fill || true
 
-          # PR番号を取得
+          # 作成・更新されたPRの番号を取得
           PR_NUM=$(gh pr list \
             --base main \
             --head dev \
@@ -41,7 +40,6 @@ jobs:
             echo "Error: PRが見つかりませんでした" >&2
             exit 1
           fi
-
           echo "number=$PR_NUM" >> $GITHUB_OUTPUT
 
       - name: 自動マージを有効化
