@@ -1,2 +1,1 @@
 # personalized-news-mailer
-テスト
