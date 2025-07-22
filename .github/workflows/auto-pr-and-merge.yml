@@ -1,0 +1,35 @@
+# .github/workflows/auto-pr-and-merge.yml
+name: Dev → Main 自動 PR & Auto‑Merge
+on:
+  push:
+    branches:
+      - dev
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  create-and-automerge-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create Pull Request
+        id: cpr
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: main
+          head: dev
+          title: '🛠️ Sync dev → main'
+          commit-message: 'chore: sync dev into main'
+          labels: automerge
+
+      - name: Enable Auto‑Merge
+        uses: peter-evans/enable-pull-request-automerge@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          pull-request-number: ${{ steps.cpr.outputs.pull-request-number }}
+          merge-method: squash

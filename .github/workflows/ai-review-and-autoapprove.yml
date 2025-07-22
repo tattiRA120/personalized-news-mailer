@@ -1,0 +1,43 @@
+# .github/workflows/ai-review-and-autoapprove.yml
+name: AI Review & Auto‑Approve via Gemini
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  request-gemini-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+
+      - name: Request Gemini Review
+        # Gemini App に `/gemini review` コメントを投げる
+        uses: peter-evans/create-or-update-comment@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: "/gemini review"
+
+  auto-approve:
+    needs: request-gemini-review
+    runs-on: ubuntu-latest
+    # レビュー完了まで最大 10 分待つ
+    timeout-minutes: 10
+    steps:
+      - name: Wait for Gemini to finish review
+        run: sleep 300  # 5 分待機。必要に応じて調整してください。
+
+      - name: Approve Pull Request
+        uses: peter-evans/approve-pull-request@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pull-request-number: ${{ github.event.pull_request.number }}
