@@ -1,5 +1,4 @@
 # .github/workflows/ai-review-and-autoapprove.yml
-# テスト
 name: AI Review & Auto‑Approve via Gemini
 on:
   pull_request:
