@@ -13,8 +13,10 @@ jobs:
   pr-and-automerge:
     runs-on: ubuntu-latest
     steps:
-      - name: コードをチェックアウト
+      - name: コードをチェックアウト（全履歴取得）
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: PRを作成または更新
         id: pr
@@ -29,7 +31,6 @@ jobs:
             --label automerge \
             --fill || true
 
-          # 作成・更新されたPRの番号を取得
           PR_NUM=$(gh pr list \
             --base main \
             --head dev \
