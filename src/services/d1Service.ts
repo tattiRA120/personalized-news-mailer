@@ -88,9 +88,16 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
     logInfo(`Fetching articles from D1 with limit ${limit}, offset ${offset}, where: ${whereClause}.`);
     try {
         let query = `SELECT article_id, title, url, published_at, content, embedding FROM articles`;
-        // embeddingがNULLではない記事のみをデフォルトで取得
-        const effectiveWhereClause = whereClause ? `(${whereClause}) AND embedding IS NOT NULL` : `embedding IS NOT NULL`;
-        query += ` WHERE ${effectiveWhereClause}`;
+        
+        let finalWhereClause = whereClause;
+        // whereClauseが指定されていない場合、またはembedding IS NULLを含まない場合にのみ、embedding IS NOT NULLを追加
+        if (!whereClause || !whereClause.includes("embedding IS NULL")) {
+            finalWhereClause = finalWhereClause ? `(${finalWhereClause}) AND embedding IS NOT NULL` : `embedding IS NOT NULL`;
+        }
+
+        if (finalWhereClause) {
+            query += ` WHERE ${finalWhereClause}`;
+        }
         query += ` ORDER BY published_at DESC LIMIT ? OFFSET ?`;
 
         const stmt = env.DB.prepare(query);
