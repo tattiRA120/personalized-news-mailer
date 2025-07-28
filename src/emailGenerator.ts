@@ -39,7 +39,7 @@ export async function generateNewsEmail(articles: NewsArticle[], userId: string,
                 h1 { color: #333; text-align: center; margin-bottom: 20px; }
                 .article { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #eee; display: flex; align-items: flex-start; }
                 .article:last-child { border-bottom: none; }
-                .article-image { width: 120px; height: 120px; object-fit: cover; margin-right: 15px; border-radius: 4px; }
+                .article-image { width: 120px; height: 120px; object-fit: contain; margin-right: 15px; border-radius: 4px; }
                 .article-content { flex-grow: 1; }
                 .article h2 { margin-top: 0; margin-bottom: 5px; color: #007bff; font-size: 1.2em; }
                 .article a { text-decoration: none; color: #007bff; }
@@ -61,22 +61,50 @@ export async function generateNewsEmail(articles: NewsArticle[], userId: string,
     } else {
         for (const article of articles) {
             let imageUrl: string | undefined;
+            let finalArticleLink = article.link;
 
-            // 1. RSSフィードから画像URLを抽出
-            // NEWS_RSS_URLSから元のRSSフィードURLを見つける必要がある
-            const rssFeedUrl = NEWS_RSS_URLS.find(url => article.link.startsWith(url.split('/rss')[0]) || article.link.startsWith(url.split('/feed')[0]) || article.link.startsWith(url.split('/data/rss')[0]));
-            if (rssFeedUrl) {
-                imageUrl = await getRssImageUrl(rssFeedUrl, article.link, env);
-            }
+            // ReutersとBloombergの場合、Googleニュースのリダイレクトを解決して元の記事URLを取得
+            if (article.sourceName === 'Reuters' || article.sourceName === 'Bloomberg') {
+                try {
+                    const redirectResponse = await fetch(article.link, { redirect: 'follow', headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' } });
+                    if (redirectResponse.ok) {
+                        finalArticleLink = redirectResponse.url;
+                        logInfo(`Resolved redirect for ${article.sourceName} article: ${article.link} -> ${finalArticleLink}`, { originalUrl: article.link, finalUrl: finalArticleLink });
+                    } else {
+                        logError(`Failed to resolve redirect for ${article.sourceName} article: ${article.link} - ${redirectResponse.statusText}`, null, { url: article.link, status: redirectResponse.status });
+                    }
+                } catch (error) {
+                    logError(`Error resolving redirect for ${article.sourceName} article ${article.link}:`, error, { url: article.link });
+                }
 
-            // 2. RSSから取得できなかった場合、OGP画像をスクレイピング
-            if (!imageUrl) {
-                imageUrl = await getOgpImageUrl(article.link, env);
-            }
+                imageUrl = await getOgpImageUrl(finalArticleLink, env);
+                if (!imageUrl) {
+                    imageUrl = NEWS_SOURCE_LOGOS[article.sourceName];
+                    logInfo(`Using source logo for ${article.sourceName} article as OGP image not found: ${imageUrl}`, { url: article.link, sourceName: article.sourceName, imageUrl });
+                } else {
+                    logInfo(`Found OGP image for ${article.sourceName} article from final URL: ${imageUrl}`, { url: finalArticleLink, sourceName: article.sourceName, imageUrl });
+                }
+            } else {
+                // 1. RSSフィードから画像URLを抽出
+                const rssFeedUrl = NEWS_RSS_URLS.find(url => article.link.startsWith(url.split('/rss')[0]) || article.link.startsWith(url.split('/feed')[0]) || article.link.startsWith(url.split('/data/rss')[0]));
+                if (rssFeedUrl) {
+                    imageUrl = await getRssImageUrl(rssFeedUrl, article.link, env);
+                }
 
-            // 3. どちらからも取得できなかった場合、ソースロゴまたは汎用デフォルト画像
-            if (!imageUrl) {
-                imageUrl = NEWS_SOURCE_LOGOS[article.sourceName] || NEWS_SOURCE_LOGOS['DEFAULT'];
+                // 2. RSSから取得できなかった場合、GIGAZINEでなければOGP画像をスクレイピング
+                if (!imageUrl) {
+                    if (article.sourceName !== 'GIGAZINE') {
+                        imageUrl = await getOgpImageUrl(article.link, env);
+                    } else {
+                        logInfo(`Skipping OGP scraping for GIGAZINE article due to previous issues: ${article.link}`, { url: article.link, sourceName: article.sourceName });
+                    }
+                }
+
+                // 3. どちらからも取得できなかった場合、ソースロゴまたは汎用デフォルト画像
+                if (!imageUrl) {
+                    imageUrl = NEWS_SOURCE_LOGOS[article.sourceName] || NEWS_SOURCE_LOGOS['DEFAULT'];
+                    logInfo(`Using source logo or default image for ${article.sourceName} article: ${imageUrl}`, { url: article.link, sourceName: article.sourceName, imageUrl });
+                }
             }
 
             const trackingLink = `${env.WORKER_BASE_URL}/track-click?userId=${userId}&articleId=${encodeURIComponent(article.articleId)}&redirectUrl=${encodeURIComponent(article.link)}`;
