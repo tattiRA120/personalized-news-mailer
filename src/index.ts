@@ -6,6 +6,7 @@ import { collectNews, NewsArticle } from './newsCollector';
 import { generateAndSaveEmbeddings } from './services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding } from './services/d1Service';
 import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
+import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	DB: D1Database;
@@ -442,6 +443,26 @@ export default {
                 logError('Debug: Error triggering BatchQueueDO alarm:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error during BatchQueueDO alarm trigger', { status: 500 });
             }
+        } else if (request.method === 'POST' && path === '/debug/send-test-email') {
+            logDebug('Debug: Send test email request received');
+            const debugApiKey = request.headers.get('X-Debug-Key');
+            if (debugApiKey !== env.DEBUG_API_KEY) {
+                logWarning('Debug: Unauthorized access attempt to /debug/send-test-email', { providedKey: debugApiKey });
+                return new Response('Unauthorized', { status: 401 });
+            }
+            try {
+                // orchestrateMailDelivery は scheduled と同じ引数を取る
+                // テスト目的のため、現在時刻を渡す
+                await orchestrateMailDelivery(env, new Date());
+                logDebug('Debug: Test email delivery orchestrated successfully.');
+                return new Response(JSON.stringify({ message: 'Test email delivery orchestrated successfully.' }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                });
+            } catch (error) {
+                logError('Debug: Error during test email delivery:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error during test email delivery', { status: 500 });
+            }
         }
 
 
@@ -452,4 +473,4 @@ export default {
 
 // Durable Object class definition (must be exported)
 export { ClickLogger } from './clickLogger';
-export { BatchQueueDO } from './batchQueueDO'; // BatchQueueDO をエクスポート
+export { BatchQueueDO } from './batchQueueDO';
