@@ -75,6 +75,7 @@ export class ClickLogger extends DurableObject {
     private logError: (message: string, error: any, details?: any) => void;
     private logInfo: (message: string, details?: any) => void;
     private logWarning: (message: string, details?: any) => void;
+    private logDebug: (message: string, details?: any) => void;
 
     constructor(state: DurableObjectState, env: ClickLoggerEnv) { // EnvWithDurableObjects の代わりに ClickLoggerEnv を使用
         super(state, env);
@@ -84,10 +85,11 @@ export class ClickLogger extends DurableObject {
         this.dirty = false;
 
         // ロガーを初期化し、インスタンス変数に割り当てる
-        const { logError, logInfo, logWarning } = initLogger(env);
+        const { logError, logInfo, logWarning, logDebug } = initLogger(env);
         this.logError = logError;
         this.logInfo = logInfo;
         this.logWarning = logWarning;
+        this.logDebug = logDebug;
 
         // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
@@ -431,7 +433,7 @@ export class ClickLogger extends DurableObject {
                 const x = article.embedding;
 
                 if (!x || x.length !== dimension) {
-                    this.logWarning(`Article ${article.articleId} has invalid or missing embedding.`);
+                    this.logDebug(`Article ${article.articleId} has invalid or missing embedding.`);
                     ucbResults.push({ articleId: article.articleId, ucb: 0 });
                     continue;
                 }
