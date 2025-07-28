@@ -25,10 +25,11 @@ interface NewsArticleWithEmbedding extends NewsArticle {
  * ニュース収集、埋め込み生成、メール送信、ログ処理、クリーンアップを行います。
  * @param env 環境変数
  * @param scheduledTime スケジュールされた実行時間 (UTC)
+ * @param isTestRun テスト実行かどうかを示すフラグ (オプション)
  */
-export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Promise<void> {
+export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isTestRun: boolean = false): Promise<void> {
     const { logError, logInfo, logWarning, logDebug } = initLogger(env);
-    logInfo('Mail delivery orchestration started', { scheduledTime: scheduledTime.toISOString() });
+    logInfo('Mail delivery orchestration started', { scheduledTime: scheduledTime.toISOString(), isTestRun });
 
     try {
         // --- 1. News Collection ---
@@ -85,8 +86,8 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date): Pr
             }
         }
 
-        // UTC 23時 (日本時間 8時) のCronトリガーでのみメール送信と関連動作を実行
-        if (scheduledHourUTC === 23) {
+        // UTC 23時 (日本時間 8時) のCronトリガー、またはテスト実行の場合にメール送信と関連動作を実行
+        if (isTestRun || scheduledHourUTC === 23) {
             // --- Fetch articles from D1 ---
             logInfo('Fetching articles from D1 for email sending (only articles with embeddings).');
             const articlesWithEmbeddings = await getArticlesFromD1(env, 1000) as NewsArticleWithEmbedding[]; // d1ServiceのgetArticlesFromD1を使用

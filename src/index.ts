@@ -452,8 +452,8 @@ export default {
             }
             try {
                 // orchestrateMailDelivery は scheduled と同じ引数を取る
-                // テスト目的のため、現在時刻を渡す
-                await orchestrateMailDelivery(env, new Date());
+                // テスト目的のため、現在時刻を渡し、isTestRun フラグを true に設定する
+                await orchestrateMailDelivery(env, new Date(), true);
                 logDebug('Debug: Test email delivery orchestrated successfully.');
                 return new Response(JSON.stringify({ message: 'Test email delivery orchestrated successfully.' }), {
                     status: 200,
