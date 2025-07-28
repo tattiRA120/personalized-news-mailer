@@ -4,6 +4,31 @@ import { XMLParser } from 'fast-xml-parser';
 import { cleanArticleText, generateContentHash } from './utils/textProcessor';
 import { Env } from './index';
 
+// GoogleニュースのURLから元の記事URLを抽出するヘルパー関数
+function extractOriginalUrlFromGoogleNews(googleNewsUrl: string): string | undefined {
+    try {
+        const url = new URL(googleNewsUrl);
+        const articleParam = url.searchParams.get('articles');
+        if (articleParam) {
+            const match = articleParam.match(/CBM(?:[A-Za-z0-9-_=]{2})*(?:[A-Za-z0-9-_=]{2}|[A-Za-z0-9-_=]{3})?/);
+            if (match && match[0]) {
+                try {
+                    const decoded = new TextDecoder().decode(Uint8Array.from(atob(match[0]), c => c.charCodeAt(0)));
+                    const urlMatch = decoded.match(/https?:\/\/[^\s]+/);
+                    if (urlMatch && urlMatch[0]) {
+                        return urlMatch[0];
+                    }
+                } catch (decodeError) {
+                    console.error("Error decoding Base64 string in newsCollector:", decodeError);
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Error extracting original URL from Google News URL in newsCollector:", e);
+    }
+    return undefined;
+}
+
 // HTMLタグを除去するヘルパー関数
 function stripHtmlTags(html: string): string {
     let strippedText = html.replace(/<[^>]*>/g, ''); // すべてのHTMLタグを除去
@@ -38,7 +63,7 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
 }
 
 async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
-    const { logError } = initLogger(env);
+    const { logError, logInfo } = initLogger(env);
     const articles: NewsArticle[] = [];
     const options = {
         ignoreAttributes: false,
@@ -81,10 +106,22 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
+                let articleLink = item.link;
+                // GoogleニュースのURLであれば、元の記事URLを抽出
+                if (articleLink.includes('news.google.com/rss/articles')) {
+                    const extracted = extractOriginalUrlFromGoogleNews(articleLink);
+                    if (extracted) {
+                        articleLink = extracted;
+                        logInfo(`Extracted original URL from Google News for RSS 2.0: ${item.link} -> ${articleLink}`, { originalUrl: item.link, extractedUrl: articleLink });
+                    } else {
+                        logInfo(`Could not extract original URL from Google News for RSS 2.0: ${item.link}`, { url: item.link });
+                    }
+                }
+
                 articles.push({
                     articleId: await generateContentHash(title), // Generate contentHash for articleId
                     title: title, // HTMLタグを除去
-                    link: item.link,
+                    link: articleLink,
                     sourceName: '', // Will be filled later
                     summary: finalSummary,
                     content: finalContent,
@@ -132,10 +169,22 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
+                let articleLink = link;
+                // GoogleニュースのURLであれば、元の記事URLを抽出
+                if (articleLink.includes('news.google.com/rss/articles')) {
+                    const extracted = extractOriginalUrlFromGoogleNews(articleLink);
+                    if (extracted) {
+                        articleLink = extracted;
+                        logInfo(`Extracted original URL from Google News for Atom 1.0: ${link} -> ${articleLink}`, { originalUrl: link, extractedUrl: articleLink });
+                    } else {
+                        logInfo(`Could not extract original URL from Google News for Atom 1.0: ${link}`, { url: link });
+                    }
+                }
+
                 articles.push({
                     articleId: await generateContentHash(cleanedTitle), // Generate contentHash for articleId
                     title: cleanedTitle, // HTMLタグを除去
-                    link: link,
+                    link: articleLink,
                     sourceName: '', // Will be filled later
                     summary: finalSummary,
                     content: finalContent,
@@ -171,10 +220,22 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
+                let articleLink = link;
+                // GoogleニュースのURLであれば、元の記事URLを抽出
+                if (articleLink.includes('news.google.com/rss/articles')) {
+                    const extracted = extractOriginalUrlFromGoogleNews(articleLink);
+                    if (extracted) {
+                        articleLink = extracted;
+                        logInfo(`Extracted original URL from Google News for RDF: ${link} -> ${articleLink}`, { originalUrl: link, extractedUrl: articleLink });
+                    } else {
+                        logInfo(`Could not extract original URL from Google News for RDF: ${link}`, { url: link });
+                    }
+                }
+
                 articles.push({
                     articleId: await generateContentHash(cleanedTitle), // Generate contentHash for articleId
                     title: cleanedTitle, // HTMLタグを除去
-                    link: link,
+                    link: articleLink,
                     sourceName: '', // Will be filled later
                     summary: finalSummary,
                     content: finalContent,
