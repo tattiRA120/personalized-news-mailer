@@ -50,7 +50,11 @@ export interface NewsArticle {
 async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
     const { logError } = initLogger(env);
     try {
-        const response = await fetch(url);
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/107.0.0.0 Safari/537.36',
+            },
+        });
         if (!response.ok) {
             logError(`Failed to fetch RSS feed from ${url}: ${response.statusText}`, null, { url, status: response.status, statusText: response.statusText });
             return null;
