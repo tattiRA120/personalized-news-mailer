@@ -88,46 +88,20 @@ async function getAccessToken(userId: string, env: GmailClientEnv): Promise<stri
 
 // Base64 エンコード関数 (UTF-8対応、パディングあり)
 function base64Encode(str: string): string {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(str); // UTF-8 バイト列を取得
-
-  const base64Chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  let result = '';
-  let i = 0;
-  const bytes = new Uint8Array(data);
-  const len = bytes.byteLength;
-  while (i < len) {
-    const byte1 = bytes[i++];
-    const byte2 = bytes[i++];
-    const byte3 = bytes[i++];
-
-    const enc1 = byte1 >> 2;
-    const enc2 = ((byte1 & 3) << 4) | (byte2 >> 4);
-    let enc3 = ((byte2 & 15) << 2) | (byte3 >> 6);
-    let enc4 = byte3 & 63;
-
-    if (isNaN(byte2)) {
-      enc3 = enc4 = 64;
-    } else if (isNaN(byte3)) {
-      enc4 = 64;
-    }
-
-    result += base64Chars[enc1] + base64Chars[enc2] + base64Chars[enc3] + base64Chars[enc4];
-  }
-
-  // パディングを追加
-  if (len % 3 === 1) {
-    result += '==';
-  } else if (len % 3 === 2) {
-    result += '=';
-  }
-  return result;
+  // TextEncoderを使用してUTF-8バイト配列に変換
+  const utf8Bytes = new TextEncoder().encode(str);
+  // Uint8Arrayをバイナリ文字列に変換し、btoaでBase64エンコード
+  // btoaはASCII文字列のみを扱うため、バイナリ文字列に変換する必要がある
+  const binaryString = String.fromCharCode(...utf8Bytes);
+  return btoa(binaryString);
 }
 
 // Base64url エンコード関数 (UTF-8対応、パディングなし)
 function base64urlEncode(str: string): string {
-  const base64 = base64Encode(str); // まず Base64 エンコード
-  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); // Base64url 形式に変換
+  const base64 = base64Encode(str);
+  // Base64をBase64url形式に変換 (RFC 4648 Section 5)
+  // + を - に、/ を _ に置き換え、末尾の = パディングを削除
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 
