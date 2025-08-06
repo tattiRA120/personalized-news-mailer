@@ -2,6 +2,7 @@ import { NEWS_RSS_URLS } from './config';
 import { initLogger } from './logger';
 import { XMLParser } from 'fast-xml-parser';
 import { cleanArticleText, generateContentHash } from './utils/textProcessor';
+import { decodeHtmlEntities } from './utils/htmlDecoder';
 import { Env } from './index';
 
 // GoogleニュースのURLから元の記事URLを抽出するヘルパー関数
@@ -90,10 +91,10 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 let rawSummary = item.description?.__cdata || item.description || '';
                 let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
-                const title = stripHtmlTags((item.title as any).__cdata || item.title);
+                const title = decodeHtmlEntities(stripHtmlTags((item.title as any).__cdata || item.title));
 
-                let finalSummary = stripHtmlTags(String(rawSummary).trim());
-                let finalContent = stripHtmlTags(String(rawContent).trim());
+                let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
+                let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
 
                 // summaryとcontentの重複・包含関係を調整
                 if (finalContent === finalSummary) {
@@ -158,9 +159,9 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             const pubDate = entry.updated || entry.published || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
-                const cleanedTitle = stripHtmlTags(title);
-                let finalSummary = stripHtmlTags(String(rawSummary).trim());
-                let finalContent = stripHtmlTags(String(rawContent).trim());
+                const cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
+                let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
+                let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
 
                 // summaryとcontentの重複・包含関係を調整
                 if (finalContent === finalSummary) {
@@ -209,9 +210,9 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             const pubDate = item['dc:date'] || item.date || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
-                const cleanedTitle = stripHtmlTags(title);
-                let finalSummary = stripHtmlTags(String(rawSummary).trim());
-                let finalContent = stripHtmlTags(String(rawContent).trim());
+                const cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
+                let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
+                let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
 
                 // summaryとcontentの重複・包含関係を調整
                 if (finalContent === finalSummary) {
