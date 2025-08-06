@@ -126,14 +126,18 @@ export class ClickLogger extends DurableObject {
             await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify(modelsObject));
             this.dirty = false; // Reset dirty flag after successful save
             this.logInfo('Successfully saved all bandit models to R2.');
-        } catch (error) {
-            this.logError('Failed to save bandit models to R2.', error);
+        } catch (error: any) {
+            this.logError('Failed to save bandit models to R2.', error, {
+                name: error.name,
+                message: error.message,
+                stack: error.stack,
+            });
         }
     }
     
     // Initialize a new bandit model for a specific user.
     private initializeNewBanditModel(userId: string): BanditModelState {
-        const dimension = 1536; // Dimension for text-embedding-3-small
+        const dimension = 256; // Dimension for text-embedding-3-small
         const newModel: BanditModelState = {
             A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
             A_inv: Array(dimension).fill(0).map(() => Array(dimension).fill(0)), // A_inv を初期化
