@@ -7,6 +7,7 @@ import { generateAndSaveEmbeddings } from './services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding } from './services/d1Service';
 import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
+import { decodeHtmlEntities } from './utils/htmlDecoder';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	DB: D1Database;
@@ -116,11 +117,21 @@ export default {
 			logInfo('Click tracking request received');
 			const userId = url.searchParams.get('userId');
 			const articleId = url.searchParams.get('articleId');
-			const redirectUrl = url.searchParams.get('redirectUrl');
+			const encodedRedirectUrl = url.searchParams.get('redirectUrl');
 
-			if (!userId || !articleId || !redirectUrl) {
+			if (!userId || !articleId || !encodedRedirectUrl) {
 				logWarning('Click tracking failed: Missing userId, articleId, or redirectUrl.');
 				return new Response('Missing parameters', { status: 400 });
+			}
+
+			let redirectUrl: string;
+			try {
+				// まずURLエンコードをデコードし、次にHTMLエンティティをデコードする
+				const decodedUri = decodeURIComponent(encodedRedirectUrl);
+				redirectUrl = decodeHtmlEntities(decodedUri);
+			} catch (e) {
+				logError('Click tracking failed: Invalid redirectUrl encoding or HTML entities.', e, { encodedRedirectUrl });
+				return new Response('Invalid redirectUrl encoding or HTML entities', { status: 400 });
 			}
 
 			try {
