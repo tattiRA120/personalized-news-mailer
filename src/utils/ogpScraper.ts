@@ -4,9 +4,15 @@ import { Env } from '../index';
 export async function getOgpImageUrl(articleUrl: string, env: Env): Promise<string | undefined> {
     const { logError, logInfo } = initLogger(env);
     try {
-        const response = await fetch(articleUrl, {
+        // URLがHTTPの場合、HTTPSに変換を試みる
+        let fetchUrl = articleUrl;
+        if (fetchUrl.startsWith('http://')) {
+            fetchUrl = fetchUrl.replace('http://', 'https://');
+        }
+
+        const response = await fetch(fetchUrl, {
             headers: {
-                'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' // OGP取得のためのUser-Agent
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36' // より一般的なUser-Agent
             }
         });
 
