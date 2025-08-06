@@ -11,9 +11,9 @@ interface NewsArticleWithEmbedding extends NewsArticle {
     embedding?: number[];
 }
 
-export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbedding[], env: Env, isDebug: boolean = false): Promise<void> {
+export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbedding[], env: Env, userId: string, isDebug: boolean = false): Promise<void> {
     const { logError, logInfo, logWarning, logDebug } = initLogger(env);
-    logDebug(`${isDebug ? 'Debug: ' : ''}Starting OpenAI Batch API embedding job creation...`);
+    logDebug(`${isDebug ? 'Debug: ' : ''}Starting OpenAI Batch API embedding job creation for user ${userId}...`);
 
     // D1から既存の記事のarticle_idとembeddingの有無を取得
     const { results: existingArticlesInDb } = await env.DB.prepare("SELECT article_id, embedding FROM articles").all();
@@ -109,9 +109,9 @@ export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbeddi
             new Request(`${env.WORKER_BASE_URL}/start-polling`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id }),
+                body: JSON.stringify({ batchId: job.id, inputFileId: uploaded.id, userId: userId }), // userIdを追加
             })
         );
-        logDebug(`${isDebug ? 'Debug: ' : ''}Successfully delegated batch job ${job.id} (Chunk ${i}) to BatchQueueDO.`);
+        logDebug(`${isDebug ? 'Debug: ' : ''}Successfully delegated batch job ${job.id} (Chunk ${i}) to BatchQueueDO for user ${userId}.`);
     }
 }

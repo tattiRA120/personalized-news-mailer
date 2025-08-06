@@ -267,26 +267,37 @@ export default {
 
 				logInfo(`Learning from user education for user ${userId}...`, { userId });
 
+				const articlesNeedingEmbedding: NewsArticle[] = [];
 				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
 
 				for (const selectedArticle of selectedArticles) {
 					const articleId = selectedArticle.articleId;
-					const article: ArticleWithEmbedding[] = await getArticlesFromD1(env, 1, 0, "article_id = ?", [articleId]);
-					const embedding = article.length > 0 ? article[0].embedding : undefined;
+					// D1から埋め込み済みの記事のみを取得
+					const articleInD1: ArticleWithEmbedding[] = await getArticlesFromD1(env, 1, 0, "article_id = ? AND embedding IS NOT NULL", [articleId]);
+					const embedding = articleInD1.length > 0 ? articleInD1[0].embedding : undefined;
 
 					if (embedding) {
 						selectedArticlesWithEmbeddings.push({ articleId: articleId, embedding: embedding });
 					} else {
-						logWarning(`Embedding not found in D1 for selected article: "${selectedArticle.title}". Skipping.`, { articleTitle: selectedArticle.title, articleLink: selectedArticle.articleId });
+						logWarning(`Embedding not found in D1 for selected article: "${selectedArticle.title}". Adding to embedding queue.`, { articleTitle: selectedArticle.title, articleLink: selectedArticle.articleId });
+						articlesNeedingEmbedding.push(selectedArticle);
 					}
 				}
 
+				if (articlesNeedingEmbedding.length > 0) {
+					logInfo(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
+					// 埋め込み生成をトリガーし、即座にレスポンスを返す
+					// バンディットモデルの更新はBatchQueueDOからのコールバックに任せる
+					await generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false); // userIdを渡す
+				}
+
+				// 既に埋め込みがある記事のみでバンディットモデルを更新
 				if (selectedArticlesWithEmbeddings.length > 0) {
 					const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
 					const batchSize = 10;
-					logInfo(`Sending selected articles for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length, batchSize });
+					logInfo(`Sending selected articles with existing embeddings for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length, batchSize });
 
 					for (let i = 0; i < selectedArticlesWithEmbeddings.length; i += batchSize) {
 						const batch = selectedArticlesWithEmbeddings.slice(i, i + batchSize);
@@ -308,10 +319,10 @@ export default {
 					}
 					logInfo(`Finished sending all batches for learning to ClickLogger for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length });
 				} else {
-					logWarning(`No selected articles with embeddings to send for learning for user ${userId}.`, { userId });
+					logWarning(`No selected articles with existing embeddings to send for learning for user ${userId}.`, { userId });
 				}
 
-				return new Response(JSON.stringify({ message: '興味関心が更新されました。' }), {
+				return new Response(JSON.stringify({ message: '興味関心の更新が開始されました。埋め込み生成が必要な記事は非同期で処理されます。' }), {
 					headers: { 'Content-Type': 'application/json' },
 					status: 200,
 				});
@@ -375,7 +386,11 @@ export default {
                 await saveArticlesToD1(articlesToSaveToD1, env);
                 logDebug(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
 
-                await generateAndSaveEmbeddings(articles, env, true);
+                // debug/force-embed-articles では特定のユーザーIDがないため、ダミーのユーザーIDを渡すか、
+                // generateAndSaveEmbeddings の userId パラメータをオプショナルにするか、
+                // あるいはこのデバッグエンドポイントのロジックを調整する必要がある。
+                // ここでは、デバッグ目的のため、仮のユーザーID 'debug-user' を渡す。
+                await generateAndSaveEmbeddings(articles, env, 'debug-user', true);
 
                 return new Response(JSON.stringify({ message: 'Batch embedding job initiated successfully (debug mode).' }), {
                     status: 200,

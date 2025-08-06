@@ -3,6 +3,7 @@ import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, prepareBatchInputFileC
 import { NewsArticle } from "./newsCollector";
 import { Env } from "./index";
 import { DurableObject } from 'cloudflare:workers';
+import { ClickLogger } from "./clickLogger";
 
 interface BatchChunk {
   chunkIndex: number;
@@ -17,6 +18,7 @@ interface BatchJobInfo {
   retryCount: number;
   pollingStartTime?: number; // ポーリング開始時刻 (Unixタイムスタンプ)
   currentPollingInterval?: number; // 現在のポーリング間隔 (ミリ秒)
+  userId?: string;
 }
 
 interface BatchResultItem {
@@ -46,12 +48,17 @@ interface BatchResultItem {
     };
 }
 
+// BatchQueueDO が必要とする Env の拡張
+interface BatchQueueDOEnv extends Env {
+    CLICK_LOGGER: DurableObjectNamespace<ClickLogger>;
+}
+
 export class BatchQueueDO extends DurableObject { // DurableObject を継承
   state: DurableObjectState;
-  env: Env;
+  env: BatchQueueDOEnv;
   private processingPromise: Promise<void> | null = null;
 
-  constructor(state: DurableObjectState, env: Env) {
+  constructor(state: DurableObjectState, env: BatchQueueDOEnv) {
     super(state, env); // 親クラスのコンストラクタを呼び出す
     this.state = state;
     this.env = env;
@@ -107,15 +114,15 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
       }
     } else if (path === "/start-polling" && request.method === "POST") {
       try {
-        const { batchId, inputFileId } = await request.json<{ batchId: string; inputFileId: string }>();
+        const { batchId, inputFileId, userId } = await request.json<{ batchId: string; inputFileId: string; userId?: string }>();
         if (!batchId || !inputFileId) {
           return new Response("Missing batchId or inputFileId", { status: 400 });
         }
 
         let batchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
-        batchJobs.push({ batchId, inputFileId, status: "pending", retryCount: 0 });
+        batchJobs.push({ batchId, inputFileId, status: "pending", retryCount: 0, userId: userId }); // userIdを保存
         await this.state.storage.put("batchJobs", batchJobs);
-        logInfo(`Added batch job ${batchId} to polling queue.`);
+        logInfo(`Added batch job ${batchId} to polling queue for user ${userId || 'N/A'}.`);
 
         // アラームが設定されていない場合のみ設定
         if (!await this.state.storage.getAlarm()) {
@@ -225,6 +232,28 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                 if (embeddingsToUpdate.length > 0) {
                     await this.updateArticleEmbeddingsInD1(embeddingsToUpdate, this.env);
                     logInfo(`Updated D1 with embeddings for batch job ${jobInfo.batchId}.`);
+
+                    // ClickLoggerにコールバックを送信
+                    const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                    const clickLogger = this.env.CLICK_LOGGER.get(clickLoggerId);
+                    
+                    try {
+                        const callbackResponse = await clickLogger.fetch(
+                            new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ embeddings: embeddingsToUpdate, userId: jobInfo.userId }),
+                            })
+                        );
+                        if (callbackResponse.ok) {
+                            logInfo(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
+                        } else {
+                            logError(`Failed to send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}): ${callbackResponse.statusText}`, null, { jobId: jobInfo.batchId, status: callbackResponse.status, statusText: callbackResponse.statusText });
+                        }
+                    } catch (callbackError) {
+                        logError(`Error sending embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, callbackError, { jobId: jobInfo.batchId });
+                    }
+
                 } else {
                     logWarning(`Batch job ${jobInfo.batchId} completed but no valid embeddings to update after filtering.`, { jobId: jobInfo.batchId });
                 }

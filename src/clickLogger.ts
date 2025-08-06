@@ -221,6 +221,12 @@ export class ClickLogger extends DurableObject {
             selectedArticles: { articleId: string, embedding: number[] }[];
         }
 
+        // /embedding-completed-callback エンドポイントのリクエストボディの型定義
+        interface EmbeddingCompletedCallbackRequestBody {
+            userId: string; // userIdを追加
+            embeddings: { articleId: string; embedding: number[]; }[];
+        }
+
         if (request.method === 'POST' && path === '/log-click') {
             try {
                 const { userId, articleId, timestamp } = await request.json() as LogClickRequestBody;
@@ -329,13 +335,38 @@ export class ClickLogger extends DurableObject {
                     await this.env.DB.batch(logStatements);
                     this.dirty = true;
                     this.logInfo(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
+                    await this.saveModelsToR2();
                 }
-
                 return new Response('Learning from education completed', { status: 200 });
 
             } catch (error) {
                 this.logError('Error learning from education:', error, { requestUrl: request.url });
                 return new Response('Error learning from education', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/embedding-completed-callback') {
+            try {
+                const { userId, embeddings } = await request.json() as EmbeddingCompletedCallbackRequestBody;
+                if (!userId || !Array.isArray(embeddings) || embeddings.length === 0) {
+                    this.logWarning('Embedding completed callback failed: Missing userId or no embeddings provided.');
+                    return new Response('Missing userId or no embeddings provided', { status: 400 });
+                }
+
+                let banditModel = this.inMemoryModels.get(userId);
+                if (!banditModel) {
+                    this.logWarning(`No model found for user ${userId} during embedding callback. Initializing a new one.`);
+                    banditModel = this.initializeNewBanditModel(userId);
+                }
+
+                for (const embed of embeddings) {
+                    this.updateBanditModel(banditModel, embed.embedding, 1.0); // 報酬は1.0
+                    this.logInfo(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
+                }
+                this.dirty = true; // モデルが変更されたことをマーク
+                await this.saveModelsToR2(); // モデルをR2に保存
+                return new Response('Embedding completed callback processed', { status: 200 });
+            } catch (error) {
+                this.logError('Error processing embedding completed callback:', error, { requestUrl: request.url });
+                return new Response('Error processing callback', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
              try {
@@ -353,7 +384,7 @@ export class ClickLogger extends DurableObject {
                 this.updateBanditModel(banditModel, embedding, reward);
                 this.dirty = true;
                 this.logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
-                
+                await this.saveModelsToR2();
                 return new Response('Bandit model updated', { status: 200 });
 
             } catch (error) {
