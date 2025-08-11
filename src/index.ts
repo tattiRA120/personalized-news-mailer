@@ -23,6 +23,7 @@ export interface Env {
     DEBUG_API_KEY?: string;
     ASSETS: Fetcher; // ASSETS binding for static assets
     LOG_LEVEL?: string;
+    GOOGLE_NEWS_DECODER_API_URL: string;
 }
 
 interface EmailRecipient {
