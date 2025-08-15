@@ -346,23 +346,28 @@ export class ClickLogger extends DurableObject {
         } else if (request.method === 'POST' && path === '/embedding-completed-callback') {
             try {
                 const { userId, embeddings } = await request.json() as EmbeddingCompletedCallbackRequestBody;
-                if (!userId || !Array.isArray(embeddings) || embeddings.length === 0) {
-                    this.logWarning('Embedding completed callback failed: Missing userId or no embeddings provided.');
-                    return new Response('Missing userId or no embeddings provided', { status: 400 });
+                if (!Array.isArray(embeddings) || embeddings.length === 0) {
+                    this.logWarning('Embedding completed callback failed: No embeddings provided.');
+                    return new Response('No embeddings provided', { status: 400 });
                 }
 
-                let banditModel = this.inMemoryModels.get(userId);
-                if (!banditModel) {
-                    this.logWarning(`No model found for user ${userId} during embedding callback. Initializing a new one.`);
-                    banditModel = this.initializeNewBanditModel(userId);
-                }
+                if (userId) { // userId が存在する場合のみバンディットモデルを更新
+                    let banditModel = this.inMemoryModels.get(userId);
+                    if (!banditModel) {
+                        this.logWarning(`No model found for user ${userId} during embedding callback. Initializing a new one.`);
+                        banditModel = this.initializeNewBanditModel(userId);
+                    }
 
-                for (const embed of embeddings) {
-                    this.updateBanditModel(banditModel, embed.embedding, 1.0); // 報酬は1.0
-                    this.logInfo(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
+                    for (const embed of embeddings) {
+                        this.updateBanditModel(banditModel, embed.embedding, 1.0); // 報酬は1.0
+                        this.logInfo(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
+                    }
+                    this.dirty = true; // モデルが変更されたことをマーク
+                    await this.saveModelsToR2(); // モデルをR2に保存
+                } else {
+                    this.logInfo('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
                 }
-                this.dirty = true; // モデルが変更されたことをマーク
-                await this.saveModelsToR2(); // モデルをR2に保存
+                
                 return new Response('Embedding completed callback processed', { status: 200 });
             } catch (error) {
                 this.logError('Error processing embedding completed callback:', error, { requestUrl: request.url });

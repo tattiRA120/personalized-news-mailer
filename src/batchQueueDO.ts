@@ -9,6 +9,7 @@ interface BatchChunk {
   chunkIndex: number;
   articles: NewsArticle[];
   retryCount?: number; // リトライ回数を追跡
+  userId?: string;
 }
 
 interface BatchJobInfo {
