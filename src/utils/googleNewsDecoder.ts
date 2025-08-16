@@ -5,45 +5,20 @@ interface DecodedUrlResult {
     status: boolean;
     decoded_url?: string;
     message?: string;
+    source_url?: string;
 }
 
-// Google News の URL から Base64 文字列を抽出する。
-function getBase64Str(sourceUrl: string): { status: boolean; base64_str?: string; message?: string } {
-    try {
-        const url = new URL(sourceUrl);
-        const path = url.pathname.split("/");
-
-        if (
-            url.hostname === "news.google.com" &&
-            path.length > 1 &&
-            ["articles", "read", "rss"].includes(path[path.length - 2])
-        ) {
-            const base64_str = path[path.length - 1];
-            return { status: true, base64_str: base64_str };
-        }
-        const message = "Invalid Google News URL format.";
-        return { status: false, message: message };
-    } catch (e: any) {
-        return { status: false, message: `Error in getBase64Str: ${e.message}` };
-    }
-}
-
-export async function decodeGoogleNewsUrl(sourceUrl: string, env: Env): Promise<DecodedUrlResult> {
+export async function decodeGoogleNewsUrl(sourceUrls: string[], env: Env): Promise<DecodedUrlResult[]> {
     const { logError, logInfo } = initLogger(env);
-    logInfo(`decodeGoogleNewsUrl: 処理開始。source_url: ${sourceUrl}`);
-
-    const base64Response = getBase64Str(sourceUrl);
-    if (!base64Response.status || !base64Response.base64_str) {
-        logError(`decodeGoogleNewsUrl: getBase64Str でエラー: ${base64Response.message}`);
-        return base64Response;
-    }
+    logInfo(`decodeGoogleNewsUrl: 処理開始。source_urls: ${JSON.stringify(sourceUrls)}`);
 
     // Oracle Cloud上のデコードサービスを呼び出す
     const decoderApiUrl = env.GOOGLE_NEWS_DECODER_API_URL;
     if (!decoderApiUrl) {
         const message = "GOOGLE_NEWS_DECODER_API_URL is not set in environment variables.";
         logError(message);
-        return { status: false, message: message };
+        // サービスが利用できない場合は、全てのURLに対してエラーを返す
+        return sourceUrls.map(url => ({ status: false, message: message, source_url: url }));
     }
 
     try {
@@ -53,26 +28,35 @@ export async function decodeGoogleNewsUrl(sourceUrl: string, env: Env): Promise<
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ source_url: sourceUrl }),
+            body: JSON.stringify({ source_urls: sourceUrls }), // source_urls を送信
         });
 
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error(`デコードサービスからのHTTPエラー: ${response.status} ${response.statusText} - ${errorText}`);
+            const errorMessage = `デコードサービスからのHTTPエラー: ${response.status} ${response.statusText} - ${errorText}`;
+            logError(`decodeGoogleNewsUrl: ${errorMessage}`);
+            // サービスからのHTTPエラーの場合は、全てのURLに対してエラーを返す
+            return sourceUrls.map(url => ({ status: false, message: errorMessage, source_url: url }));
         }
 
-        const result: DecodedUrlResult = await response.json();
-        logInfo(`decodeGoogleNewsUrl: デコードサービスからの結果: ${JSON.stringify(result)}`);
+        const results: DecodedUrlResult[] = await response.json(); // 結果はリストで返される
+        logInfo(`decodeGoogleNewsUrl: デコードサービスからの結果: ${JSON.stringify(results)}`);
 
-        if (!result.status || !result.decoded_url) {
-            logError(`decodeGoogleNewsUrl: デコードサービスからのエラー: ${result.message}`);
-            return { status: false, message: result.message || "Unknown error from decoder service." };
-        }
+        // 各結果をチェックし、必要に応じてエラーメッセージを追加
+        const processedResults = results.map(result => {
+            if (!result.status || !result.decoded_url) {
+                logError(`decodeGoogleNewsUrl: デコードサービスからのエラー: ${result.message || "Unknown error."} for URL: ${result.source_url}`);
+                return { status: false, message: result.message || "Unknown error from decoder service.", source_url: result.source_url };
+            }
+            return result;
+        });
 
-        return { status: true, decoded_url: result.decoded_url };
+        return processedResults;
 
     } catch (e: any) {
-        logError(`decodeGoogleNewsUrl: デコードサービス呼び出し中にエラーが発生: ${e.message}`, e);
-        return { status: false, message: `デコードサービス呼び出し中にエラーが発生: ${e.message}` };
+        const errorMessage = `デコードサービス呼び出し中にエラーが発生: ${e.message}`;
+        logError(`decodeGoogleNewsUrl: ${errorMessage}`, e);
+        // サービス呼び出し中に例外が発生した場合は、全てのURLに対してエラーを返す
+        return sourceUrls.map(url => ({ status: false, message: errorMessage, source_url: url }));
     }
 }
