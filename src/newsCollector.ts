@@ -61,6 +61,8 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
 async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
     const { logError, logInfo } = initLogger(env);
     const articles: NewsArticle[] = [];
+    const googleNewsLinksToProcess: { originalItem: any; articleLink: string; index: number; feedType: string }[] = [];
+
     const options = {
         ignoreAttributes: false,
         attributeNamePrefix: "@_",
@@ -77,7 +79,8 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
     if ((jsonObj as any).rss && (jsonObj as any).rss.channel) {
         const rssChannel = (jsonObj as any).rss.channel;
         const items = Array.isArray(rssChannel.item) ? rssChannel.item : (rssChannel.item ? [rssChannel.item] : []);
-        for (const item of items) {
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
             if (item.title && item.link) {
                 let rawSummary = item.description?.__cdata || item.description || '';
                 let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
@@ -103,26 +106,30 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 }
 
                 let articleLink = item.link;
-                // GoogleニュースのURLであれば、元の記事URLを抽出
+                // GoogleニュースのURLであれば、元の記事URLを抽出のためにキューに追加
                 if (articleLink.includes('news.google.com/rss/articles')) {
-                    const decodedResult = await decodeGoogleNewsUrl(articleLink, env); // 新しい関数を呼び出す
-                    if (decodedResult.status && decodedResult.decoded_url) {
-                        articleLink = decodedResult.decoded_url;
-                        logInfo(`Extracted original URL from Google News for RSS 2.0: ${item.link} -> ${articleLink}`, { originalUrl: item.link, extractedUrl: articleLink });
-                    } else {
-                        logInfo(`Could not extract original URL from Google News for RSS 2.0: ${item.link}. Error: ${decodedResult.message}`, { url: item.link, error: decodedResult.message });
-                    }
+                    googleNewsLinksToProcess.push({ originalItem: item, articleLink: articleLink, index: articles.length, feedType: 'rss' });
+                    // プレースホルダーを追加し、後で更新する
+                    articles.push({
+                        articleId: '', // 後で更新
+                        title: title,
+                        link: '', // 後で更新
+                        sourceName: '',
+                        summary: finalSummary,
+                        content: finalContent,
+                        publishedAt: Date.parse(pubDate),
+                    });
+                } else {
+                    articles.push({
+                        articleId: await generateContentHash(title),
+                        title: title,
+                        link: articleLink,
+                        sourceName: '',
+                        summary: finalSummary,
+                        content: finalContent,
+                        publishedAt: Date.parse(pubDate),
+                    });
                 }
-
-                articles.push({
-                    articleId: await generateContentHash(title), // Generate contentHash for articleId
-                    title: title, // HTMLタグを除去
-                    link: articleLink,
-                    sourceName: '', // Will be filled later
-                    summary: finalSummary,
-                    content: finalContent,
-                    publishedAt: Date.parse(pubDate),
-                });
             }
         }
     }
@@ -130,7 +137,8 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
     else if ((jsonObj as any).feed && (jsonObj as any).feed.entry) {
         const atomFeed = (jsonObj as any).feed;
         const entries = Array.isArray(atomFeed.entry) ? atomFeed.entry : (atomFeed.entry ? [atomFeed.entry] : []);
-        for (const entry of entries) {
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i];
             const title = entry.title ? ((entry.title as any).__cdata || entry.title) : '';
             let link = '';
             if (entry.link) {
@@ -166,26 +174,30 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 }
 
                 let articleLink = link;
-                // GoogleニュースのURLであれば、元の記事URLを抽出
+                // GoogleニュースのURLであれば、元の記事URLを抽出のためにキューに追加
                 if (articleLink.includes('news.google.com/rss/articles')) {
-                    const decodedResult = await decodeGoogleNewsUrl(articleLink, env); // 新しい関数を呼び出す
-                    if (decodedResult.status && decodedResult.decoded_url) {
-                        articleLink = decodedResult.decoded_url;
-                        logInfo(`Extracted original URL from Google News for Atom 1.0: ${link} -> ${articleLink}`, { originalUrl: link, extractedUrl: articleLink });
-                    } else {
-                        logInfo(`Could not extract original URL from Google News for Atom 1.0: ${link}. Error: ${decodedResult.message}`, { url: link, error: decodedResult.message });
-                    }
+                    googleNewsLinksToProcess.push({ originalItem: entry, articleLink: articleLink, index: articles.length, feedType: 'atom' });
+                    // プレースホルダーを追加し、後で更新する
+                    articles.push({
+                        articleId: '', // 後で更新
+                        title: cleanedTitle,
+                        link: '', // 後で更新
+                        sourceName: '',
+                        summary: finalSummary,
+                        content: finalContent,
+                        publishedAt: Date.parse(pubDate),
+                    });
+                } else {
+                    articles.push({
+                        articleId: await generateContentHash(cleanedTitle),
+                        title: cleanedTitle,
+                        link: articleLink,
+                        sourceName: '',
+                        summary: finalSummary,
+                        content: finalContent,
+                        publishedAt: Date.parse(pubDate),
+                    });
                 }
-
-                articles.push({
-                    articleId: await generateContentHash(cleanedTitle), // Generate contentHash for articleId
-                    title: cleanedTitle, // HTMLタグを除去
-                    link: articleLink,
-                    sourceName: '', // Will be filled later
-                    summary: finalSummary,
-                    content: finalContent,
-                    publishedAt: Date.parse(pubDate),
-                });
             }
         }
     }
@@ -193,7 +205,8 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
     else if ((jsonObj as any)['rdf:RDF'] && (jsonObj as any)['rdf:RDF'].item) {
         const rdfFeed = (jsonObj as any)['rdf:RDF'];
         const items = Array.isArray(rdfFeed.item) ? rdfFeed.item : (rdfFeed.item ? [rdfFeed.item] : []);
-        for (const item of items) {
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
             const title = (item['dc:title'] as any)?.__cdata || item['dc:title'] || (item.title as any)?.__cdata || item.title;
             const link = item['link'] || item['@_rdf:about']; // linkまたはrdf:aboutを使用
             let rawSummary = item.description?.__cdata || item.description || '';
@@ -217,31 +230,59 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 }
 
                 let articleLink = link;
-                // GoogleニュースのURLであれば、元の記事URLを抽出
+                // GoogleニュースのURLであれば、元の記事URLを抽出のためにキューに追加
                 if (articleLink.includes('news.google.com/rss/articles')) {
-                    const decodedResult = await decodeGoogleNewsUrl(articleLink, env); // 新しい関数を呼び出す
-                    if (decodedResult.status && decodedResult.decoded_url) {
-                        articleLink = decodedResult.decoded_url;
-                        logInfo(`Extracted original URL from Google News for RDF: ${link} -> ${articleLink}`, { originalUrl: link, extractedUrl: articleLink });
-                    } else {
-                        logInfo(`Could not extract original URL from Google News for RDF: ${link}. Error: ${decodedResult.message}`, { url: link, error: decodedResult.message });
-                    }
+                    googleNewsLinksToProcess.push({ originalItem: item, articleLink: articleLink, index: articles.length, feedType: 'rdf' });
+                    // プレースホルダーを追加し、後で更新する
+                    articles.push({
+                        articleId: '', // 後で更新
+                        title: cleanedTitle,
+                        link: '', // 後で更新
+                        sourceName: '',
+                        summary: finalSummary,
+                        content: finalContent,
+                        publishedAt: Date.parse(pubDate),
+                    });
+                } else {
+                    articles.push({
+                        articleId: await generateContentHash(cleanedTitle),
+                        title: cleanedTitle,
+                        link: articleLink,
+                        sourceName: '',
+                        summary: finalSummary,
+                        content: finalContent,
+                        publishedAt: Date.parse(pubDate),
+                    });
                 }
-
-                articles.push({
-                    articleId: await generateContentHash(cleanedTitle), // Generate contentHash for articleId
-                    title: cleanedTitle, // HTMLタグを除去
-                    link: articleLink,
-                    sourceName: '', // Will be filled later
-                    summary: finalSummary,
-                    content: finalContent,
-                    publishedAt: Date.parse(pubDate),
-                });
             }
         }
     }
     else {
         logError('Unknown feed format or no items/entries found.', null, { url });
+    }
+
+    // Google News URLのバッチデコード
+    if (googleNewsLinksToProcess.length > 0) {
+        const sourceUrls = googleNewsLinksToProcess.map(item => item.articleLink);
+        const decodedResults = await decodeGoogleNewsUrl(sourceUrls, env);
+
+        const articleUpdates = decodedResults.map(async decodedResult => {
+            const originalEntry = googleNewsLinksToProcess.find(item => item.articleLink === decodedResult.source_url);
+            if (originalEntry) {
+                const article = articles[originalEntry.index];
+                if (decodedResult.status && decodedResult.decoded_url) {
+                    article.link = decodedResult.decoded_url;
+                    logInfo(`Extracted original URL from Google News for ${originalEntry.feedType}: ${originalEntry.articleLink} -> ${decodedResult.decoded_url}`, { originalUrl: originalEntry.articleLink, extractedUrl: decodedResult.decoded_url });
+                } else {
+                    logInfo(`Could not extract original URL from Google News for ${originalEntry.feedType}: ${originalEntry.articleLink}. Error: ${decodedResult.message}`, { url: originalEntry.articleLink, error: decodedResult.message });
+                    // デコードに失敗した場合は元のURLを使用
+                    article.link = originalEntry.articleLink;
+                }
+                // articleIdをここで生成
+                article.articleId = await generateContentHash(article.title);
+            }
+        });
+        await Promise.all(articleUpdates);
     }
 
     return articles;
