@@ -80,7 +80,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
             logInfo(`Found ${articlesMissingEmbedding.length} articles missing embeddings in D1.`, { count: articlesMissingEmbedding.length });
 
             if (articlesMissingEmbedding.length > 0) {
-                await generateAndSaveEmbeddings(articlesMissingEmbedding, env);
+                await generateAndSaveEmbeddings(articlesMissingEmbedding, env, "__SYSTEM_EMBEDDING__", false);
             } else {
                 logInfo('No articles found that need embedding. Skipping batch job creation.');
             }
