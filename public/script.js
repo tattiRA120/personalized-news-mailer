@@ -43,10 +43,11 @@ document.addEventListener('DOMContentLoaded', () => {
         articles.forEach(article => {
             const articleItem = document.createElement('div');
             articleItem.className = 'article-item';
+            articleItem.dataset.link = article.link; // 記事のリンクをdata属性として追加
 
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
-            checkbox.value = article.articleId; // 記事IDとしてリンクを使用
+            checkbox.value = article.articleId; // 記事IDとして使用
             checkbox.id = `article-${article.articleId}`; // 一意なIDを設定
 
             const articleContent = document.createElement('div');
@@ -81,12 +82,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const articleItem = checkbox.closest('.article-item');
             const titleElement = articleItem.querySelector('h3');
             const summaryElement = articleItem.querySelector('p');
+            const articleLink = articleItem.dataset.link; // data属性からリンクを取得
 
             selectedArticlesData.push({
                 articleId: checkbox.value,
                 title: titleElement ? titleElement.textContent : '',
                 summary: summaryElement ? summaryElement.textContent : '',
+                link: articleLink, // リンクも送信データに含める
             });
+
+            // 選択された記事を新しいタブで開く
+            if (articleLink) {
+                window.open(articleLink, '_blank');
+            }
         });
 
         if (selectedArticlesData.length === 0) {

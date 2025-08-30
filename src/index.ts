@@ -234,6 +234,7 @@ export default {
 					articleId: article.articleId,
 					title: article.title,
 					summary: article.summary,
+					link: article.link,
 				}));
 
 				return new Response(JSON.stringify(articlesForEducation), {
