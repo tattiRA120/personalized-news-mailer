@@ -1,6 +1,6 @@
 export const NEWS_RSS_URLS: string[] = [
     // マスメディア系
-    'https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com&ceid=JP:ja&hl=ja&gl=JP', // Reuters News via Google News
+    'https://rss.app/feeds/37zaWxILdtNPMRBD.xml', // Reuters News via RSS.app
     'https://assets.wor.jp/rss/rdf/bloomberg/top.rdf', // Bloomberg via RSS愛好会
     'https://www.nhk.or.jp/rss/news/cat0.xml', // NHKニュース
     // ネットメディア(テック・ガジェット系)
