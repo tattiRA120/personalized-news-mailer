@@ -327,6 +327,8 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                 } else {
                     sourceName = 'Impress Watch'; // Generic fallback for Impress
                 }
+            } else if (sourceName.includes('phileweb.com')) {
+                sourceName = 'PHILE WEB';
             } else if (sourceName.includes('gigazine.net')) {
                 sourceName = 'GIGAZINE';
             } else if (sourceName.includes('gizmodo.jp')) {
