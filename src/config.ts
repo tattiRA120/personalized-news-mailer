@@ -10,6 +10,7 @@ export const NEWS_RSS_URLS: string[] = [
     'https://pc.watch.impress.co.jp/data/rss/1.0/pcw/feed.rdf', // PC Watch
     'https://dc.watch.impress.co.jp/data/rss/1.0/dcw/feed.rdf', // デジカメ Watch
     'https://av.watch.impress.co.jp/data/rss/1.0/avw/feed.rdf', // AV Watch
+    'https://www.phileweb.com/rss.php', // PHILE WEB
     'https://gigazine.net/news/rss_2.0/', // GIGAZINE
     'https://www.gizmodo.jp/index.xml', // GIZMODO JAPAN（ギズモード・ジャパン）
     'https://www.gdm.or.jp/feed', // エルミタージュ秋葉原
@@ -37,6 +38,7 @@ export const NEWS_SOURCE_LOGOS: { [key: string]: string } = {
     'PC Watch': 'https://pc.watch.impress.co.jp/img/common/p01/logo/pcw.1200.png',
     'デジカメ Watch': 'https://dc.watch.impress.co.jp/include/common/p01/images/logo/dcw.1200.png',
     'AV Watch': 'https://av.watch.impress.co.jp/include/common/p01/images/logo/avw.1200.png',
+    'PHILE WEB': 'https://scontent-nrt1-2.xx.fbcdn.net/v/t39.30808-1/305078379_515729613891255_1137759068026059747_n.png?stp=dst-png_s200x200&_nc_cat=110&ccb=1-7&_nc_sid=2d3e12&_nc_ohc=DNh8TDmVOwwQ7kNvwEaNiWK&_nc_oc=AdnX383Ev38TgeY8nV7jOL7CWEGCC7m-4sEa7iFsqE8QtyJzO-y-AwC1fXatEATKO_I3wsjKGv7kbVexECT-EH4-&_nc_zt=24&_nc_ht=scontent-nrt1-2.xx&_nc_gid=Sb1PMSi1qBHw_YwWb0Ynzg&oh=00_AfW6QXq-PhGBFtCoAt4x1lhCyvGCXlvNcfC_iDmAbMpeag&oe=68BB22DD',
     'GIGAZINE': 'https://pbs.twimg.com/profile_images/876998955627827204/IuoxMaM2_400x400.jpg',
     'GIZMODO JAPAN': 'https://upload.wikimedia.org/wikipedia/commons/6/69/Gizmodo_Media_Group_Logo.png',
     'エルミタージュ秋葉原': 'https://www.gdm.or.jp/wp-content/themes/hermitage/images/common/logo.png',
