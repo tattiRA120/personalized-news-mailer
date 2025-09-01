@@ -304,11 +304,11 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
             if (sourceName.includes('news.google.com')) {
                 if (url.includes('reuters.com')) {
                     sourceName = 'Reuters';
-                } else if (url.includes('bloomberg.co.jp')) {
-                    sourceName = 'Bloomberg';
                 } else {
                     sourceName = 'Google News'; // Fallback
                 }
+            } else if (sourceName.includes('assets.wor.jp') && url.includes('bloomberg')) {
+                sourceName = 'Bloomberg';
             } else if (sourceName.includes('zenn.dev')) {
                 sourceName = 'Zenn';
             } else if (sourceName.includes('qiita.com')) {
