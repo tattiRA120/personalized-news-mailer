@@ -229,9 +229,13 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
             if (sourceName.startsWith('www.')) {
                 sourceName = sourceName.substring(4);
             }
-            // Special handling for Reuters via RSS.app
-            if (url.includes('rss.app/feeds/37zaWxILdtNPMRBD.xml')) {
-                sourceName = 'Reuters';
+            // Special handling for Google News to extract actual source
+            if (sourceName.includes('news.google.com')) {
+                if (url.includes('reuters.com')) {
+                    sourceName = 'Reuters';
+                } else {
+                    sourceName = 'Google News'; // Fallback
+                }
             } else if (sourceName.includes('assets.wor.jp') && url.includes('bloomberg')) {
                 sourceName = 'Bloomberg';
             } else if (sourceName.includes('zenn.dev')) {
