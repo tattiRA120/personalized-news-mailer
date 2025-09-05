@@ -111,8 +111,9 @@ export class ClickLogger extends DurableObject {
                 this.logInfo('No existing bandit models file found in R2. Starting with an empty map.');
                 this.inMemoryModels = new Map<string, BanditModelState>();
             }
-        } catch (error) {
-            this.logError('Error loading bandit models from R2. Starting fresh.', error);
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logError('Error loading bandit models from R2. Starting fresh.', err, { errorName: err.name, errorMessage: err.message });
             // In case of a loading/parsing error, start with a clean slate to avoid corruption.
             this.inMemoryModels = new Map<string, BanditModelState>();
         }
@@ -126,11 +127,12 @@ export class ClickLogger extends DurableObject {
             await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify(modelsObject));
             this.dirty = false; // Reset dirty flag after successful save
             this.logInfo('Successfully saved all bandit models to R2.');
-        } catch (error: any) {
-            this.logError('Failed to save bandit models to R2.', error, {
-                name: error.name,
-                message: error.message,
-                stack: error.stack,
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logError('Failed to save bandit models to R2.', err, {
+                name: err.name,
+                message: err.message,
+                stack: err.stack,
             });
         }
     }
@@ -143,7 +145,7 @@ export class ClickLogger extends DurableObject {
             A_inv: Array(dimension).fill(0).map(() => Array(dimension).fill(0)), // A_inv を初期化
             b: Array(dimension).fill(0),
             dimension: dimension,
-            alpha: 0.1, // UCB parameter
+            alpha: 0.5, // UCB parameter
         };
         // Initialize A and A_inv as identity matrices
         for (let i = 0; i < dimension; i++) {
@@ -261,6 +263,12 @@ export class ClickLogger extends DurableObject {
                 }
 
                 const ucbValues = this.getUCBValues(banditModel, articlesWithEmbeddings);
+                // Limit logging to the first 10 UCB values for performance
+                const limitedUcbValues = ucbValues.slice(0, 10).map(u => ({ articleId: u.articleId, ucb: u.ucb.toFixed(4) }));
+                this.logDebug(
+                    `Calculated UCB values for user ${userId} (showing up to 10): ${JSON.stringify(limitedUcbValues)}`,
+                    { userId, totalUcbCount: ucbValues.length }
+                );
                 return new Response(JSON.stringify(ucbValues), {
                     headers: { 'Content-Type': 'application/json' },
                 });
@@ -322,7 +330,7 @@ export class ClickLogger extends DurableObject {
                 const logStatements = [];
                 for (const article of selectedArticles) {
                     if (article.embedding) {
-                        this.updateBanditModel(banditModel, article.embedding, 1.0);
+                        this.updateBanditModel(banditModel, article.embedding, 1.0, userId);
                         logStatements.push(
                             this.env.DB.prepare(
                                 `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
@@ -359,7 +367,7 @@ export class ClickLogger extends DurableObject {
                     }
 
                     for (const embed of embeddings) {
-                        this.updateBanditModel(banditModel, embed.embedding, 1.0); // 報酬は1.0
+                        this.updateBanditModel(banditModel, embed.embedding, 1.0, userId); // 報酬は1.0
                         this.logInfo(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
                     this.dirty = true; // モデルが変更されたことをマーク
@@ -386,7 +394,7 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                this.updateBanditModel(banditModel, embedding, reward);
+                this.updateBanditModel(banditModel, embedding, reward, userId);
                 this.dirty = true;
                 this.logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
                 await this.saveModelsToR2();
@@ -424,10 +432,12 @@ export class ClickLogger extends DurableObject {
             // Get all user IDs that have sent articles
             const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM sent_articles`).all<{ user_id: string }>();
             const userIds = results.map(row => row.user_id);
+            this.logInfo(`Found ${userIds.length} users with sent articles to process.`, { userCount: userIds.length });
 
             const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000); // 24時間前
 
             for (const userId of userIds) {
+                this.logInfo(`Processing unclicked articles for user: ${userId}`, { userId });
                 const unclickedArticles = await this.env.DB.prepare(
                     `SELECT sa.article_id, sa.embedding
                      FROM sent_articles sa
@@ -442,14 +452,18 @@ export class ClickLogger extends DurableObject {
                         banditModel = this.initializeNewBanditModel(userId);
                     }
 
+                    let updatedCount = 0;
                     for (const article of unclickedArticles.results) {
                         if (article.embedding) {
                             // クリックされなかった記事には負の報酬を与える (例: -0.1)
-                            this.updateBanditModel(banditModel, JSON.parse(article.embedding) as number[], -0.1);
+                            this.updateBanditModel(banditModel, JSON.parse(article.embedding) as number[], -0.1, userId);
                             this.dirty = true;
-                            this.logInfo(`Updated bandit model for user ${userId} with -0.1 reward for unclicked article ${article.article_id}.`);
+                            updatedCount++;
                         }
                     }
+                    this.logInfo(`Updated bandit model for user ${userId} with -0.1 reward for ${updatedCount} unclicked articles.`, { userId, updatedCount });
+                } else {
+                    this.logInfo(`No unclicked articles found for user ${userId} within the last 24 hours.`, { userId });
                 }
             }
             this.logInfo('Finished processing unclicked articles.');
@@ -473,7 +487,7 @@ export class ClickLogger extends DurableObject {
                 const x = article.embedding;
 
                 if (!x || x.length !== dimension) {
-                    this.logDebug(`Article ${article.articleId} has invalid or missing embedding.`);
+                    this.logDebug(`Article ${article.articleId} has invalid or missing embedding.`, { articleId: article.articleId });
                     ucbResults.push({ articleId: article.articleId, ucb: 0 });
                     continue;
                 }
@@ -490,7 +504,12 @@ export class ClickLogger extends DurableObject {
                 const term2_sqrt = dotProduct(x_T_A_inv, x);
                 const term2 = alpha * Math.sqrt(Math.abs(term2_sqrt)); // Use Math.abs for safety
 
-                ucbResults.push({ articleId: article.articleId, ucb: term1 + term2 });
+                const ucb = term1 + term2;
+                // Limit detailed logging to the first 5 articles or when explicitly in debug mode
+                if (ucbResults.length < 5 /* || process.env.DEBUG_UCB === 'true' */) {
+                    this.logDebug(`Calculated UCB for article ${article.articleId}: Term1=${term1.toFixed(4)}, Term2=${term2.toFixed(4)}, UCB=${ucb.toFixed(4)}`, { articleId: article.articleId, term1, term2, ucb });
+                }
+                ucbResults.push({ articleId: article.articleId, ucb: ucb });
             }
         } catch (error) {
             this.logError("Error during UCB calculation:", error);
@@ -499,10 +518,15 @@ export class ClickLogger extends DurableObject {
         return ucbResults;
     }
 
+    // Helper to normalize errors to Error objects
+    private normalizeError(error: unknown): Error {
+        return error instanceof Error ? error : new Error(String(error));
+    }
+
     // Update a specific user's bandit model.
-    private updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number): void {
+    private updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number, userId: string): void {
         if (embedding.length !== banditModel.dimension) {
-            this.logWarning("Cannot update bandit model: embedding dimension mismatch.");
+            this.logWarning("Cannot update bandit model: embedding dimension mismatch.", { userId, embeddingLength: embedding.length, modelDimension: banditModel.dimension });
             return;
         }
 
@@ -522,7 +546,7 @@ export class ClickLogger extends DurableObject {
         const denominator = 1 + x_T_A_inv_x;
 
         if (denominator === 0) {
-            this.logError("Denominator is zero in Sherman-Morrison update. Skipping update.", null, { userId: 'N/A', embeddingLength: embedding.length, reward });
+            this.logError("Denominator is zero in Sherman-Morrison update. Skipping update.", null, { userId: userId, embeddingLength: embedding.length, reward });
             return;
         }
 
@@ -554,5 +578,6 @@ export class ClickLogger extends DurableObject {
                 A[i][j] += x[i] * x[j];
             }
         }
+        this.logDebug(`Bandit model updated for user ${userId} with reward ${reward.toFixed(2)}.`, { userId, reward });
     }
 }

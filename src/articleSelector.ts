@@ -71,6 +71,9 @@ export async function selectPersonalizedArticles(
             if (response.ok) {
                 ucbValues = await response.json();
                 logInfo(`Received ${ucbValues.length} UCB values from ClickLogger.`, { userId: userProfile.userId, ucbCount: ucbValues.length });
+                if (ucbValues.length === 0) {
+                    logWarning(`ClickLogger returned empty UCB values for user ${userId}.`, { userId: userProfile.userId });
+                }
             } else {
                 const errorText = await response.text();
                 logError(`Failed to get UCB values from ClickLogger: ${response.statusText}`, undefined, { userId: userProfile.userId, status: response.status, statusText: response.statusText, errorText });
@@ -99,8 +102,16 @@ export async function selectPersonalizedArticles(
 
         // TODO: これらの重みは調整可能なハイパーパラメータとすることができます。
         const interestWeight = 1.0;
-        const ucbWeight = 0.5;
+        const ucbWeight = 1.0;
         const finalScore = interestRelevance * interestWeight + ucb * ucbWeight;
+
+        logDebug(`Article "${article.title}" - Interest Relevance: ${interestRelevance.toFixed(4)}, UCB: ${ucb.toFixed(4)}, Final Score: ${finalScore.toFixed(4)}`, {
+            userId: userProfile.userId,
+            articleTitle: article.title,
+            interestRelevance: interestRelevance,
+            ucb: ucb,
+            finalScore: finalScore
+        });
 
         return {
             ...article,
