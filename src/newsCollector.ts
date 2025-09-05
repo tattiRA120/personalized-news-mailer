@@ -83,7 +83,12 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 let rawSummary = item.description?.__cdata || item.description || '';
                 let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
-                const title = decodeHtmlEntities(stripHtmlTags((item.title as any).__cdata || item.title));
+                let title = decodeHtmlEntities(stripHtmlTags((item.title as any).__cdata || item.title));
+
+                // BloombergのRSSフィードの場合、「Hyperdrive」を削除
+                if (url.includes('bloomberg')) {
+                    title = title.replace(/Hyperdrive/g, '').trim();
+                }
 
                 let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
                 let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
@@ -272,10 +277,18 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
 
 
             const articles = await parseFeedWithFastXmlParser(xml, url, env); // Use new parser and await it, pass env
-            const articlesWithSource = articles.map(article => ({
-                ...article,
-                sourceName: sourceName
-            }));
+            const articlesWithSource = articles.map(article => {
+                let finalTitle = article.title;
+                // Reuters以外の記事にメディア名を追加
+                if (sourceName !== 'Reuters' && !finalTitle.endsWith(` - ${sourceName}`)) {
+                    finalTitle = `${finalTitle} - ${sourceName}`;
+                }
+                return {
+                    ...article,
+                    title: finalTitle,
+                    sourceName: sourceName
+                };
+            });
             allArticles = allArticles.concat(articlesWithSource);
         }
     }
