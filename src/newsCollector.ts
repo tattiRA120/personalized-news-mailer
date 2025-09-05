@@ -183,10 +183,14 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
 
             if (title && link) {
                 let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
-                // BloombergのRSS 1.0フィードの場合、「Hyperdrive」を削除
-                if (url.includes('bloomberg')) {
-                    cleanedTitle = cleanedTitle.replace(/Hyperdrive/g, '').trim();
+                let articleLink = link;
+
+                // BloombergのHyperdrive記事を完全にスキップ
+                if (url.includes('bloomberg') && (cleanedTitle.includes('Hyperdrive') || articleLink.includes('hyperdrive'))) {
+                    logInfo(`Skipping Bloomberg Hyperdrive article: ${cleanedTitle} - ${articleLink}`, { title: cleanedTitle, articleLink });
+                    continue;
                 }
+
                 let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
                 let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
 
@@ -201,7 +205,6 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
-                const articleLink = link;
                 articles.push({
                     articleId: await generateContentHash(cleanedTitle),
                     title: cleanedTitle,
