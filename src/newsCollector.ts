@@ -85,11 +85,6 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
                 let title = decodeHtmlEntities(stripHtmlTags((item.title as any).__cdata || item.title));
 
-                // BloombergのRSSフィードの場合、「Hyperdrive」を削除
-                if (url.includes('bloomberg')) {
-                    title = title.replace(/Hyperdrive/g, '').trim();
-                }
-
                 let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
                 let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
 
@@ -187,7 +182,11 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             const pubDate = item['dc:date'] || item.date || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
-                const cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
+                let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
+                // BloombergのRSS 1.0フィードの場合、「Hyperdrive」を削除
+                if (url.includes('bloomberg')) {
+                    cleanedTitle = cleanedTitle.replace(/Hyperdrive/g, '').trim();
+                }
                 let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
                 let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
 
