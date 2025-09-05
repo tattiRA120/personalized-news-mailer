@@ -283,7 +283,7 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                 let finalTitle = article.title;
                 // Reuters以外の記事にメディア名を追加
                 if (sourceName !== 'Reuters' && !finalTitle.endsWith(` - ${sourceName}`)) {
-                    finalTitle = `${finalTitle} ― ${sourceName}`;
+                    finalTitle = `${finalTitle} – ${sourceName}`;
                 }
                 return {
                     ...article,
