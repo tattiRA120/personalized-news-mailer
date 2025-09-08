@@ -191,19 +191,55 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
     const { logError, logInfo, logWarning } = initLogger(env);
     logInfo(`Deleting old articles from D1 older than ${new Date(cutoffTimestamp).toISOString()}. Embedding IS NULL: ${embeddingIsNull}`);
     try {
-        let query = `DELETE FROM articles WHERE published_at < ?`;
+        let selectQuery = `SELECT article_id FROM articles WHERE published_at < ?`;
         if (embeddingIsNull) {
-            query += ` AND embedding IS NULL`;
+            selectQuery += ` AND embedding IS NULL`;
         }
-        const { success, error, meta } = await env.DB.prepare(query).bind(cutoffTimestamp).run() as D1Result;
+        const { results: articlesToDelete } = await env.DB.prepare(selectQuery).bind(cutoffTimestamp).all<{ article_id: string }>();
+        const articleIds = articlesToDelete.map(article => article.article_id);
 
-        if (success) {
-            logInfo(`Successfully deleted ${meta?.changes || 0} old articles from D1.`, { deletedCount: meta?.changes || 0 });
-            return meta?.changes || 0;
-        } else {
-            logError(`Failed to delete old articles from D1: ${error}`, null, { error });
+        if (articleIds.length === 0) {
+            logInfo('No old articles found to delete from D1. Skipping cleanup.', { cutoffTimestamp, embeddingIsNull });
             return 0;
         }
+
+        logInfo(`Found ${articleIds.length} old articles to delete. Proceeding with cascading deletion.`, { count: articleIds.length });
+
+        const CHUNK_SIZE_SQL_VARIABLES = 50;
+        const articleIdChunks = chunkArray(articleIds, CHUNK_SIZE_SQL_VARIABLES);
+        let totalDeleted = 0;
+
+        // 関連テーブルからレコードを削除
+        const tablesToClean = ['click_logs', 'sent_articles', 'education_logs'];
+        for (const table of tablesToClean) {
+            for (const chunk of articleIdChunks) {
+                const placeholders = chunk.map(() => '?').join(',');
+                const deleteQuery = `DELETE FROM ${table} WHERE article_id IN (${placeholders})`;
+                const { success, error, meta } = await env.DB.prepare(deleteQuery).bind(...chunk).run() as D1Result;
+                if (success) {
+                    logInfo(`Deleted ${meta?.changes || 0} entries from ${table} for old articles.`, { table, deletedCount: meta?.changes || 0 });
+                    totalDeleted += meta?.changes || 0;
+                } else {
+                    logError(`Failed to delete entries from ${table} for old articles: ${error}`, null, { table, error });
+                }
+            }
+        }
+
+        // 最後にarticlesテーブルから記事を削除
+        for (const chunk of articleIdChunks) {
+            const placeholders = chunk.map(() => '?').join(',');
+            const deleteArticlesQuery = `DELETE FROM articles WHERE article_id IN (${placeholders})`;
+            const { success, error, meta } = await env.DB.prepare(deleteArticlesQuery).bind(...chunk).run() as D1Result;
+            if (success) {
+                logInfo(`Successfully deleted ${meta?.changes || 0} old articles from 'articles' table.`, { deletedCount: meta?.changes || 0 });
+                totalDeleted += meta?.changes || 0;
+            } else {
+                logError(`Failed to delete old articles from 'articles' table: ${error}`, null, { error });
+            }
+        }
+
+        logInfo(`Finished deleting old articles from D1. Total deleted records across all tables: ${totalDeleted}.`, { totalDeleted });
+        return totalDeleted;
     } catch (error) {
         logError('Error during D1 article cleanup:', error);
         return 0;

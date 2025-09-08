@@ -3,7 +3,7 @@
 
 import { UserProfile } from './userProfile';
 import { ClickLogger } from './clickLogger';
-import { logError, logInfo, logWarning } from './logger';
+import { logError, logInfo, logWarning, logDebug } from './logger';
 import { NewsArticle } from './newsCollector';
 import { getArticleByIdFromD1 } from './services/d1Service'; // D1ServiceからgetArticleByIdFromD1をインポート
 import { Env } from './index';
