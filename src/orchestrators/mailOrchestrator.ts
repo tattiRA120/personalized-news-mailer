@@ -3,7 +3,7 @@ import { collectNews, NewsArticle } from '../newsCollector';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs } from '../services/d1Service';
 import { getAllUserIds, getUserProfile } from '../userProfile';
-import { selectPersonalizedArticles } from '../articleSelector';
+import { selectPersonalizedArticles, cosineSimilarity } from '../articleSelector';
 import { generateNewsEmail, sendNewsEmail } from '../emailGenerator';
 import { ClickLogger } from '../clickLogger';
 import { initLogger } from '../logger';
@@ -128,8 +128,46 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     // --- 3. Article Selection (MMR + Bandit) ---
                     logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
                     const numberOfArticlesToSend = 5;
-                    // UCB計算の負荷を軽減しつつ、より多くの記事を対象とするため、最新の200件の記事に制限
-                    const articlesForSelection = articlesWithEmbeddings.slice(0, 200);
+
+                    // UCB計算の負荷を軽減しつつ、より多くの記事を対象とするため、記事候補を戦略的にサンプリング
+                    // --- Strategic Sampling for Article Candidates ---
+                    const EXPLOITATION_COUNT = 150;
+                    const EXPLORATION_COUNT = 50;
+
+                    let articlesForSelection: NewsArticleWithEmbedding[] = [];
+
+                    if (userProfile.embedding && userProfile.embedding.length > 0) {
+                        // Calculate similarity scores for all articles
+                        const articlesWithSimilarity = articlesWithEmbeddings.map(article => ({
+                            ...article,
+                            similarity: article.embedding ? cosineSimilarity(userProfile.embedding!, article.embedding) : 0,
+                        })).sort((a, b) => b.similarity - a.similarity);
+
+                        // Exploitation: Get top N articles based on similarity
+                        const exploitationArticles = articlesWithSimilarity.slice(0, EXPLOITATION_COUNT);
+                        const exploitationArticleIds = new Set(exploitationArticles.map(a => a.articleId));
+
+                        // Exploration: Get random M articles from the rest
+                        const remainingForExploration = articlesWithEmbeddings.filter(a => !exploitationArticleIds.has(a.articleId));
+                        const explorationArticles: NewsArticleWithEmbedding[] = [];
+                        const explorationIndices = new Set<number>();
+                        while (explorationArticles.length < EXPLORATION_COUNT && explorationArticles.length < remainingForExploration.length) {
+                            const randomIndex = Math.floor(Math.random() * remainingForExploration.length);
+                            if (!explorationIndices.has(randomIndex)) {
+                                explorationArticles.push(remainingForExploration[randomIndex]);
+                                explorationIndices.add(randomIndex);
+                            }
+                        }
+                        
+                        articlesForSelection = [...exploitationArticles, ...explorationArticles];
+                        logInfo(`Created a candidate pool of ${articlesForSelection.length} articles (${exploitationArticles.length} exploitation, ${explorationArticles.length} exploration).`, { userId });
+
+                    } else {
+                        // Fallback for users without an embedding profile: use the latest articles
+                        logWarning(`User ${userId} has no embedding profile. Falling back to latest articles for selection.`, { userId });
+                        articlesForSelection = articlesWithEmbeddings.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
+                    }
+
                     logInfo(`Selecting personalized articles for user ${userId} from ${articlesForSelection.length} candidates.`, { userId, candidateCount: articlesForSelection.length });
                     const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5, env) as NewsArticleWithEmbedding[];
                     logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });

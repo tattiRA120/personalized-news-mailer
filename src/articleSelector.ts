@@ -9,7 +9,7 @@ import { getArticleByIdFromD1 } from './services/d1Service'; // D1Serviceからg
 import { Env } from './index';
 
 // コサイン類似度を計算するヘルパー関数
-function cosineSimilarity(vec1: number[], vec2: number[]): number {
+export function cosineSimilarity(vec1: number[], vec2: number[]): number {
     if (vec1.length !== vec2.length || vec1.length === 0) {
         logWarning("Vector dimensions mismatch or zero length for cosine similarity.", { vec1Length: vec1.length, vec2Length: vec2.length });
         return 0; // ベクトルのサイズが異なるかゼロの場合は類似度なし
