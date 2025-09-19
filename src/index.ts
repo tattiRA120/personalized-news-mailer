@@ -388,7 +388,7 @@ export default {
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
 				const deleteResponse = await clickLogger.fetch(
-                    new Request('/delete-all-data', {
+                    new Request(new URL('/delete-all-data', request.url), {
                         method: 'POST',
                     })
                 );
