@@ -70,7 +70,7 @@ export class ClickLogger extends DurableObject {
         try {
             // WASMバイナリを直接フェッチ
             // import.meta.url を使用して、現在のモジュールからの相対パスを解決
-            const wasmResponse = await fetch(new URL('./linalg-wasm/pkg/linalg_wasm_bg.wasm', import.meta.url));
+            const wasmResponse = await fetch(new URL('/wasm/linalg_wasm_bg.wasm', import.meta.url));
             const wasmModule = await WebAssembly.instantiateStreaming(wasmResponse);
             this.linalgWasm = wasmModule.instance.exports as unknown as LinalgWasmExports;
             this.logInfo('WASM module loaded successfully.');
