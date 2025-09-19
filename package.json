@@ -5,6 +5,11 @@
   },
   "dependencies": {
     "fast-xml-parser": "^5.2.3",
-    "typescript": "^5.8.3"
-  }
+    "typescript": "^5.8.3",
+    "linalg-wasm": "file:./linalg-wasm/pkg"
+  },
+    "scripts": {
+        "build:wasm": "cd linalg-wasm && ~/.cargo/bin/wasm-pack build --target web",
+        "deploy": "npm run build:wasm && wrangler deploy"
+    }
 }

@@ -4,61 +4,21 @@ import { initLogger } from './logger';
 import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
+import { get_ucb_values_bulk, update_bandit_model } from 'linalg-wasm';
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
-    A: number[][]; // d x d 行列
-    A_inv: number[][]; // A の逆行列 (d x d 行列)
+    A_inv: number[]; // d x d 行列 (フラット化)
     b: number[];   // d x 1 ベクトル
     dimension: number; // 特徴量ベクトルの次元 (embedding の次元)
     alpha: number;
-}
-
-// Helper function for dot product of two vectors
-function dotProduct(v1: number[], v2: number[]): number {
-    if (v1.length !== v2.length) {
-        throw new Error("Vector dimensions mismatch for dot product.");
-    }
-    let sum = 0;
-    for (let i = 0; i < v1.length; i++) {
-        sum += v1[i] * v2[i];
-    }
-    return sum;
-}
-
-// Helper function for matrix-vector multiplication (result = matrix * vector)
-function multiplyMatrixVector(matrix: number[][], vector: number[]): number[] {
-    const rows = matrix.length;
-    const cols = matrix[0].length;
-    if (cols !== vector.length) {
-        throw new Error("Matrix columns must match vector dimension for multiplication.");
-    }
-    const result: number[] = Array(rows).fill(0);
-    for (let i = 0; i < rows; i++) {
-        for (let j = 0; j < cols; j++) {
-            result[i] += matrix[i][j] * vector[j];
-        }
-    }
-    return result;
-}
-
-// Helper function to transpose a matrix
-function transposeMatrix(matrix: number[][]): number[][] {
-    const rows = matrix.length;
-    const cols = matrix[0].length;
-    const result: number[][] = Array(cols).fill(0).map(() => Array(rows).fill(0));
-    for (let i = 0; i < rows; i++) {
-        for (let j = 0; j < cols; j++) {
-            result[j][i] = matrix[i][j];
-        }
-    }
-    return result;
 }
 
 // ClickLogger Durable Object が必要とする Env の拡張
 interface ClickLoggerEnv extends Env {
     BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
     DB: D1Database; // D1 Database binding for all tables (articles, users, logs)
+    // LINALG_WASM: WebAssemblyModule; // WASM モジュールは直接インポートするため不要
 }
 
 // Durable Object class for managing click logs and bandit models for ALL users.
@@ -141,16 +101,14 @@ export class ClickLogger extends DurableObject {
     private initializeNewBanditModel(userId: string): BanditModelState {
         const dimension = 257; // Dimension for text-embedding-3-small + 1 (freshness)
         const newModel: BanditModelState = {
-            A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
-            A_inv: Array(dimension).fill(0).map(() => Array(dimension).fill(0)), // A_inv を初期化
+            A_inv: Array(dimension * dimension).fill(0), // A_inv をフラットな配列として初期化
             b: Array(dimension).fill(0),
             dimension: dimension,
             alpha: 0.5, // UCB parameter
         };
-        // Initialize A and A_inv as identity matrices
+        // Initialize A_inv as an identity matrix (flattened)
         for (let i = 0; i < dimension; i++) {
-            newModel.A[i][i] = 1.0;
-            newModel.A_inv[i][i] = 1.0; // A_inv も単位行列で初期化
+            newModel.A_inv[i * dimension + i] = 1.0;
         }
         this.inMemoryModels.set(userId, newModel);
         this.dirty = true;
@@ -320,7 +278,7 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                const ucbValues = this.getUCBValues(banditModel, articlesWithEmbeddings, userCTR);
+                const ucbValues = await this.getUCBValues(userId, banditModel, articlesWithEmbeddings, userCTR);
                 // Limit logging to the first 10 UCB values for performance
                 const limitedUcbValues = ucbValues.slice(0, 10).map(u => ({ articleId: u.articleId, ucb: u.ucb.toFixed(4) }));
                 this.logDebug(
@@ -530,58 +488,46 @@ export class ClickLogger extends DurableObject {
         }
     }
 
-    // Calculate UCB values for a list of articles for a specific user model.
-    private getUCBValues(banditModel: BanditModelState, articles: { articleId: string, embedding: number[] }[], userCTR: number): { articleId: string, ucb: number }[] {
+    // Calculate UCB values for a list of articles for a specific user model using WASM.
+    private async getUCBValues(userId: string, banditModel: BanditModelState, articles: { articleId: string, embedding: number[] }[], userCTR: number): Promise<{ articleId: string, ucb: number }[]> {
         if (banditModel.dimension === 0) {
             this.logWarning("Bandit model dimension is zero. Cannot calculate UCB values.");
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
         }
 
-        // Dynamically adjust alpha based on user CTR
-        // Low CTR -> higher alpha (more exploration)
-        // High CTR -> lower alpha (more exploitation)
-        const baseAlpha = 0.5;
-        const dynamicAlpha = baseAlpha + (1 - userCTR) * 0.5; // alpha ranges from 0.5 (CTR=1) to 1.0 (CTR=0)
-        this.logDebug(`Using dynamic alpha: ${dynamicAlpha.toFixed(4)} based on CTR: ${userCTR.toFixed(4)}`);
-
-        const { A_inv, b, dimension } = banditModel; // A_inv を使用
-        const alpha = dynamicAlpha; // Use the dynamically calculated alpha
-        const ucbResults: { articleId: string, ucb: number }[] = [];
-
         try {
-            for (const article of articles) {
-                const x = article.embedding;
+            // WASM 側の BanditModel 構造体に合うようにデータを変換
+            const wasmModel = {
+                a_inv: banditModel.A_inv,
+                b: banditModel.b,
+                dimension: banditModel.dimension,
+            };
 
-                if (!x || x.length !== dimension) {
-                    this.logDebug(`Article ${article.articleId} has invalid or missing embedding.`, { articleId: article.articleId });
-                    ucbResults.push({ articleId: article.articleId, ucb: 0 });
-                    continue;
-                }
+            // WASM 側の Article 構造体の配列に合うようにデータを変換
+            const wasmArticles = articles.map(article => ({
+                articleId: article.articleId,
+                embedding: article.embedding,
+            }));
 
-                const hat_theta = multiplyMatrixVector(A_inv, b);
-                const term1 = dotProduct(x, hat_theta);
+            // WASM 関数を呼び出し
+            const ucbResults: { articleId: string, ucb: number }[] = await get_ucb_values_bulk(
+                wasmModel,
+                wasmArticles,
+                userCTR
+            );
 
-                const x_T_A_inv: number[] = [];
-                const A_inv_T = transposeMatrix(A_inv);
-                for (let i = 0; i < dimension; i++) {
-                    x_T_A_inv.push(dotProduct(x, A_inv_T[i]));
-                }
+            // Limit logging to the first 10 UCB values for performance
+            const limitedUcbValues = ucbResults.slice(0, 10).map(u => ({ articleId: u.articleId, ucb: u.ucb.toFixed(4) }));
+            this.logDebug(
+                `Calculated UCB values for user ${userId} (showing up to 10): ${JSON.stringify(limitedUcbValues)}`,
+                { userId, totalUcbCount: ucbResults.length }
+            );
 
-                const term2_sqrt = dotProduct(x_T_A_inv, x);
-                const term2 = alpha * Math.sqrt(Math.abs(term2_sqrt)); // Use Math.abs for safety
-
-                const ucb = term1 + term2;
-                // Limit detailed logging to the first 5 articles or when explicitly in debug mode
-                if (ucbResults.length < 5 /* || process.env.DEBUG_UCB === 'true' */) {
-                    this.logDebug(`Calculated UCB for article ${article.articleId}: Term1=${term1.toFixed(4)}, Term2=${term2.toFixed(4)}, UCB=${ucb.toFixed(4)}`, { articleId: article.articleId, term1, term2, ucb });
-                }
-                ucbResults.push({ articleId: article.articleId, ucb: ucb });
-            }
+            return ucbResults;
         } catch (error) {
-            this.logError("Error during UCB calculation:", error);
+            this.logError("Error during WASM UCB calculation:", error, { userId });
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
         }
-        return ucbResults;
     }
 
     // Helper to normalize errors to Error objects
@@ -589,61 +535,36 @@ export class ClickLogger extends DurableObject {
         return error instanceof Error ? error : new Error(String(error));
     }
 
-    // Update a specific user's bandit model.
+    // Update a specific user's bandit model using WASM.
     private updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number, userId: string): void {
         if (embedding.length !== banditModel.dimension) {
             this.logWarning("Cannot update bandit model: embedding dimension mismatch.", { userId, embeddingLength: embedding.length, modelDimension: banditModel.dimension });
             return;
         }
 
-        const { A, A_inv, b, dimension } = banditModel; // A_inv を追加
-        const x = embedding;
+        try {
+            // WASM 側の BanditModel 構造体に合うようにデータを変換
+            const wasmModel = {
+                a_inv: banditModel.A_inv,
+                b: banditModel.b,
+                dimension: banditModel.dimension,
+            };
 
-        // Sherman-Morrison formula を使用して A_inv を更新
-        // A_new_inv = A_old_inv - (A_old_inv * x * x^T * A_old_inv) / (1 + x^T * A_old_inv * x)
+            // WASM 関数を呼び出し、更新されたモデルを受け取る
+            const updatedWasmModel = update_bandit_model(
+                wasmModel,
+                new Float64Array(embedding),
+                reward
+            );
 
-        // 1. A_old_inv * x
-        const A_inv_x = multiplyMatrixVector(A_inv, x); // d x 1 ベクトル
+            // 更新されたモデルで inMemoryModels を更新
+            banditModel.A_inv = updatedWasmModel.a_inv;
+            banditModel.b = updatedWasmModel.b;
+            // dimension は変わらないので更新不要
 
-        // 2. x^T * A_old_inv * x
-        const x_T_A_inv_x = dotProduct(x, A_inv_x); // スカラー
-
-        // 3. denominator = 1 + x^T * A_old_inv * x
-        const denominator = 1 + x_T_A_inv_x;
-
-        if (denominator === 0) {
-            this.logError("Denominator is zero in Sherman-Morrison update. Skipping update.", null, { userId: userId, embeddingLength: embedding.length, reward });
-            return;
+            this.logDebug(`Bandit model updated for user ${userId} with reward ${reward.toFixed(2)}.`, { userId, reward });
+        } catch (error) {
+            this.logError("Error during WASM bandit model update:", error, { userId });
         }
-
-        // 4. numerator_matrix = (A_old_inv * x) * (x^T * A_old_inv)
-        // (d x 1) * (1 x d) = d x d 行列
-        const numerator_matrix: number[][] = Array(dimension).fill(0).map(() => Array(dimension).fill(0));
-        for (let i = 0; i < dimension; i++) {
-            for (let j = 0; j < dimension; j++) {
-                numerator_matrix[i][j] = A_inv_x[i] * A_inv_x[j];
-            }
-        }
-
-        // 5. A_new_inv = A_old_inv - numerator_matrix / denominator
-        for (let i = 0; i < dimension; i++) {
-            for (let j = 0; j < dimension; j++) {
-                A_inv[i][j] -= numerator_matrix[i][j] / denominator;
-            }
-        }
-
-        // b = b + reward * x
-        for (let i = 0; i < dimension; i++) {
-            b[i] += reward * x[i];
-        }
-
-        // A は明示的に更新する必要はないが、整合性のため更新する
-        // A = A + x * x^T
-        for (let i = 0; i < dimension; i++) {
-            for (let j = 0; j < dimension; j++) {
-                A[i][j] += x[i] * x[j];
-            }
-        }
-        this.logDebug(`Bandit model updated for user ${userId} with reward ${reward.toFixed(2)}.`, { userId, reward });
     }
 }

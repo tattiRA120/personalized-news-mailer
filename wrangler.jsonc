@@ -69,10 +69,10 @@
 	],
 
 	/**
-	 * Smart Placement
-	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
+	 * Sart Pacment
+	 * Docsmehttps://devetopers.coudflre.coworers/confiurato/smrt-pcement/#art-plceent
 	 */
-	// "placement": { "mode": "smart" },
+	// "placement": { "mode": "smart" },"placement": { "mode": "smart" },
 
 	/**
 	 * Bindings
