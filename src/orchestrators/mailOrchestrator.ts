@@ -1,7 +1,7 @@
 import { Env } from '../index';
 import { collectNews, NewsArticle } from '../newsCollector';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
-import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs } from '../services/d1Service';
+import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs, getUserCTR } from '../services/d1Service';
 import { getAllUserIds, getUserProfile } from '../userProfile';
 import { selectPersonalizedArticles, cosineSimilarity } from '../articleSelector';
 import { generateNewsEmail, sendNewsEmail } from '../emailGenerator';
@@ -129,6 +129,19 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
                     const numberOfArticlesToSend = 5;
 
+                    // Get user's CTR for dynamic parameter adjustment
+                    const userCTR = await getUserCTR(env, userId);
+
+                    // --- Feature Engineering: Add article freshness ---
+                    const now = Date.now();
+                    const articlesWithFeatures = articlesWithEmbeddings.map(article => {
+                        const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
+                        // Normalize age (e.g., cap at 7 days, scale to 0-1)
+                        const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                        const extendedEmbedding = article.embedding ? [...article.embedding, normalizedAge] : undefined;
+                        return { ...article, embedding: extendedEmbedding };
+                    });
+
                     // UCB計算の負荷を軽減しつつ、より多くの記事を対象とするため、記事候補を戦略的にサンプリング
                     // --- Strategic Sampling for Article Candidates ---
                     const EXPLOITATION_COUNT = 150;
@@ -137,7 +150,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     let articlesForSelection: NewsArticleWithEmbedding[] = [];
 
                     if (userProfile.embedding && userProfile.embedding.length > 0) {
-                        // Calculate similarity scores for all articles
+                        // NOTE: We use the original embeddings for similarity calculation, not the extended ones.
                         const articlesWithSimilarity = articlesWithEmbeddings.map(article => ({
                             ...article,
                             similarity: article.embedding ? cosineSimilarity(userProfile.embedding!, article.embedding) : 0,
@@ -148,7 +161,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         const exploitationArticleIds = new Set(exploitationArticles.map(a => a.articleId));
 
                         // Exploration: Get random M articles from the rest
-                        const remainingForExploration = articlesWithEmbeddings.filter(a => !exploitationArticleIds.has(a.articleId));
+                        const remainingForExploration = articlesWithFeatures.filter(a => !exploitationArticleIds.has(a.articleId));
                         const explorationArticles: NewsArticleWithEmbedding[] = [];
                         const explorationIndices = new Set<number>();
                         while (explorationArticles.length < EXPLORATION_COUNT && explorationArticles.length < remainingForExploration.length) {
@@ -165,11 +178,11 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     } else {
                         // Fallback for users without an embedding profile: use the latest articles
                         logWarning(`User ${userId} has no embedding profile. Falling back to latest articles for selection.`, { userId });
-                        articlesForSelection = articlesWithEmbeddings.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
+                        articlesForSelection = articlesWithFeatures.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
                     }
 
                     logInfo(`Selecting personalized articles for user ${userId} from ${articlesForSelection.length} candidates.`, { userId, candidateCount: articlesForSelection.length });
-                    const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfile, clickLogger, userId, numberOfArticlesToSend, 0.5, env) as NewsArticleWithEmbedding[];
+                    const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfile, clickLogger, userId, numberOfArticlesToSend, userCTR, 0.5, env) as NewsArticleWithEmbedding[];
                     logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
 
                     if (selectedArticles.length === 0) {

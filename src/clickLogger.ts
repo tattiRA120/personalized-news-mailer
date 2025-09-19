@@ -139,7 +139,7 @@ export class ClickLogger extends DurableObject {
     
     // Initialize a new bandit model for a specific user.
     private initializeNewBanditModel(userId: string): BanditModelState {
-        const dimension = 256; // Dimension for text-embedding-3-small
+        const dimension = 257; // Dimension for text-embedding-3-small + 1 (freshness)
         const newModel: BanditModelState = {
             A: Array(dimension).fill(0).map(() => Array(dimension).fill(0)),
             A_inv: Array(dimension).fill(0).map(() => Array(dimension).fill(0)), // A_inv を初期化
@@ -194,6 +194,7 @@ export class ClickLogger extends DurableObject {
         interface GetUcbValuesRequestBody {
             userId: string;
             articlesWithEmbeddings: { articleId: string, embedding: number[] }[];
+            userCTR: number;
         }
 
         // /log-sent-articles エンドポイントのリクエストボディの型定義
@@ -251,9 +252,9 @@ export class ClickLogger extends DurableObject {
             }
         } else if (request.method === 'POST' && path === '/get-ucb-values') {
              try {
-                const { userId, articlesWithEmbeddings } = await request.json() as GetUcbValuesRequestBody;
-                if (!userId || !Array.isArray(articlesWithEmbeddings)) {
-                     return new Response('Invalid input: userId and articlesWithEmbeddings array are required', { status: 400 });
+                const { userId, articlesWithEmbeddings, userCTR } = await request.json() as GetUcbValuesRequestBody;
+                if (!userId || !Array.isArray(articlesWithEmbeddings) || userCTR === undefined) {
+                     return new Response('Invalid input: userId, articlesWithEmbeddings array, and userCTR are required', { status: 400 });
                 }
 
                 let banditModel = this.inMemoryModels.get(userId);
@@ -262,7 +263,7 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                const ucbValues = this.getUCBValues(banditModel, articlesWithEmbeddings);
+                const ucbValues = this.getUCBValues(banditModel, articlesWithEmbeddings, userCTR);
                 // Limit logging to the first 10 UCB values for performance
                 const limitedUcbValues = ucbValues.slice(0, 10).map(u => ({ articleId: u.articleId, ucb: u.ucb.toFixed(4) }));
                 this.logDebug(
@@ -473,13 +474,21 @@ export class ClickLogger extends DurableObject {
     }
 
     // Calculate UCB values for a list of articles for a specific user model.
-    private getUCBValues(banditModel: BanditModelState, articles: { articleId: string, embedding: number[] }[]): { articleId: string, ucb: number }[] {
+    private getUCBValues(banditModel: BanditModelState, articles: { articleId: string, embedding: number[] }[], userCTR: number): { articleId: string, ucb: number }[] {
         if (banditModel.dimension === 0) {
             this.logWarning("Bandit model dimension is zero. Cannot calculate UCB values.");
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
         }
 
-        const { A_inv, b, alpha, dimension } = banditModel; // A_inv を使用
+        // Dynamically adjust alpha based on user CTR
+        // Low CTR -> higher alpha (more exploration)
+        // High CTR -> lower alpha (more exploitation)
+        const baseAlpha = 0.5;
+        const dynamicAlpha = baseAlpha + (1 - userCTR) * 0.5; // alpha ranges from 0.5 (CTR=1) to 1.0 (CTR=0)
+        this.logDebug(`Using dynamic alpha: ${dynamicAlpha.toFixed(4)} based on CTR: ${userCTR.toFixed(4)}`);
+
+        const { A_inv, b, dimension } = banditModel; // A_inv を使用
+        const alpha = dynamicAlpha; // Use the dynamically calculated alpha
         const ucbResults: { articleId: string, ucb: number }[] = [];
 
         try {

@@ -397,3 +397,41 @@ export async function deleteProcessedClickLogs(env: Env, userId: string, article
         return totalDeleted;
     }
 }
+
+/**
+ * ユーザーのクリック率 (CTR) を計算します。
+ * @param env 環境変数
+ * @param userId ユーザーID
+ * @param days 考慮する期間（日数）
+ * @returns ユーザーのCTR（0から1の間の数値）
+ */
+export async function getUserCTR(env: Env, userId: string, days: number = 30): Promise<number> {
+    const { logError, logInfo } = initLogger(env);
+    try {
+        const sinceTimestamp = Date.now() - days * 24 * 60 * 60 * 1000;
+
+        // 配信された記事数を取得
+        const sentCountResult = await env.DB.prepare(
+            `SELECT COUNT(DISTINCT article_id) as count FROM sent_articles WHERE user_id = ? AND timestamp >= ?`
+        ).bind(userId, sinceTimestamp).first<{ count: number }>();
+        const sentCount = sentCountResult?.count ?? 0;
+
+        // クリックされた記事数を取得
+        const clickCountResult = await env.DB.prepare(
+            `SELECT COUNT(DISTINCT article_id) as count FROM click_logs WHERE user_id = ? AND timestamp >= ?`
+        ).bind(userId, sinceTimestamp).first<{ count: number }>();
+        const clickCount = clickCountResult?.count ?? 0;
+
+        if (sentCount === 0) {
+            return 0.5; // 配信履歴がない場合はデフォルト値0.5を返す
+        }
+
+        const ctr = clickCount / sentCount;
+        logInfo(`Calculated CTR for user ${userId}: ${ctr.toFixed(4)} (${clickCount}/${sentCount})`, { userId, ctr, clickCount, sentCount });
+        return ctr;
+
+    } catch (error) {
+        logError(`Error calculating CTR for user ${userId}:`, error, { userId });
+        return 0.5; // エラー時もデフォルト値0.5を返す
+    }
+}

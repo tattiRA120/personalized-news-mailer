@@ -41,6 +41,7 @@ export async function selectPersonalizedArticles(
     clickLogger: DurableObjectStub<ClickLogger>, // Durable Object インスタンスを受け取る
     userId: string,
     count: number,
+    userCTR: number,
     lambda: number = 0.5, // MMR パラメータ
     env: Env
 ): Promise<NewsArticle[]> {
@@ -65,7 +66,7 @@ export async function selectPersonalizedArticles(
             const response = await clickLogger.fetch(new Request(`${env.WORKER_BASE_URL}/get-ucb-values`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: userId, articlesWithEmbeddings: articlesWithEmbeddings }),
+                body: JSON.stringify({ userId: userId, articlesWithEmbeddings: articlesWithEmbeddings, userCTR: userCTR }),
             }));
 
             if (response.ok) {
@@ -100,9 +101,14 @@ export async function selectPersonalizedArticles(
             interestRelevance = cosineSimilarity(userInterestEmbedding, article.embedding);
         }
 
-        // TODO: これらの重みは調整可能なハイパーパラメータとすることができます。
-        const interestWeight = 1.0;
-        const ucbWeight = 1.0;
+        // Dynamically adjust ucbWeight based on user CTR
+        // Low CTR -> higher ucbWeight (more exploration)
+        // High CTR -> lower ucbWeight (more exploitation)
+        const interestWeight = 1.0; // Keep interest relevance weight constant
+        const baseUcbWeight = 1.0;
+        const ucbWeight = baseUcbWeight + (1 - userCTR) * 1.0; // ucbWeight ranges from 1.0 (CTR=1) to 2.0 (CTR=0)
+        logDebug(`Using dynamic ucbWeight: ${ucbWeight.toFixed(4)} based on CTR: ${userCTR.toFixed(4)}`);
+
         const finalScore = interestRelevance * interestWeight + ucb * ucbWeight;
 
         logDebug(`Article "${article.title}" - Interest Relevance: ${interestRelevance.toFixed(4)}, UCB: ${ucb.toFixed(4)}, Final Score: ${finalScore.toFixed(4)}`, {
