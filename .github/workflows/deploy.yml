@@ -20,6 +20,9 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      - name: Build WASM module
+        run: npm run build:wasm
+
       # Add steps to set Workers Secrets using wrangler secret put
       - name: Set OPENAI_API_KEY Secret
         run: echo "${{ secrets.OPENAI_API_KEY }}" | npx wrangler secret put OPENAI_API_KEY
