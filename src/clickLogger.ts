@@ -218,6 +218,14 @@ export class ClickLogger extends DurableObject {
             reward: number;
         }
 
+        // /log-feedback エンドポイントのリクエストボディの型定義
+        interface LogFeedbackRequestBody {
+            userId: string;
+            articleId: string;
+            feedback: 'interested' | 'not_interested';
+            timestamp: number;
+        }
+
         // /learn-from-education エンドポイントのリクエストボディの型定義
         interface LearnFromEducationRequestBody {
             userId: string;
@@ -249,6 +257,55 @@ export class ClickLogger extends DurableObject {
             } catch (error) {
                 this.logError('Error logging click:', error, { requestUrl: request.url });
                 return new Response('Error logging click', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/log-feedback') {
+            try {
+                const { userId, articleId, feedback, timestamp } = await request.json() as LogFeedbackRequestBody;
+
+                if (!userId || !articleId || !feedback || !timestamp) {
+                    this.logWarning('Log feedback failed: Missing parameters.');
+                    return new Response('Missing parameters', { status: 400 });
+                }
+
+                // 1. Determine reward based on feedback
+                const reward = feedback === 'interested' ? 2.0 : -1.0;
+
+                // 2. Get the article's embedding from D1 (sent_articles table)
+                const articleResult = await this.env.DB.prepare(
+                    `SELECT embedding FROM sent_articles WHERE user_id = ? AND article_id = ? ORDER BY timestamp DESC LIMIT 1`
+                ).bind(userId, articleId).first<{ embedding: string }>();
+
+                if (!articleResult || !articleResult.embedding) {
+                    this.logWarning(`Could not find embedding for article ${articleId} for user ${userId} to log feedback.`, { userId, articleId });
+                    // Even if embedding is not found, we can log the feedback itself.
+                    // For now, we just return an error response.
+                    return new Response('Article embedding not found', { status: 404 });
+                }
+
+                const embedding = JSON.parse(articleResult.embedding) as number[];
+
+                // 3. Update the bandit model
+                let banditModel = this.inMemoryModels.get(userId);
+                if (!banditModel) {
+                    this.logWarning(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
+                    banditModel = this.initializeNewBanditModel(userId);
+                }
+
+                this.updateBanditModel(banditModel, embedding, reward, userId);
+                this.dirty = true;
+                this.logInfo(`Successfully updated bandit model from feedback for article ${articleId} for user ${userId}`, { userId, articleId, feedback, reward });
+                
+                // Optionally, save the model immediately or wait for the alarm
+                await this.saveModelsToR2();
+
+                // 4. (Optional) Log the feedback to a new table or extend click_logs
+                // For now, we skip this step.
+
+                return new Response('Feedback logged and model updated', { status: 200 });
+
+            } catch (error) {
+                this.logError('Error logging feedback:', error, { requestUrl: request.url });
+                return new Response('Error logging feedback', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/get-ucb-values') {
              try {

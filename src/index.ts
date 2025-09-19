@@ -162,6 +162,53 @@ export default {
 			}
 		}
 
+		// --- Feedback Tracking Handler ---
+		if (request.method === 'GET' && path === '/track-feedback') {
+			logInfo('Feedback tracking request received');
+			const userId = url.searchParams.get('userId');
+			const articleId = url.searchParams.get('articleId');
+			const feedback = url.searchParams.get('feedback'); // 'interested' or 'not_interested'
+
+			if (!userId || !articleId || !feedback) {
+				logWarning('Feedback tracking failed: Missing userId, articleId, or feedback.');
+				return new Response('Missing parameters', { status: 400 });
+			}
+
+			if (feedback !== 'interested' && feedback !== 'not_interested') {
+				logWarning(`Invalid feedback value: ${feedback}`);
+				return new Response('Invalid feedback value', { status: 400 });
+			}
+
+			try {
+				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+				const logFeedbackResponse = await clickLogger.fetch(
+					new Request(`${env.WORKER_BASE_URL}/log-feedback`, {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ userId, articleId, feedback, timestamp: Date.now() }),
+					})
+				);
+
+				if (logFeedbackResponse.ok) {
+					logInfo(`Feedback logged successfully for user ${userId}, article ${articleId}, feedback: ${feedback}`, { userId, articleId, feedback });
+				} else {
+					logError(`Failed to log feedback for user ${userId}, article ${articleId}: ${logFeedbackResponse.statusText}`, null, { userId, articleId, status: logFeedbackResponse.status, statusText: logFeedbackResponse.statusText });
+				}
+
+				// ユーザーにフィードバックが記録されたことを伝える簡単なメッセージを返す
+				return new Response('フィードバックありがとうございます！', {
+					status: 200,
+					headers: { 'Content-Type': 'text/html; charset=utf-8' },
+				});
+
+			} catch (error) {
+				logError('Error during feedback tracking:', error, { userId, articleId, feedback, requestUrl: request.url });
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
 		// --- OAuth2 Callback Handler ---
 		if (request.method === 'GET' && path === '/oauth2callback') {
 			logInfo('OAuth2 callback request received');

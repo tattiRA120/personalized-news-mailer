@@ -45,6 +45,10 @@ export async function generateNewsEmail(articles: NewsArticle[], userId: string,
                 .article a { text-decoration: none; color: #007bff; }
                 .article a:hover { text-decoration: underline; }
                 .article p { color: #555; font-size: 0.9em; margin-top: 5px; }
+                .feedback-buttons { margin-top: 10px; }
+                .feedback-buttons a { display: inline-block; padding: 5px 10px; margin-right: 10px; border-radius: 4px; text-decoration: none; color: #fff; font-size: 0.8em; }
+                .btn-interested { background-color: #28a745; }
+                .btn-not-interested { background-color: #dc3545; }
                 .footer { text-align: center; margin-top: 30px; font-size: 0.8em; color: #777; }
                 .footer a { color: #007bff; text-decoration: none; }
             </style>
@@ -92,6 +96,10 @@ export async function generateNewsEmail(articles: NewsArticle[], userId: string,
                     <div class="article-content">
                         <h2><a href="${trackingLink}">${article.title}</a></h2>
                         <p>${article.summary || ''}</p>
+                        <div class="feedback-buttons">
+                            <a href="${env.WORKER_BASE_URL}/track-feedback?userId=${userId}&articleId=${encodeURIComponent(article.articleId)}&feedback=interested" class="btn-interested">興味がある</a>
+                            <a href="${env.WORKER_BASE_URL}/track-feedback?userId=${userId}&articleId=${encodeURIComponent(article.articleId)}&feedback=not_interested" class="btn-not-interested">興味がない</a>
+                        </div>
                     </div>
                 </div>
             `;
