@@ -69,6 +69,10 @@
 		}
 	],
 
+	"wasm_modules": {
+		"LINALG_WASM": "./linalg-wasm/pkg/linalg_wasm_bg.wasm"
+	},
+
 	/**
 	 * Sart Pacment
 	 * Docsmehttps://devetopers.coudflre.coworers/confiurato/smrt-pcement/#art-plceent

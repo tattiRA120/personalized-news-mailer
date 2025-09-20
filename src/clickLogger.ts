@@ -17,19 +17,22 @@ interface BanditModelState {
 interface LinalgWasmExports {
     get_ucb_values_bulk: (model_js: any, articles_js: any, user_ctr: number) => any;
     update_bandit_model: (model_js: any, embedding: Float64Array, reward: number) => any;
+    // WASMモジュールが提供する初期化関数があればここに追加
+    init_panic_hook: () => void;
 }
 
 // ClickLogger Durable Object が必要とする Env の拡張
 interface ClickLoggerEnv extends Env {
     BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
     DB: D1Database; // D1 Database binding for all tables (articles, users, logs)
+    LINALG_WASM: WebAssembly.Module;
 }
 
 // Durable Object class for managing click logs and bandit models for ALL users.
 // This acts as a central hub to minimize R2 access.
 export class ClickLogger extends DurableObject {
     state: DurableObjectState;
-    env: ClickLoggerEnv; // EnvWithDurableObjects の代わりに ClickLoggerEnv を使用
+    env: ClickLoggerEnv;
 
     private inMemoryModels: Map<string, BanditModelState>;
     private readonly modelsR2Key = 'bandit_models.json'; // Key for the aggregated models file in R2
@@ -42,7 +45,7 @@ export class ClickLogger extends DurableObject {
     private logDebug: (message: string, details?: any) => void;
     private linalgWasm: LinalgWasmExports | null; // WASM モジュールのエクスポートを保持
 
-    constructor(state: DurableObjectState, env: ClickLoggerEnv) { // EnvWithDurableObjects の代わりに ClickLoggerEnv を使用
+    constructor(state: DurableObjectState, env: ClickLoggerEnv) {
         super(state, env);
         this.state = state;
         this.env = env;
@@ -68,11 +71,13 @@ export class ClickLogger extends DurableObject {
     private async loadWasmModule(): Promise<void> {
         this.logInfo('Attempting to load WASM module.');
         try {
-            // WASMバイナリを直接フェッチ
-            // import.meta.url を使用して、現在のモジュールからの相対パスを解決
-            const wasmResponse = await fetch(new URL('/wasm/linalg_wasm_bg.wasm', import.meta.url));
-            const wasmModule = await WebAssembly.instantiateStreaming(wasmResponse);
-            this.linalgWasm = wasmModule.instance.exports as unknown as LinalgWasmExports;
+            // wrangler.jsonc でバインドされた WASM モジュールを使用
+            const wasmModule = await WebAssembly.instantiate(this.env.LINALG_WASM);
+            this.linalgWasm = wasmModule.exports as unknown as LinalgWasmExports;
+            // WASMモジュールにinit_panic_hookがある場合、呼び出す
+            if (this.linalgWasm.init_panic_hook) {
+                this.linalgWasm.init_panic_hook();
+            }
             this.logInfo('WASM module loaded successfully.');
         } catch (error: unknown) {
             const err = this.normalizeError(error);
