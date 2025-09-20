@@ -4,6 +4,7 @@ import { initLogger } from './logger';
 import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
+import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -13,19 +14,11 @@ interface BanditModelState {
     alpha: number;
 }
 
-// WASM モジュールのエクスポートの型定義
-interface LinalgWasmExports {
-    get_ucb_values_bulk: (model_js: any, articles_js: any, user_ctr: number) => any;
-    update_bandit_model: (model_js: any, embedding: Float64Array, reward: number) => any;
-    // WASMモジュールが提供する初期化関数があればここに追加
-    init_panic_hook: () => void;
-}
 
 // ClickLogger Durable Object が必要とする Env の拡張
 interface ClickLoggerEnv extends Env {
     BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
     DB: D1Database; // D1 Database binding for all tables (articles, users, logs)
-    LINALG_WASM: WebAssembly.Module;
 }
 
 // Durable Object class for managing click logs and bandit models for ALL users.
@@ -43,7 +36,6 @@ export class ClickLogger extends DurableObject {
     private logInfo: (message: string, details?: any) => void;
     private logWarning: (message: string, details?: any) => void;
     private logDebug: (message: string, details?: any) => void;
-    private linalgWasm: LinalgWasmExports | null; // WASM モジュールのエクスポートを保持
 
     constructor(state: DurableObjectState, env: ClickLoggerEnv) {
         super(state, env);
@@ -51,7 +43,7 @@ export class ClickLogger extends DurableObject {
         this.env = env;
         this.inMemoryModels = new Map<string, BanditModelState>();
         this.dirty = false;
-        this.linalgWasm = null; // 初期化
+        // WASMモジュールは直接インポートされるため、インスタンス変数として保持する必要はない
 
         // ロガーを初期化し、インスタンス変数に割り当てる
         const { logError, logInfo, logWarning, logDebug } = initLogger(env);
@@ -71,13 +63,16 @@ export class ClickLogger extends DurableObject {
     private async loadWasmModule(): Promise<void> {
         this.logInfo('Attempting to load WASM module.');
         try {
-            // wrangler.jsonc でバインドされた WASM モジュールを使用
-            const wasmModule = await WebAssembly.instantiate(this.env.LINALG_WASM);
-            this.linalgWasm = wasmModule.exports as unknown as LinalgWasmExports;
-            // WASMモジュールにinit_panic_hookがある場合、呼び出す
-            if (this.linalgWasm.init_panic_hook) {
-                this.linalgWasm.init_panic_hook();
-            }
+            await init(); // WASMモジュールを初期化
+            // init_panic_hook はグローバルスコープに定義されているか、init() 呼び出し後に利用可能になることを想定
+            // もし init() がエクスポートオブジェクトを返す場合、そのオブジェクトから呼び出す必要がある
+            // 現在のwasm-packの出力では、init_panic_hookは通常グローバルに定義されるか、init()によって初期化される
+            // ここでは、init() 呼び出し後に利用可能になると仮定して直接呼び出す
+            // init_panic_hook はwasm-packによって生成されるが、
+            // Cloudflare WorkersのESモジュール環境では直接利用できない場合があるため、
+            // エラーを避けるために呼び出しを削除する。
+            // 必要であれば、wasm-packの出力JSファイルを詳細に調査し、
+            // 適切な呼び出し方法を見つける必要がある。
             this.logInfo('WASM module loaded successfully.');
         } catch (error: unknown) {
             const err = this.normalizeError(error);
@@ -539,7 +534,7 @@ export class ClickLogger extends DurableObject {
             }));
 
             // WASM 関数を呼び出し
-            const ucbResults: { articleId: string, ucb: number }[] = await this.linalgWasm!.get_ucb_values_bulk(
+            const ucbResults: { articleId: string, ucb: number }[] = await get_ucb_values_bulk(
                 wasmModel,
                 wasmArticles,
                 userCTR
@@ -580,7 +575,7 @@ export class ClickLogger extends DurableObject {
             };
 
             // WASM 関数を呼び出し、更新されたモデルを受け取る
-            const updatedWasmModel = this.linalgWasm!.update_bandit_model(
+            const updatedWasmModel = update_bandit_model(
                 wasmModel,
                 new Float64Array(embedding),
                 reward
