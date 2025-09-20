@@ -51,7 +51,9 @@
 		}
 	],
 
-
+	"wasm_modules": {
+		"LINALG_WASM": "./linalg-wasm/pkg/linalg_wasm_bg.wasm"
+	},
 
 	"d1_databases": [
 		{

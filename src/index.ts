@@ -25,6 +25,7 @@ export interface Env {
     LOG_LEVEL?: string;
     GOOGLE_NEWS_DECODER_API_URL: string;
     DECODER_SECRET: string;
+    LINALG_WASM: WebAssembly.Module; // WASM module binding
 }
 
 interface EmailRecipient {

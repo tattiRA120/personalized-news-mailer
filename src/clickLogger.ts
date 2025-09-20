@@ -6,6 +6,13 @@ import { NewsArticle } from './newsCollector';
 import { Env } from './index';
 import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
 
+// ClickLogger Durable Object が必要とする Env の拡張
+interface ClickLoggerEnv extends Env {
+    BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
+    DB: D1Database; // D1 Database binding for all tables (articles, users, logs)
+    LINALG_WASM: WebAssembly.Module; // WASM module binding
+}
+
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
     A_inv: number[]; // d x d 行列 (フラット化)
@@ -43,7 +50,6 @@ export class ClickLogger extends DurableObject {
         this.env = env;
         this.inMemoryModels = new Map<string, BanditModelState>();
         this.dirty = false;
-        // WASMモジュールは直接インポートされるため、インスタンス変数として保持する必要はない
 
         // ロガーを初期化し、インスタンス変数に割り当てる
         const { logError, logInfo, logWarning, logDebug } = initLogger(env);
@@ -54,25 +60,16 @@ export class ClickLogger extends DurableObject {
 
         // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
-            await this.loadWasmModule(); // WASMモジュールをロードする新しい関数を呼び出す
+            await this.loadWasmModule(this.env.LINALG_WASM);
             await this.loadModelsFromR2();
         });
     }
 
     // WASM モジュールを動的にロードする関数
-    private async loadWasmModule(): Promise<void> {
+    private async loadWasmModule(wasmModule: WebAssembly.Module): Promise<void> {
         this.logInfo('Attempting to load WASM module.');
         try {
-            await init(); // WASMモジュールを初期化
-            // init_panic_hook はグローバルスコープに定義されているか、init() 呼び出し後に利用可能になることを想定
-            // もし init() がエクスポートオブジェクトを返す場合、そのオブジェクトから呼び出す必要がある
-            // 現在のwasm-packの出力では、init_panic_hookは通常グローバルに定義されるか、init()によって初期化される
-            // ここでは、init() 呼び出し後に利用可能になると仮定して直接呼び出す
-            // init_panic_hook はwasm-packによって生成されるが、
-            // Cloudflare WorkersのESモジュール環境では直接利用できない場合があるため、
-            // エラーを避けるために呼び出しを削除する。
-            // 必要であれば、wasm-packの出力JSファイルを詳細に調査し、
-            // 適切な呼び出し方法を見つける必要がある。
+            await init(wasmModule); // WASMモジュールを初期化
             this.logInfo('WASM module loaded successfully.');
         } catch (error: unknown) {
             const err = this.normalizeError(error);
