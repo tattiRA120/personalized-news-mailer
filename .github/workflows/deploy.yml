@@ -54,9 +54,10 @@ jobs:
       # wasm-pack を prebuilt バイナリで導入
       - name: Install wasm-pack
         run: |
-          curl -L https://github.com/drager/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
-          | tar xz
-          sudo mv wasm-pack /usr/local/bin/
+          curl -L https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz -o wasm-pack.tar.gz
+          tar xzf wasm-pack.tar.gz
+          sudo mv wasm-pack-v0.13.1-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/
+          wasm-pack --version
 
       - name: Build WASM module
         run: npm run build:wasm
