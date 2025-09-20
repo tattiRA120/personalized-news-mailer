@@ -3,7 +3,7 @@ declare module "*.wasm?url" {
     export default value;
 }
 
-declare module 'wrangler-wasm:*' {
+declare module 'wrangler-wasm:*.wasm' {
     const value: WebAssembly.Module;
     export default value;
 }
