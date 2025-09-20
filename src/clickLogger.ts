@@ -5,7 +5,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
 import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
-import wasm from 'wrangler-wasm:./linalg-wasm/pkg/linalg_wasm_bg.wasm';
+import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 
 // WASMモジュールの初期化状態を追跡するためのグローバル変数
 let wasmInitialized: Promise<void> | null = null;

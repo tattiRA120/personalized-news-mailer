@@ -67,10 +67,6 @@
 		}
 	],
 
-	"wasm_modules": [
-		"./linalg-wasm/pkg/linalg_wasm_bg.wasm"
-	],
-
 
 	/**
 	 * Sart Pacment
