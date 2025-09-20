@@ -12,15 +12,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Node.js セットアップ
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20' # プロジェクトで使用しているNode.jsのバージョンを指定
+          node-version: '20'
+          cache: 'npm'
+
+      # npm キャッシュ
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
 
       - name: Install dependencies
         run: npm install
 
-      # Cache Rust and Cargo
+      # Cargo キャッシュ
       - name: Cache Cargo registry + target
         uses: actions/cache@v4
         with:
@@ -33,20 +44,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # Setup Rust toolchain
-      - name: Setup Rust toolchain
-        run: |
-          rustup update stable
-          rustup default stable
-          rustup target add wasm32-unknown-unknown
+      # Rust toolchain セットアップ
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
 
+      # wasm-pack を prebuilt バイナリで導入
       - name: Install wasm-pack
-        run: cargo install wasm-pack --force
+        run: |
+          curl -L https://github.com/drager/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
+          | tar xz
+          sudo mv wasm-pack /usr/local/bin/
 
       - name: Build WASM module
         run: npm run build:wasm
 
-      # Add steps to set Workers Secrets using wrangler secret put
+      # Workers Secrets 設定
       - name: Set OPENAI_API_KEY Secret
         run: echo "${{ secrets.OPENAI_API_KEY }}" | npx wrangler secret put OPENAI_API_KEY
         env:
@@ -89,16 +104,16 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # Worker デプロイ
       - name: Publish Cloudflare Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: 'latest' # 最新のWranglerを使用
+          wranglerVersion: 'latest'
           vars: |
             WORKER_BASE_URL
             LOG_LEVEL
         env:
           WORKER_BASE_URL: ${{ vars.WORKER_BASE_URL }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
-          # プロジェクト名はwrangler.jsoncで指定済みのため不要
