@@ -5,7 +5,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
 import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
-import wasmUrl from "../linalg-wasm/pkg/linalg_wasm_bg.wasm?url";
+import linalgWasm from 'wrangler-wasm:linalg_wasm';
 
 // WASMモジュールの初期化状態を追跡するためのグローバル変数
 let wasmInitialized: Promise<void> | null = null;
@@ -69,7 +69,7 @@ export class ClickLogger extends DurableObject {
         }
 
         this.logInfo('Attempting to load WASM module.');
-        wasmInitialized = init(wasmUrl).then(() => {
+        wasmInitialized = init(linalgWasm).then(() => {
             this.logInfo('WASM module loaded successfully.');
         }).catch((error: unknown) => {
             const err = this.normalizeError(error);
