@@ -5,13 +5,10 @@ import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
 import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
+import wasmUrl from "../linalg-wasm/pkg/linalg_wasm_bg.wasm?url";
 
-// ClickLogger Durable Object が必要とする Env の拡張
-interface ClickLoggerEnv extends Env {
-    BANDIT_MODELS: R2Bucket; // R2 Bucket binding for bandit model state
-    DB: D1Database; // D1 Database binding for all tables (articles, users, logs)
-    LINALG_WASM: WebAssembly.Module; // WASM module binding
-}
+// WASMモジュールの初期化状態を追跡するためのグローバル変数
+let wasmInitialized: Promise<void> | null = null;
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -20,7 +17,6 @@ interface BanditModelState {
     dimension: number; // 特徴量ベクトルの次元 (embedding の次元)
     alpha: number;
 }
-
 
 // ClickLogger Durable Object が必要とする Env の拡張
 interface ClickLoggerEnv extends Env {
@@ -43,6 +39,7 @@ export class ClickLogger extends DurableObject {
     private logInfo: (message: string, details?: any) => void;
     private logWarning: (message: string, details?: any) => void;
     private logDebug: (message: string, details?: any) => void;
+    private wasmInitialized: Promise<void> | null = null; // Durable ObjectインスタンスごとのWASM初期化状態
 
     constructor(state: DurableObjectState, env: ClickLoggerEnv) {
         super(state, env);
@@ -60,22 +57,36 @@ export class ClickLogger extends DurableObject {
 
         // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
-            await this.loadWasmModule(this.env.LINALG_WASM);
             await this.loadModelsFromR2();
         });
     }
 
     // WASM モジュールを動的にロードする関数
-    private async loadWasmModule(wasmModule: WebAssembly.Module): Promise<void> {
+    private async loadWasmModule(): Promise<void> {
+        if (wasmInitialized) {
+            this.logDebug('WASM module already initialized or initializing.');
+            return wasmInitialized;
+        }
+
         this.logInfo('Attempting to load WASM module.');
-        try {
-            await init(wasmModule); // WASMモジュールを初期化
+        wasmInitialized = init(wasmUrl).then(() => {
             this.logInfo('WASM module loaded successfully.');
-        } catch (error: unknown) {
+        }).catch((error: unknown) => {
             const err = this.normalizeError(error);
             this.logError('Failed to load WASM module:', err, { errorName: err.name, errorMessage: err.message });
+            wasmInitialized = null; // 初期化失敗時はリセット
             throw err; // WASMロード失敗は致命的なので再スロー
+        });
+        return wasmInitialized;
+    }
+
+    // WASMモジュールの初期化を保証するヘルパーメソッド
+    private async ensureWasm(): Promise<void> {
+        if (this.wasmInitialized) {
+            return this.wasmInitialized;
         }
+        this.wasmInitialized = this.loadWasmModule();
+        return this.wasmInitialized;
     }
 
     // Load all bandit models from a single R2 object.
@@ -138,6 +149,8 @@ export class ClickLogger extends DurableObject {
     }
 
     async alarm() {
+        await this.ensureWasm(); // WASMモジュールの初期化を保証
+
         // This alarm is triggered periodically to save dirty models to R2 and process unclicked articles.
         if (this.dirty) {
             this.logInfo('Alarm triggered. Saving dirty models to R2.');
@@ -163,6 +176,7 @@ export class ClickLogger extends DurableObject {
 
     // Handle requests to the Durable Object
     async fetch(request: Request): Promise<Response> {
+        await this.ensureWasm(); // WASMモジュールの初期化を保証
         // Ensure an alarm is set to periodically save data.
         await this.ensureAlarmIsSet();
 
@@ -274,9 +288,6 @@ export class ClickLogger extends DurableObject {
                 this.dirty = true;
                 this.logInfo(`Successfully updated bandit model from feedback for article ${articleId} for user ${userId}`, { userId, articleId, feedback, reward });
                 
-                // Optionally, save the model immediately or wait for the alarm
-                await this.saveModelsToR2();
-
                 // 4. (Optional) Log the feedback to a new table or extend click_logs
                 // For now, we skip this step.
 
@@ -380,7 +391,6 @@ export class ClickLogger extends DurableObject {
                     await this.env.DB.batch(logStatements);
                     this.dirty = true;
                     this.logInfo(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
-                    await this.saveModelsToR2();
                 }
                 return new Response('Learning from education completed', { status: 200 });
 
@@ -408,7 +418,6 @@ export class ClickLogger extends DurableObject {
                         this.logInfo(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
                     this.dirty = true; // モデルが変更されたことをマーク
-                    await this.saveModelsToR2(); // モデルをR2に保存
                 } else {
                     this.logInfo('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
                 }
@@ -434,7 +443,6 @@ export class ClickLogger extends DurableObject {
                 this.updateBanditModel(banditModel, embedding, reward, userId);
                 this.dirty = true;
                 this.logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
-                await this.saveModelsToR2();
                 return new Response('Bandit model updated', { status: 200 });
 
             } catch (error) {

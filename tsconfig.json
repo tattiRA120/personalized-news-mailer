@@ -22,5 +22,9 @@
     "paths": {
       "linalg-wasm": ["./linalg-wasm/pkg"]
     }
-  }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts"
+  ]
 }
