@@ -58,7 +58,7 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
 }
 
 async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
-    const { logError, logInfo } = initLogger(env);
+    const { logError, logInfo, logWarning } = initLogger(env);
     const articles: NewsArticle[] = [];
 
     const options = {
@@ -103,7 +103,15 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
-                const articleLink = item.link;
+                let articleLink = item.link;
+                // 相対URLを絶対URLに変換
+                try {
+                    articleLink = new URL(articleLink, url).toString();
+                } catch (e) {
+                    logWarning(`Invalid article link found in RSS feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
+                    continue; // 不正なリンクはスキップ
+                }
+
                 articles.push({
                     articleId: await generateContentHash(title),
                     title: title,
@@ -156,7 +164,15 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
-                const articleLink = link;
+                let articleLink = link;
+                // 相対URLを絶対URLに変換
+                try {
+                    articleLink = new URL(articleLink, url).toString();
+                } catch (e) {
+                    logWarning(`Invalid article link found in Atom feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
+                    continue; // 不正なリンクはスキップ
+                }
+
                 articles.push({
                     articleId: await generateContentHash(cleanedTitle),
                     title: cleanedTitle,
@@ -189,6 +205,14 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 if (url.includes('bloomberg') && (cleanedTitle.includes('Hyperdrive') || articleLink.includes('hyperdrive'))) {
                     logInfo(`Skipping Bloomberg Hyperdrive article: ${cleanedTitle} - ${articleLink}`, { title: cleanedTitle, articleLink });
                     continue;
+                }
+
+                // 相対URLを絶対URLに変換
+                try {
+                    articleLink = new URL(articleLink, url).toString();
+                } catch (e) {
+                    logWarning(`Invalid article link found in RDF feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
+                    continue; // 不正なリンクはスキップ
                 }
 
                 let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));

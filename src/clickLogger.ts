@@ -7,9 +7,6 @@ import { Env } from './index';
 import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
 import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 
-// WASMモジュールの初期化状態を追跡するためのグローバル変数
-let wasmInitialized: Promise<void> | null = null;
-
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
     A_inv: number[]; // d x d 行列 (フラット化)
@@ -39,7 +36,7 @@ export class ClickLogger extends DurableObject {
     private logInfo: (message: string, details?: any) => void;
     private logWarning: (message: string, details?: any) => void;
     private logDebug: (message: string, details?: any) => void;
-    private wasmInitialized: Promise<void> | null = null; // Durable ObjectインスタンスごとのWASM初期化状態
+    private wasmInitializedPromise: Promise<void> | null = null; // Durable ObjectインスタンスごとのWASM初期化状態
 
     constructor(state: DurableObjectState, env: ClickLoggerEnv) {
         super(state, env);
@@ -47,6 +44,7 @@ export class ClickLogger extends DurableObject {
         this.env = env;
         this.inMemoryModels = new Map<string, BanditModelState>();
         this.dirty = false;
+        this.wasmInitializedPromise = null; // コンストラクタで初期化
 
         // ロガーを初期化し、インスタンス変数に割り当てる
         const { logError, logInfo, logWarning, logDebug } = initLogger(env);
@@ -61,32 +59,22 @@ export class ClickLogger extends DurableObject {
         });
     }
 
-    // WASM モジュールを動的にロードする関数
-    private async loadWasmModule(): Promise<void> {
-        if (wasmInitialized) {
-            this.logDebug('WASM module already initialized or initializing.');
-            return wasmInitialized;
-        }
-
-        this.logInfo('Attempting to load WASM module.');
-        wasmInitialized = init(wasm).then(() => {
-            this.logInfo('WASM module loaded successfully.');
-        }).catch((error: unknown) => {
-            const err = this.normalizeError(error);
-            this.logError('Failed to load WASM module:', err, { errorName: err.name, errorMessage: err.message });
-            wasmInitialized = null; // 初期化失敗時はリセット
-            throw err; // WASMロード失敗は致命的なので再スロー
-        });
-        return wasmInitialized;
-    }
-
     // WASMモジュールの初期化を保証するヘルパーメソッド
     private async ensureWasm(): Promise<void> {
-        if (this.wasmInitialized) {
-            return this.wasmInitialized;
+        if (this.wasmInitializedPromise) {
+            return this.wasmInitializedPromise;
         }
-        this.wasmInitialized = this.loadWasmModule();
-        return this.wasmInitialized;
+
+        this.logInfo('Attempting to load WASM module for this DO instance.');
+        this.wasmInitializedPromise = init(wasm).then(() => {
+            this.logInfo('WASM module loaded successfully for this DO instance.');
+        }).catch((error: unknown) => {
+            const err = this.normalizeError(error);
+            this.logError('Failed to load WASM module for this DO instance:', err, { errorName: err.name, errorMessage: err.message });
+            this.wasmInitializedPromise = null; // 初期化失敗時はリセット
+            throw err; // WASMロード失敗は致命的なので再スロー
+        });
+        return this.wasmInitializedPromise;
     }
 
     // Load all bandit models from a single R2 object.
@@ -519,8 +507,10 @@ export class ClickLogger extends DurableObject {
 
     // Calculate UCB values for a list of articles for a specific user model using WASM.
     private async getUCBValues(userId: string, banditModel: BanditModelState, articles: { articleId: string, embedding: number[] }[], userCTR: number): Promise<{ articleId: string, ucb: number }[]> {
+        await this.ensureWasm(); // WASMモジュールの初期化を保証
+
         if (banditModel.dimension === 0) {
-            this.logWarning("Bandit model dimension is zero. Cannot calculate UCB values.");
+            this.logWarning("Bandit model dimension is zero. Cannot calculate UCB values.", { userId });
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
         }
 
@@ -533,10 +523,27 @@ export class ClickLogger extends DurableObject {
             };
 
             // WASM 側の Article 構造体の配列に合うようにデータを変換
-            const wasmArticles = articles.map(article => ({
-                articleId: article.articleId,
-                embedding: article.embedding,
-            }));
+            const wasmArticles = articles.map(article => {
+                // embedding が null または undefined でないことを確認
+                if (!article.embedding || article.embedding.length !== banditModel.dimension) {
+                    this.logWarning(`Skipping article ${article.articleId} due to invalid or mismatched embedding dimension for UCB calculation.`, {
+                        userId,
+                        articleId: article.articleId,
+                        embeddingLength: article.embedding?.length,
+                        modelDimension: banditModel.dimension
+                    });
+                    return null; // 不正な記事はスキップ
+                }
+                return {
+                    articleId: article.articleId,
+                    embedding: article.embedding,
+                };
+            }).filter(Boolean) as { articleId: string, embedding: number[] }[]; // null を除去
+
+            if (wasmArticles.length === 0) {
+                this.logWarning("No valid articles with embeddings to calculate UCB values for.", { userId });
+                return [];
+            }
 
             // WASM 関数を呼び出し
             const ucbResults: { articleId: string, ucb: number }[] = await get_ucb_values_bulk(
@@ -553,8 +560,15 @@ export class ClickLogger extends DurableObject {
             );
 
             return ucbResults;
-        } catch (error) {
-            this.logError("Error during WASM UCB calculation:", error, { userId });
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logError("Error during WASM UCB calculation:", err, {
+                userId,
+                articlesCount: articles.length,
+                errorName: err.name,
+                errorMessage: err.message,
+                stack: err.stack,
+            });
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
         }
     }
@@ -566,8 +580,27 @@ export class ClickLogger extends DurableObject {
 
     // Update a specific user's bandit model using WASM.
     private updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number, userId: string): void {
+        this.ensureWasm(); // WASMモジュールの初期化を保証
+
+        // embedding の厳密な検証
+        if (!embedding) {
+            this.logWarning("Cannot update bandit model: embedding is null or undefined.", { userId });
+            return;
+        }
+        if (!Array.isArray(embedding)) {
+            this.logWarning("Cannot update bandit model: embedding is not an array.", { userId, embeddingType: typeof embedding });
+            return;
+        }
         if (embedding.length !== banditModel.dimension) {
             this.logWarning("Cannot update bandit model: embedding dimension mismatch.", { userId, embeddingLength: embedding.length, modelDimension: banditModel.dimension });
+            return;
+        }
+        if (!embedding.every(e => typeof e === 'number' && isFinite(e))) {
+            this.logWarning("Cannot update bandit model: embedding contains non-finite numbers (NaN/Infinity).", {
+                userId,
+                embeddingSample: embedding.slice(0, 5), // 最初の5要素をログに記録
+                embeddingLength: embedding.length,
+            });
             return;
         }
 
@@ -592,8 +625,17 @@ export class ClickLogger extends DurableObject {
             // dimension は変わらないので更新不要
 
             this.logDebug(`Bandit model updated for user ${userId} with reward ${reward.toFixed(2)}.`, { userId, reward });
-        } catch (error) {
-            this.logError("Error during WASM bandit model update:", error, { userId });
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logError("Error during WASM bandit model update:", err, {
+                userId,
+                reward,
+                embeddingLength: embedding?.length,
+                embeddingStart: embedding ? embedding.slice(0, 5) : 'N/A', // 最初の5要素をログに記録
+                errorName: err.name,
+                errorMessage: err.message,
+                stack: err.stack,
+            });
         }
     }
 }
