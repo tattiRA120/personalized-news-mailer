@@ -70,9 +70,10 @@ export function logError(message: string, error?: any, details?: any): void {
 /**
  * Logs a warning with structured details.
  * @param message A brief message describing the warning.
+ * @param error The error object (optional).
  * @param details Additional context or details related to the warning.
  */
-export function logWarning(message: string, details?: any): void {
+export function logWarning(message: string, error?: any, details?: any): void {
     if (!shouldLog(LogLevel.WARN)) return;
 
     const logEntry: LogEntry = {
@@ -80,6 +81,7 @@ export function logWarning(message: string, details?: any): void {
         level: 'warn',
         message: message,
         details: details,
+        stack: error instanceof Error ? error.stack : undefined,
     };
 
     console.warn(JSON.stringify(logEntry));

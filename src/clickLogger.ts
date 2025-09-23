@@ -4,7 +4,7 @@ import { initLogger } from './logger';
 import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
-import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
+import * as linalg_wasm from '../linalg-wasm/pkg/linalg_wasm';
 import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
@@ -36,7 +36,7 @@ export class ClickLogger extends DurableObject {
     private logInfo: (message: string, details?: any) => void;
     private logWarning: (message: string, details?: any) => void;
     private logDebug: (message: string, details?: any) => void;
-    private wasmInitializedPromise: Promise<void> | null = null; // Durable ObjectインスタンスごとのWASM初期化状態
+    private wasmInitializedPromise: Promise<void>; // Durable ObjectインスタンスごとのWASM初期化状態
 
     constructor(state: DurableObjectState, env: ClickLoggerEnv) {
         super(state, env);
@@ -44,7 +44,7 @@ export class ClickLogger extends DurableObject {
         this.env = env;
         this.inMemoryModels = new Map<string, BanditModelState>();
         this.dirty = false;
-        this.wasmInitializedPromise = null; // コンストラクタで初期化
+        this.wasmInitializedPromise = this.initializeWasm(); // コンストラクタでWASM初期化を開始
 
         // ロガーを初期化し、インスタンス変数に割り当てる
         const { logError, logInfo, logWarning, logDebug } = initLogger(env);
@@ -59,21 +59,14 @@ export class ClickLogger extends DurableObject {
         });
     }
 
+    // WASMモジュールの初期化を処理するプライベートメソッド
+    private initializeWasm(): Promise<void> {
+        this.logInfo('Assuming WASM module is loaded via import.');
+        return Promise.resolve(); // await init(wasm); は不要
+    }
+
     // WASMモジュールの初期化を保証するヘルパーメソッド
     private async ensureWasm(): Promise<void> {
-        if (this.wasmInitializedPromise) {
-            return this.wasmInitializedPromise;
-        }
-
-        this.logInfo('Attempting to load WASM module for this DO instance.');
-        this.wasmInitializedPromise = init(wasm).then(() => {
-            this.logInfo('WASM module loaded successfully for this DO instance.');
-        }).catch((error: unknown) => {
-            const err = this.normalizeError(error);
-            this.logError('Failed to load WASM module for this DO instance:', err, { errorName: err.name, errorMessage: err.message });
-            this.wasmInitializedPromise = null; // 初期化失敗時はリセット
-            throw err; // WASMロード失敗は致命的なので再スロー
-        });
         return this.wasmInitializedPromise;
     }
 
@@ -272,7 +265,7 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                this.updateBanditModel(banditModel, embedding, reward, userId);
+                await this.updateBanditModel(banditModel, embedding, reward, userId);
                 this.dirty = true;
                 this.logInfo(`Successfully updated bandit model from feedback for article ${articleId} for user ${userId}`, { userId, articleId, feedback, reward });
                 
@@ -366,7 +359,7 @@ export class ClickLogger extends DurableObject {
                 const logStatements = [];
                 for (const article of selectedArticles) {
                     if (article.embedding) {
-                        this.updateBanditModel(banditModel, article.embedding, 1.0, userId);
+                        await this.updateBanditModel(banditModel, article.embedding, 1.0, userId);
                         logStatements.push(
                             this.env.DB.prepare(
                                 `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
@@ -402,7 +395,7 @@ export class ClickLogger extends DurableObject {
                     }
 
                     for (const embed of embeddings) {
-                        this.updateBanditModel(banditModel, embed.embedding, 1.0, userId); // 報酬は1.0
+                        await this.updateBanditModel(banditModel, embed.embedding, 1.0, userId); // 報酬は1.0
                         this.logInfo(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
                     this.dirty = true; // モデルが変更されたことをマーク
@@ -428,7 +421,7 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                this.updateBanditModel(banditModel, embedding, reward, userId);
+                await this.updateBanditModel(banditModel, embedding, reward, userId);
                 this.dirty = true;
                 this.logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
                 return new Response('Bandit model updated', { status: 200 });
@@ -489,7 +482,7 @@ export class ClickLogger extends DurableObject {
                     for (const article of unclickedArticles.results) {
                         if (article.embedding) {
                             // クリックされなかった記事には負の報酬を与える (例: -0.1)
-                            this.updateBanditModel(banditModel, JSON.parse(article.embedding) as number[], -0.1, userId);
+                            await this.updateBanditModel(banditModel, JSON.parse(article.embedding) as number[], -0.1, userId);
                             this.dirty = true;
                             updatedCount++;
                         }
@@ -546,7 +539,7 @@ export class ClickLogger extends DurableObject {
             }
 
             // WASM 関数を呼び出し
-            const ucbResults: { articleId: string, ucb: number }[] = await get_ucb_values_bulk(
+            const ucbResults: { articleId: string, ucb: number }[] = await linalg_wasm.get_ucb_values_bulk(
                 wasmModel,
                 wasmArticles,
                 userCTR
@@ -579,8 +572,8 @@ export class ClickLogger extends DurableObject {
     }
 
     // Update a specific user's bandit model using WASM.
-    private updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number, userId: string): void {
-        this.ensureWasm(); // WASMモジュールの初期化を保証
+    private async updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number, userId: string): Promise<void> {
+        await this.ensureWasm();
 
         // embedding の厳密な検証
         if (!embedding) {
@@ -613,7 +606,7 @@ export class ClickLogger extends DurableObject {
             };
 
             // WASM 関数を呼び出し、更新されたモデルを受け取る
-            const updatedWasmModel = update_bandit_model(
+            const updatedWasmModel = linalg_wasm.update_bandit_model(
                 wasmModel,
                 new Float64Array(embedding),
                 reward

@@ -39,22 +39,41 @@ export interface NewsArticle {
 }
 
 async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
-    const { logError } = initLogger(env);
-    try {
-        const response = await fetch(url, {
-            headers: {
-                'User-Agent': getRandomUserAgent(), // ランダムなUser-Agentを使用
-            },
-        });
-        if (!response.ok) {
-            logError(`Failed to fetch RSS feed from ${url}: ${response.statusText}`, null, { url, status: response.status, statusText: response.statusText });
+    const { logError, logWarning } = initLogger(env);
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 1000; // 1 second
+
+    for (let i = 0; i < MAX_RETRIES; i++) {
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    'User-Agent': getRandomUserAgent(), // ランダムなUser-Agentを使用
+                },
+            });
+            if (!response.ok) {
+                logWarning(`Failed to fetch RSS feed from ${url}: Status ${response.status} ${response.statusText}. Attempt ${i + 1}/${MAX_RETRIES}.`, { url, status: response.status, statusText: response.statusText, attempt: i + 1 });
+                if (i < MAX_RETRIES - 1) {
+                    const delay = BASE_DELAY_MS * Math.pow(2, i); // Exponential backoff
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    continue;
+                }
+                logError(`Failed to fetch RSS feed from ${url} after ${MAX_RETRIES} attempts: ${response.status} ${response.statusText}`, null, { url, status: response.status, statusText: response.statusText });
+                return null;
+            }
+            return await response.text();
+        } catch (error: unknown) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            logWarning(`Error fetching RSS feed from ${url}: ${err.message}. Attempt ${i + 1}/${MAX_RETRIES}.`, err, { url, attempt: i + 1, errorName: err.name, errorMessage: err.message });
+            if (i < MAX_RETRIES - 1) {
+                const delay = BASE_DELAY_MS * Math.pow(2, i); // Exponential backoff
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
+            logError(`Error fetching RSS feed from ${url} after ${MAX_RETRIES} attempts: ${err.message}`, err, { url, errorName: err.name, errorMessage: err.message });
             return null;
         }
-        return await response.text();
-    } catch (error) {
-        logError(`Error fetching RSS feed from ${url}:`, error, { url });
-        return null;
     }
+    return null; // Should not be reached
 }
 
 async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
