@@ -44,7 +44,6 @@ export class ClickLogger extends DurableObject {
         this.env = env;
         this.inMemoryModels = new Map<string, BanditModelState>();
         this.dirty = false;
-        this.wasmInitializedPromise = this.initializeWasm(); // コンストラクタでWASM初期化を開始
 
         // ロガーを初期化し、インスタンス変数に割り当てる
         const { logError, logInfo, logWarning, logDebug } = initLogger(env);
@@ -52,6 +51,8 @@ export class ClickLogger extends DurableObject {
         this.logInfo = logInfo;
         this.logWarning = logWarning;
         this.logDebug = logDebug;
+
+        this.wasmInitializedPromise = this.initializeWasm(); // コンストラクタでWASM初期化を開始
 
         // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
@@ -61,7 +62,7 @@ export class ClickLogger extends DurableObject {
 
     // WASMモジュールの初期化を処理するプライベートメソッド
     private initializeWasm(): Promise<void> {
-        this.logInfo('Assuming WASM module is loaded via import.');
+        this.logInfo('WASMモジュールはインポートを介してロードされていると仮定します。');
         return Promise.resolve(); // await init(wasm); は不要
     }
 
