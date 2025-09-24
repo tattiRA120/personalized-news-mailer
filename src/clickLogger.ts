@@ -257,13 +257,41 @@ export class ClickLogger extends DurableObject {
                     return new Response('Article embedding not found', { status: 404 });
                 }
 
-                const embedding = JSON.parse(articleResult.embedding) as number[];
+                let embedding = JSON.parse(articleResult.embedding) as number[];
 
                 // 3. Update the bandit model
                 let banditModel = this.inMemoryModels.get(userId);
                 if (!banditModel) {
                     this.logWarning(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
                     banditModel = this.initializeNewBanditModel(userId);
+                }
+
+                // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理
+                if (embedding.length !== banditModel.dimension) {
+                    this.logWarning(`Embedding dimension mismatch for article ${articleId} from sent_articles. Attempting to re-fetch and extend.`, {
+                        userId,
+                        articleId,
+                        sentArticleEmbeddingLength: embedding.length,
+                        modelDimension: banditModel.dimension
+                    });
+
+                    // D1のarticlesテーブルから元のembeddingを再取得
+                    const originalArticle = await this.env.DB.prepare(
+                        `SELECT embedding, published_at FROM articles WHERE article_id = ?`
+                    ).bind(articleId).first<{ embedding: string, published_at: string }>();
+
+                    if (originalArticle && originalArticle.embedding && originalArticle.published_at) {
+                        const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
+                        const now = Date.now();
+                        const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
+                        const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                        embedding = [...originalEmbedding, normalizedAge]; // 鮮度情報を付加して拡張
+
+                        this.logInfo(`Successfully re-fetched and extended embedding for article ${articleId}. New dimension: ${embedding.length}`, { userId, articleId, newEmbeddingLength: embedding.length });
+                    } else {
+                        this.logError(`Failed to re-fetch original embedding for article ${articleId} from articles table. Cannot update bandit model.`, null, { userId, articleId });
+                        return new Response('Failed to re-fetch original embedding', { status: 500 });
+                    }
                 }
 
                 await this.updateBanditModel(banditModel, embedding, reward, userId);

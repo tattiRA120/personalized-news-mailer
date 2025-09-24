@@ -134,13 +134,17 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     // --- Feature Engineering: Add article freshness ---
                     const now = Date.now();
-                    const articlesWithFeatures = articlesWithEmbeddings.map(article => {
-                        const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
-                        // Normalize age (e.g., cap at 7 days, scale to 0-1)
-                        const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                        const extendedEmbedding = article.embedding ? [...article.embedding, normalizedAge] : undefined;
-                        return { ...article, embedding: extendedEmbedding };
-                    });
+                    // --- Feature Engineering: Add article freshness ---
+                    // embeddingが存在する記事のみを対象とする
+                    const articlesWithFeatures = articlesWithEmbeddings
+                        .filter(article => article.embedding !== undefined && article.embedding.length > 0)
+                        .map(article => {
+                            const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
+                            // Normalize age (e.g., cap at 7 days, scale to 0-1)
+                            const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            // 既存のembeddingに鮮度情報を追加
+                            return { ...article, embedding: [...article.embedding!, normalizedAge] };
+                        });
 
                     // UCB計算の負荷を軽減しつつ、より多くの記事を対象とするため、記事候補を戦略的にサンプリング
                     // --- Strategic Sampling for Article Candidates ---
@@ -209,24 +213,31 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     // --- 5. Log Sent Articles to Durable Object ---
                     logInfo(`Logging sent articles to ClickLogger for user ${userId}...`, { userId });
-                    const sentArticlesData = selectedArticles.map(article => ({
-                        articleId: article.articleId,
-                        timestamp: Date.now(),
-                        embedding: article.embedding!, // NewsArticleWithEmbeddingなのでembeddingは存在すると仮定
-                    }));
+                    // embeddingが存在し、かつ次元が257である記事のみをフィルタリングして保存
+                    const filteredSentArticlesData = selectedArticles
+                        .filter(article => article.embedding && article.embedding.length === 257)
+                        .map(article => ({
+                            articleId: article.articleId,
+                            timestamp: Date.now(),
+                            embedding: article.embedding!,
+                        }));
 
-                    const logSentResponse = await clickLogger.fetch(
-                        new Request(`${env.WORKER_BASE_URL}/log-sent-articles`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ userId: userId, sentArticles: sentArticlesData }),
-                        })
-                    );
-
-                    if (logSentResponse.ok) {
-                        logInfo(`Successfully logged sent articles for user ${userId}.`, { userId });
+                    if (filteredSentArticlesData.length === 0) {
+                        logWarning(`No valid articles with 257-dimension embedding to log for user ${userId}. Skipping logging sent articles.`, { userId, selectedArticlesCount: selectedArticles.length });
                     } else {
-                        logError(`Failed to log sent articles for user ${userId}: ${logSentResponse.statusText}`, null, { userId, status: logSentResponse.status, statusText: logSentResponse.statusText });
+                        const logSentResponse = await clickLogger.fetch(
+                            new Request(`${env.WORKER_BASE_URL}/log-sent-articles`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ userId: userId, sentArticles: filteredSentArticlesData }),
+                            })
+                        );
+
+                        if (logSentResponse.ok) {
+                            logInfo(`Successfully logged sent articles for user ${userId}.`, { userId });
+                        } else {
+                            logError(`Failed to log sent articles for user ${userId}: ${logSentResponse.statusText}`, null, { userId, status: logSentResponse.status, statusText: logSentResponse.statusText });
+                        }
                     }
 
                     // --- 6. Process Click Logs and Update Bandit Model ---
