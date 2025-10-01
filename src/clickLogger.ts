@@ -6,6 +6,9 @@ import { NewsArticle } from './newsCollector';
 import { Env } from './index';
 import * as linalg_wasm from '../linalg-wasm/pkg/linalg_wasm';
 import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
+import * as linalg_wasm_bg from '../linalg-wasm/pkg/linalg_wasm_bg';
+import { __wbg_set_wasm } from '../linalg-wasm/pkg/linalg_wasm_bg';
+import { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -61,14 +64,21 @@ export class ClickLogger extends DurableObject {
     }
 
     // WASMモジュールの初期化を処理するプライベートメソッド
-    private initializeWasm(): Promise<void> {
-        this.logInfo('WASMモジュールはインポートを介してロードされていると仮定します。');
-        return Promise.resolve(); // await init(wasm); は不要
+    private async initializeWasm(): Promise<void> {
+        this.logInfo('WASMモジュールを初期化します...');
+        const wasmInstance = await WebAssembly.instantiate(wasm, {
+            wbg: linalg_wasm_bg,
+        });
+        __wbg_set_wasm(wasmInstance.exports);
+        if (typeof wasmInstance.exports.__wbindgen_start === 'function') {
+            wasmInstance.exports.__wbindgen_start();
+        }
+        this.logInfo('WASMモジュールの初期化完了');
     }
 
     // WASMモジュールの初期化を保証するヘルパーメソッド
     private async ensureWasm(): Promise<void> {
-        return this.wasmInitializedPromise;
+        await this.wasmInitializedPromise;
     }
 
     // Load all bandit models from a single R2 object.
@@ -568,7 +578,7 @@ export class ClickLogger extends DurableObject {
             }
 
             // WASM 関数を呼び出し
-            const ucbResults: { articleId: string, ucb: number }[] = await linalg_wasm.get_ucb_values_bulk(
+            const ucbResults: { articleId: string, ucb: number }[] = await get_ucb_values_bulk(
                 wasmModel,
                 wasmArticles,
                 userCTR
@@ -635,7 +645,7 @@ export class ClickLogger extends DurableObject {
             };
 
             // WASM 関数を呼び出し、更新されたモデルを受け取る
-            const updatedWasmModel = linalg_wasm.update_bandit_model(
+            const updatedWasmModel = update_bandit_model(
                 wasmModel,
                 new Float64Array(embedding),
                 reward

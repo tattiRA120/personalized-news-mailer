@@ -23,8 +23,9 @@
       "linalg-wasm": ["./linalg-wasm/pkg"]
     }
   },
-  "include": [
-    "src/**/*.ts",
-    "src/**/*.d.ts"
-  ]
+    "include": [
+        "src/**/*.ts",
+        "src/**/*.d.ts",
+        "linalg-wasm/pkg/**/*.d.ts"
+    ]
 }
