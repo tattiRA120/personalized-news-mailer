@@ -4,11 +4,7 @@ import { initLogger } from './logger';
 import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
-import * as linalg_wasm from '../linalg-wasm/pkg/linalg_wasm';
-import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
-import * as linalg_wasm_bg from '../linalg-wasm/pkg/linalg_wasm_bg';
-import { __wbg_set_wasm } from '../linalg-wasm/pkg/linalg_wasm_bg';
-import { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
+import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -39,7 +35,6 @@ export class ClickLogger extends DurableObject {
     private logInfo: (message: string, details?: any) => void;
     private logWarning: (message: string, details?: any) => void;
     private logDebug: (message: string, details?: any) => void;
-    private wasmInitializedPromise: Promise<void>; // Durable ObjectインスタンスごとのWASM初期化状態
 
     constructor(state: DurableObjectState, env: ClickLoggerEnv) {
         super(state, env);
@@ -55,30 +50,13 @@ export class ClickLogger extends DurableObject {
         this.logWarning = logWarning;
         this.logDebug = logDebug;
 
-        this.wasmInitializedPromise = this.initializeWasm(); // コンストラクタでWASM初期化を開始
-
         // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
+            this.logInfo('WASMモジュールを初期化します...');
+            await init(); // WASMモジュールの初期化
+            this.logInfo('WASMモジュールの初期化完了');
             await this.loadModelsFromR2();
         });
-    }
-
-    // WASMモジュールの初期化を処理するプライベートメソッド
-    private async initializeWasm(): Promise<void> {
-        this.logInfo('WASMモジュールを初期化します...');
-        const wasmInstance = await WebAssembly.instantiate(wasm, {
-            wbg: linalg_wasm_bg,
-        });
-        __wbg_set_wasm(wasmInstance.exports);
-        if (typeof wasmInstance.exports.__wbindgen_start === 'function') {
-            wasmInstance.exports.__wbindgen_start();
-        }
-        this.logInfo('WASMモジュールの初期化完了');
-    }
-
-    // WASMモジュールの初期化を保証するヘルパーメソッド
-    private async ensureWasm(): Promise<void> {
-        await this.wasmInitializedPromise;
     }
 
     // Load all bandit models from a single R2 object.
@@ -141,8 +119,6 @@ export class ClickLogger extends DurableObject {
     }
 
     async alarm() {
-        await this.ensureWasm(); // WASMモジュールの初期化を保証
-
         // This alarm is triggered periodically to save dirty models to R2 and process unclicked articles.
         if (this.dirty) {
             this.logInfo('Alarm triggered. Saving dirty models to R2.');
@@ -168,7 +144,6 @@ export class ClickLogger extends DurableObject {
 
     // Handle requests to the Durable Object
     async fetch(request: Request): Promise<Response> {
-        await this.ensureWasm(); // WASMモジュールの初期化を保証
         // Ensure an alarm is set to periodically save data.
         await this.ensureAlarmIsSet();
 
@@ -539,8 +514,6 @@ export class ClickLogger extends DurableObject {
 
     // Calculate UCB values for a list of articles for a specific user model using WASM.
     private async getUCBValues(userId: string, banditModel: BanditModelState, articles: { articleId: string, embedding: number[] }[], userCTR: number): Promise<{ articleId: string, ucb: number }[]> {
-        await this.ensureWasm(); // WASMモジュールの初期化を保証
-
         if (banditModel.dimension === 0) {
             this.logWarning("Bandit model dimension is zero. Cannot calculate UCB values.", { userId });
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
@@ -612,8 +585,6 @@ export class ClickLogger extends DurableObject {
 
     // Update a specific user's bandit model using WASM.
     private async updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number, userId: string): Promise<void> {
-        await this.ensureWasm();
-
         // embedding の厳密な検証
         if (!embedding) {
             this.logWarning("Cannot update bandit model: embedding is null or undefined.", { userId });
