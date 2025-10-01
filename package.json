@@ -9,7 +9,7 @@
     "linalg-wasm": "file:./linalg-wasm/pkg"
   },
     "scripts": {
-        "build:wasm": "cd linalg-wasm && ~/.cargo/bin/wasm-pack build --target web && cp -r pkg/. ../public/wasm/",
+        "build:wasm": "cd linalg-wasm && ~/.cargo/bin/wasm-pack build --target bundler && cp -r pkg/. ../public/wasm/",
         "deploy": "npm run build:wasm && wrangler deploy"
     }
 }
