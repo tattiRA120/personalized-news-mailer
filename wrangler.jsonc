@@ -67,6 +67,12 @@
 		}
 	],
 
+	"rules": [
+		{
+			"type": "CompiledWasm",
+			"globs": ["**/*.wasm"]
+		}
+	],
 
 	/**
 	 * Sart Pacment
