@@ -9,8 +9,8 @@ import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
-    A_inv: number[]; // d x d 行列 (フラット化)
-    b: number[];   // d x 1 ベクトル
+    A_inv: Float64Array; // d x d 行列 (フラット化)
+    b: Float64Array;   // d x 1 ベクトル
     dimension: number; // 特徴量ベクトルの次元 (embedding の次元)
     alpha: number;
 }
@@ -67,8 +67,16 @@ export class ClickLogger extends DurableObject {
             const object = await this.env.BANDIT_MODELS.get(this.modelsR2Key);
 
             if (object !== null) {
-                const models = await object.json<Record<string, BanditModelState>>();
-                this.inMemoryModels = new Map(Object.entries(models));
+                const modelsRecord = await object.json<Record<string, { A_inv: number[], b: number[], dimension: number, alpha: number }>>();
+                this.inMemoryModels = new Map(Object.entries(modelsRecord).map(([userId, model]) => [
+                    userId,
+                    {
+                        A_inv: new Float64Array(model.A_inv),
+                        b: new Float64Array(model.b),
+                        dimension: model.dimension,
+                        alpha: model.alpha,
+                    }
+                ]));
                 this.logInfo(`Successfully loaded ${this.inMemoryModels.size} bandit models from R2.`);
             } else {
                 this.logInfo('No existing bandit models file found in R2. Starting with an empty map.');
@@ -86,8 +94,18 @@ export class ClickLogger extends DurableObject {
     private async saveModelsToR2(): Promise<void> {
         this.logInfo(`Attempting to save ${this.inMemoryModels.size} bandit models to R2.`);
         try {
-            const modelsObject = Object.fromEntries(this.inMemoryModels);
-            await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify(modelsObject));
+            const modelsToSave = Object.fromEntries(
+                Array.from(this.inMemoryModels.entries()).map(([userId, model]) => [
+                    userId,
+                    {
+                        A_inv: Array.from(model.A_inv),
+                        b: Array.from(model.b),
+                        dimension: model.dimension,
+                        alpha: model.alpha,
+                    }
+                ])
+            );
+            await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify(modelsToSave));
             this.dirty = false; // Reset dirty flag after successful save
             this.logInfo('Successfully saved all bandit models to R2.');
         } catch (error: unknown) {
@@ -103,16 +121,20 @@ export class ClickLogger extends DurableObject {
     // Initialize a new bandit model for a specific user.
     private initializeNewBanditModel(userId: string): BanditModelState {
         const dimension = 257; // Dimension for text-embedding-3-small + 1 (freshness)
+        const aInvArray = new Float64Array(dimension * dimension).fill(0);
+        const bArray = new Float64Array(dimension).fill(0);
+
+        // Initialize A_inv as an identity matrix (flattened)
+        for (let i = 0; i < dimension; i++) {
+            aInvArray[i * dimension + i] = 1.0;
+        }
+
         const newModel: BanditModelState = {
-            A_inv: Array(dimension * dimension).fill(0), // A_inv をフラットな配列として初期化
-            b: Array(dimension).fill(0),
+            A_inv: aInvArray,
+            b: bArray,
             dimension: dimension,
             alpha: 0.5, // UCB parameter
         };
-        // Initialize A_inv as an identity matrix (flattened)
-        for (let i = 0; i < dimension; i++) {
-            newModel.A_inv[i * dimension + i] = 1.0;
-        }
         this.inMemoryModels.set(userId, newModel);
         this.dirty = true;
         this.logInfo(`Initialized new bandit model for userId: ${userId}`);
@@ -523,8 +545,8 @@ export class ClickLogger extends DurableObject {
         try {
             // WASM 側の BanditModel 構造体に合うようにデータを変換
             const wasmModel = {
-                a_inv: banditModel.A_inv,
-                b: banditModel.b,
+                a_inv: Array.from(banditModel.A_inv),
+                b: Array.from(banditModel.b),
                 dimension: banditModel.dimension,
             };
 
@@ -611,8 +633,8 @@ export class ClickLogger extends DurableObject {
         try {
             // WASM 側の BanditModel 構造体に合うようにデータを変換
             const wasmModel = {
-                a_inv: banditModel.A_inv,
-                b: banditModel.b,
+                a_inv: Array.from(banditModel.A_inv),
+                b: Array.from(banditModel.b),
                 dimension: banditModel.dimension,
             };
 
