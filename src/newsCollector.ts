@@ -40,7 +40,7 @@ export interface NewsArticle {
 
 async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
     const { logError, logWarning } = initLogger(env);
-    const MAX_RETRIES = 3;
+    const MAX_RETRIES = 1;
     const BASE_DELAY_MS = 1000; // 1 second
 
     for (let i = 0; i < MAX_RETRIES; i++) {
