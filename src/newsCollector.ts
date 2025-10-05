@@ -345,6 +345,15 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
         summary: article.summary ? cleanArticleText(article.summary) : undefined,
     }));
 
-    logInfo(`Collected ${allArticles.length} articles from ${NEWS_RSS_URLS.length} sources.`, { articleCount: allArticles.length, sourceCount: NEWS_RSS_URLS.length });
+    // Remove duplicate articles based on link
+    const uniqueArticlesMap = new Map<string, NewsArticle>();
+    for (const article of allArticles) {
+        if (!uniqueArticlesMap.has(article.link)) {
+            uniqueArticlesMap.set(article.link, article);
+        }
+    }
+    allArticles = Array.from(uniqueArticlesMap.values());
+
+    logInfo(`Collected ${allArticles.length} unique articles from ${NEWS_RSS_URLS.length} sources.`, { articleCount: allArticles.length, sourceCount: NEWS_RSS_URLS.length });
     return allArticles;
 }
