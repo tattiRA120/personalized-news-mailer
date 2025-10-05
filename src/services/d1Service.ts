@@ -38,10 +38,10 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
 
         for (const chunk of articleChunks) {
             const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(','); // articleId, title, url, publishedAt, content, embedding
+            // ON CONFLICT(article_id) DO NOTHING: article_idが重複する場合は挿入を無視
             // ON CONFLICT(url) DO UPDATE SET ...: URLが重複する場合、title, published_at, contentを更新。
             // contentが変更された場合、embeddingをNULLにリセットして再生成を促す。
-            // embedding IS NULL の条件を削除し、常に更新を試みる
-            const query = `INSERT INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders} ON CONFLICT(url) DO UPDATE SET title=EXCLUDED.title, published_at=EXCLUDED.published_at, content=EXCLUDED.content, embedding=CASE WHEN EXCLUDED.content IS NOT articles.content THEN NULL ELSE articles.embedding END`;
+            const query = `INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders}`;
             const stmt = env.DB.prepare(query);
 
             const bindParams: (string | number | undefined | null)[] = []; // nullを許容するように型を変更

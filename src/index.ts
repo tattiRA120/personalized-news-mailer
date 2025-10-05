@@ -423,15 +423,14 @@ export default {
                     return new Response('No articles collected', { status: 200 });
                 }
 
-                const articlesToSaveToD1 = articles.map(article => ({
+                const articlesToSaveToD1: NewsArticle[] = articles.map(article => ({
                     articleId: article.articleId,
                     title: article.title,
                     link: article.link,
                     sourceName: article.sourceName,
-                    url: article.link,
-                    publishedAt: article.publishedAt,
-                    content: article.summary || '',
-                    embedding: undefined,
+                    summary: article.summary,
+                    content: article.content,
+                    publishedAt: article.publishedAt || Date.now(),
                 }));
                 await saveArticlesToD1(articlesToSaveToD1, env);
                 logDebug(`Debug: Saved ${articlesToSaveToD1.length} articles to D1 temporarily for force embedding.`, { count: articlesToSaveToD1.length });
