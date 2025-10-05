@@ -1,4 +1,4 @@
-import { NEWS_RSS_URLS } from './config';
+import { NEWS_RSS_URLS, RSS_FETCH_CHUNK_SIZE } from './config';
 import { initLogger } from './logger';
 import { XMLParser } from 'fast-xml-parser';
 import { cleanArticleText, generateContentHash } from './utils/textProcessor';
@@ -271,71 +271,79 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
     const { logError, logInfo } = initLogger(env);
     let allArticles: NewsArticle[] = [];
 
-    for (const url of NEWS_RSS_URLS) {
-        const xml = await fetchRSSFeed(url, env);
-        if (xml) {
-            // Determine source name from URL
-            let sourceName = new URL(url).hostname;
-            if (sourceName.startsWith('www.')) {
-                sourceName = sourceName.substring(4);
-            }
-            // Special handling for Google News to extract actual source
-            if (sourceName.includes('news.google.com')) {
-                if (url.includes('reuters.com')) {
-                    sourceName = 'Reuters';
-                } else {
-                    sourceName = 'Google News'; // Fallback
+    // チャンクに分割して並列処理
+    for (let i = 0; i < NEWS_RSS_URLS.length; i += RSS_FETCH_CHUNK_SIZE) {
+        const chunk = NEWS_RSS_URLS.slice(i, i + RSS_FETCH_CHUNK_SIZE);
+        const chunkPromises = chunk.map(async (url) => {
+            const xml = await fetchRSSFeed(url, env);
+            if (xml) {
+                // Determine source name from URL
+                let sourceName = new URL(url).hostname;
+                if (sourceName.startsWith('www.')) {
+                    sourceName = sourceName.substring(4);
                 }
-            } else if (sourceName.includes('assets.wor.jp') && url.includes('bloomberg')) {
-                sourceName = 'Bloomberg';
-            } else if (sourceName.includes('zenn.dev')) {
-                sourceName = 'Zenn';
-            } else if (sourceName.includes('qiita.com')) {
-                sourceName = 'Qiita';
-            } else if (sourceName.includes('nhk.or.jp')) {
-                sourceName = 'NHK';
-            } else if (sourceName.includes('itmedia.co.jp')) {
-                sourceName = 'ITmedia';
-            } else if (sourceName.includes('impress.co.jp')) {
-                if (url.includes('pcw')) {
-                    sourceName = 'PC Watch';
-                } else if (url.includes('dcw')) {
-                    sourceName = 'デジカメ Watch';
-                } else if (url.includes('avw')) {
-                    sourceName = 'AV Watch';
-                } else {
-                    sourceName = 'Impress Watch'; // Generic fallback for Impress
+                // Special handling for Google News to extract actual source
+                if (sourceName.includes('news.google.com')) {
+                    if (url.includes('reuters.com')) {
+                        sourceName = 'Reuters';
+                    } else {
+                        sourceName = 'Google News'; // Fallback
+                    }
+                } else if (sourceName.includes('assets.wor.jp') && url.includes('bloomberg')) {
+                    sourceName = 'Bloomberg';
+                } else if (sourceName.includes('zenn.dev')) {
+                    sourceName = 'Zenn';
+                } else if (sourceName.includes('qiita.com')) {
+                    sourceName = 'Qiita';
+                } else if (sourceName.includes('nhk.or.jp')) {
+                    sourceName = 'NHK';
+                } else if (sourceName.includes('itmedia.co.jp')) {
+                    sourceName = 'ITmedia';
+                } else if (sourceName.includes('impress.co.jp')) {
+                    if (url.includes('pcw')) {
+                        sourceName = 'PC Watch';
+                    } else if (url.includes('dcw')) {
+                        sourceName = 'デジカメ Watch';
+                    } else if (url.includes('avw')) {
+                        sourceName = 'AV Watch';
+                    } else {
+                        sourceName = 'Impress Watch'; // Generic fallback for Impress
+                    }
+                } else if (sourceName.includes('phileweb.com')) {
+                    sourceName = 'PHILE WEB';
+                } else if (sourceName.includes('gigazine.net')) {
+                    sourceName = 'GIGAZINE';
+                } else if (sourceName.includes('gizmodo.jp')) {
+                    sourceName = 'GIZMODO JAPAN';
+                } else if (sourceName.includes('techno-edge.net')) {
+                    sourceName = 'テクノエッジ';
+                } else if (sourceName.includes('gdm.or.jp')) {
+                    sourceName = 'エルミタージュ秋葉原';
+                } else if (sourceName.includes('gazlog.jp')) {
+                    sourceName = 'ギャズログ';
+                } else if (sourceName.includes('northwood.blog.fc2.com')) {
+                    sourceName = '北森瓦版';
                 }
-            } else if (sourceName.includes('phileweb.com')) {
-                sourceName = 'PHILE WEB';
-            } else if (sourceName.includes('gigazine.net')) {
-                sourceName = 'GIGAZINE';
-            } else if (sourceName.includes('gizmodo.jp')) {
-                sourceName = 'GIZMODO JAPAN';
-            } else if (sourceName.includes('gdm.or.jp')) {
-                sourceName = 'エルミタージュ秋葉原';
-            } else if (sourceName.includes('gazlog.jp')) {
-                sourceName = 'ギャズログ';
-            } else if (sourceName.includes('northwood.blog.fc2.com')) {
-                sourceName = '北森瓦版';
-            }
 
-
-            const articles = await parseFeedWithFastXmlParser(xml, url, env); // Use new parser and await it, pass env
-            const articlesWithSource = articles.map(article => {
-                let finalTitle = article.title;
-                // Reuters以外の記事にメディア名を追加
-                if (sourceName !== 'Reuters' && !finalTitle.endsWith(` - ${sourceName}`)) {
-                    finalTitle = `${finalTitle} – ${sourceName}`;
-                }
-                return {
-                    ...article,
-                    title: finalTitle,
-                    sourceName: sourceName
-                };
-            });
-            allArticles = allArticles.concat(articlesWithSource);
-        }
+                const articles = await parseFeedWithFastXmlParser(xml, url, env);
+                const articlesWithSource = articles.map(article => {
+                    let finalTitle = article.title;
+                    // Reuters以外の記事にメディア名を追加
+                    if (sourceName !== 'Reuters' && !finalTitle.endsWith(` - ${sourceName}`)) {
+                        finalTitle = `${finalTitle} – ${sourceName}`;
+                    }
+                    return {
+                        ...article,
+                        title: finalTitle,
+                        sourceName: sourceName
+                    };
+                });
+                return articlesWithSource;
+            }
+            return [];
+        });
+        const chunkResults = await Promise.all(chunkPromises);
+        allArticles = allArticles.concat(...chunkResults);
     }
 
     // Apply text cleaning to title and summary for all articles

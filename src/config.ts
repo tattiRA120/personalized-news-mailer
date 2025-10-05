@@ -28,6 +28,7 @@ export const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
 // export const NEWS_API_KEY: string | undefined = undefined;
 
 export const CHUNK_SIZE = 1000; // OpenAI Batch API のチャンクサイズ
+export const RSS_FETCH_CHUNK_SIZE = 10; // RSSフィード取得時のチャンクサイズ
 
 export const NEWS_SOURCE_LOGOS: { [key: string]: string } = {
     'Reuters': 'https://cdn.freebiesupply.com/logos/large/2x/reuters-6-logo-png-transparent.png',
