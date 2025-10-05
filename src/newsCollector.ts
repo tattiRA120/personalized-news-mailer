@@ -49,6 +49,9 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
                 headers: {
                     'User-Agent': getRandomUserAgent(), // ランダムなUser-Agentを使用
                 },
+                cf: {
+                    cacheTtl: 60, // 60秒間キャッシュ
+                },
             });
             if (!response.ok) {
                 logWarning(`Failed to fetch RSS feed from ${url}: Status ${response.status} ${response.statusText}. Attempt ${i + 1}/${MAX_RETRIES}.`, { url, status: response.status, statusText: response.statusText, attempt: i + 1 });
@@ -316,7 +319,7 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                 } else if (sourceName.includes('gizmodo.jp')) {
                     sourceName = 'GIZMODO JAPAN';
                 } else if (sourceName.includes('techno-edge.net')) {
-                    sourceName = 'テクノエッジ';
+                    sourceName = 'TECHNO–EDGE';
                 } else if (sourceName.includes('gdm.or.jp')) {
                     sourceName = 'エルミタージュ秋葉原';
                 } else if (sourceName.includes('gazlog.jp')) {
