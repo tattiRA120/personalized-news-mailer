@@ -14,7 +14,7 @@ export const NEWS_RSS_URLS: string[] = [
     'https://gigazine.net/news/rss_2.0/', // GIGAZINE
     'https://www.gizmodo.jp/index.xml', // GIZMODO JAPAN（ギズモード・ジャパン）
     'https://www.gdm.or.jp/feed', // エルミタージュ秋葉原
-    'https://www.techno-edge.net/rss20/index.rdf', // テクノエッジ（TECHNO-EDGE）
+    // 'https://www.techno-edge.net/rss20/index.rdf', // テクノエッジ（TECHNO-EDGE）- Too many redirects error
     // ブログ系
     'https://zenn.dev/feed', // Zenn(エンジニア系)
     'https://qiita.com/popular-items/feed.atom', // Qiita(エンジニア系)
