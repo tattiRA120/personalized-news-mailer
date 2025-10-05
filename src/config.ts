@@ -14,6 +14,7 @@ export const NEWS_RSS_URLS: string[] = [
     'https://gigazine.net/news/rss_2.0/', // GIGAZINE
     'https://www.gizmodo.jp/index.xml', // GIZMODO JAPAN（ギズモード・ジャパン）
     'https://www.gdm.or.jp/feed', // エルミタージュ秋葉原
+    'https://www.techno-edge.net/rss20/index.rdf', // テクノエッジ（TECHNO-EDGE）
     // ブログ系
     'https://zenn.dev/feed', // Zenn(エンジニア系)
     'https://qiita.com/popular-items/feed.atom', // Qiita(エンジニア系)
@@ -42,6 +43,7 @@ export const NEWS_SOURCE_LOGOS: { [key: string]: string } = {
     'GIGAZINE': 'https://pbs.twimg.com/profile_images/876998955627827204/IuoxMaM2_400x400.jpg',
     'GIZMODO JAPAN': 'https://upload.wikimedia.org/wikipedia/commons/6/69/Gizmodo_Media_Group_Logo.png',
     'エルミタージュ秋葉原': 'https://www.gdm.or.jp/wp-content/themes/hermitage/images/common/logo.png',
+    'テクノエッジ':'https://www.techno-edge.net/base/images/noimage.png',
     'Zenn': 'https://static.zenn.studio/images/logo-only-dark.png',
     'Qiita': 'https://i.gyazo.com/43ef3dfee7b402b1582db2ce241731f5.png',
     'ギャズログ': 'https://gazlog.jp/wp-content/uploads/2024/02/cropped-Gazlog-favcon-3-1.jpg',
