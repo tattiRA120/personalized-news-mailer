@@ -122,7 +122,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
-                let articleLink = item.link;
+                let articleLink = decodeHtmlEntities(item.link);
                 // 相対URLを絶対URLに変換
                 try {
                     articleLink = new URL(articleLink, url).toString();
@@ -183,7 +183,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
-                let articleLink = link;
+                let articleLink = decodeHtmlEntities(link);
                 // 相対URLを絶対URLに変換
                 try {
                     articleLink = new URL(articleLink, url).toString();
@@ -218,7 +218,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
 
             if (title && link) {
                 let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
-                let articleLink = link;
+                let articleLink = decodeHtmlEntities(link);
 
                 // BloombergのHyperdrive記事を完全にスキップ
                 if (url.includes('bloomberg') && (cleanedTitle.includes('Hyperdrive') || articleLink.includes('hyperdrive'))) {
