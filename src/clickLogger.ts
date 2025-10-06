@@ -432,7 +432,9 @@ export class ClickLogger extends DurableObject {
                     }
 
                     for (const embed of embeddings) {
-                        await this.updateBanditModel(banditModel, embed.embedding, 1.0, userId); // 報酬は1.0
+                        // 256次元のembeddingに鮮度情報 (0.0) を追加して257次元にする
+                        const embeddingWithFreshness = [...embed.embedding, 0.0];
+                        await this.updateBanditModel(banditModel, embeddingWithFreshness, 1.0, userId); // 報酬は1.0
                         this.logInfo(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
                     this.dirty = true; // モデルが変更されたことをマーク
