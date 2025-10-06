@@ -5,7 +5,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
 import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
-import wasmUrl from '../linalg-wasm/pkg/linalg_wasm_bg.wasm?url';
+import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -54,7 +54,7 @@ export class ClickLogger extends DurableObject {
         // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
             this.logDebug('WASMモジュールを初期化します...');
-            await init(wasmUrl); // WASMモジュールの初期化
+            await init(wasm); // WASMモジュールの初期化
             this.logDebug('WASMモジュールの初期化完了');
             await this.loadModelsFromR2();
         });
