@@ -318,36 +318,36 @@ export default {
 
 				logDebug(`User education articles received for user ${userId}.`, { userId, selectedArticleCount: selectedArticles.length });
 
-				// 1. 選択された記事をD1に保存（重複はINSERT OR IGNOREでスキップされる）
-				await saveArticlesToD1(selectedArticles, env);
-				logDebug(`Selected articles saved to D1 for user ${userId}.`, { userId, savedArticleCount: selectedArticles.length });
-
 				const articlesNeedingEmbedding: NewsArticle[] = [];
 				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
 
-				// 2. D1から各記事の最新の状態（特にembeddingの有無）を再取得
-				for (const selectedArticle of selectedArticles) {
-					const articleId = selectedArticle.articleId;
-					// D1から記事IDが一致する記事を取得（embeddingの有無は問わない）
-					const articleInD1: ArticleWithEmbedding[] = await getArticlesFromD1(env, 1, 0, "article_id = ?", [articleId]);
+				// 1. 選択された記事の中から、既にD1に存在しembeddingを持っている記事を先に問い合わせる
+				const articleIds = selectedArticles.map(article => article.articleId);
+				const existingArticlesWithEmbeddingsInD1: ArticleWithEmbedding[] = await getArticlesFromD1(env, articleIds.length, 0, `article_id IN (${articleIds.map(() => '?').join(',')}) AND embedding IS NOT NULL`, articleIds);
+				const existingArticleIdsWithEmbeddingsSet = new Set(existingArticlesWithEmbeddingsInD1.map(article => article.articleId));
 
-					if (articleInD1.length > 0) {
-						const article = articleInD1[0];
-						if (article.embedding) {
-							// 既にembeddingが存在する場合
-							selectedArticlesWithEmbeddings.push({ articleId: article.articleId, embedding: article.embedding });
+				// 2. 新しい記事だけをD1に保存（重複はINSERT OR IGNOREでスキップされる）
+				await saveArticlesToD1(selectedArticles, env);
+				logDebug(`Selected articles saved to D1 for user ${userId}.`, { userId, savedArticleCount: selectedArticles.length });
+
+				// 3. embeddingがないと判明した記事と、新たに追加した記事を対象に、embedding生成処理を開始する
+				for (const selectedArticle of selectedArticles) {
+					if (existingArticleIdsWithEmbeddingsSet.has(selectedArticle.articleId)) {
+						// 既にembeddingが存在する記事
+						const existingArticle = existingArticlesWithEmbeddingsInD1.find(a => a.articleId === selectedArticle.articleId);
+						if (existingArticle && existingArticle.embedding) {
+							selectedArticlesWithEmbeddings.push({ articleId: existingArticle.articleId, embedding: existingArticle.embedding });
 						} else {
-							// embeddingがまだ存在しない場合（生成中または未生成）
+							// ここに到達することはないはずだが、念のためログ
+							logWarning(`Article "${selectedArticle.title}" (ID: ${selectedArticle.articleId}) was expected to have embedding but not found.`, { articleId: selectedArticle.articleId, articleTitle: selectedArticle.title });
 							articlesNeedingEmbedding.push(selectedArticle);
 						}
 					} else {
-						// ここに到達することはないはずだが、念のためログ
-						logWarning(`Article "${selectedArticle.title}" (ID: ${articleId}) not found in D1 after saving. This should not happen.`, { articleId, articleTitle: selectedArticle.title });
-						articlesNeedingEmbedding.push(selectedArticle); // embeddingが必要なリストに追加
+						// embeddingがまだ存在しない記事（新規保存されたか、以前から存在したがembeddingがなかった記事）
+						articlesNeedingEmbedding.push(selectedArticle);
 					}
 				}
 
-				// 3. embeddingが必要な記事があれば、非同期で生成をトリガー
 				if (articlesNeedingEmbedding.length > 0) {
 					logDebug(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
 					await generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false);
