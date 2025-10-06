@@ -67,6 +67,13 @@ export class ClickLogger extends DurableObject {
             const object = await this.env.BANDIT_MODELS.get(this.modelsR2Key);
 
             if (object !== null) {
+                // object.size が 0 の場合も空のJSONとして扱う
+                if (object.size === 0) {
+                    this.logWarning('Existing bandit models file found in R2 but it is empty (0B). Initializing with an empty map and saving an empty JSON object to R2.');
+                    this.inMemoryModels = new Map<string, BanditModelState>();
+                    await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify({}));
+                    return; // 処理を終了
+                }
                 const modelsRecord = await object.json<Record<string, { A_inv: number[], b: number[], dimension: number, alpha: number }>>();
                 this.inMemoryModels = new Map(Object.entries(modelsRecord).map(([userId, model]) => [
                     userId,
