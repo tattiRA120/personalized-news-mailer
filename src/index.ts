@@ -310,7 +310,10 @@ export default {
 
 				if (!userProfile) {
 					logWarning(`Submit interests failed: User profile not found for ${userId}.`, { userId });
-					return new Response('User not found', { status: 404 });
+					return new Response(JSON.stringify({ message: 'User not found' }), {
+						status: 404,
+						headers: { 'Content-Type': 'application/json' },
+					});
 				}
 
 				logDebug(`User education articles processed successfully for user ${userId}.`, { userId });
