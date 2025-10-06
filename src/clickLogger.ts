@@ -79,8 +79,10 @@ export class ClickLogger extends DurableObject {
                 ]));
                 this.logDebug(`Successfully loaded ${this.inMemoryModels.size} bandit models from R2.`);
             } else {
-                this.logDebug('No existing bandit models file found in R2. Starting with an empty map.');
+                this.logDebug('No existing bandit models file found in R2. Initializing with an empty map and saving an empty JSON object to R2.');
                 this.inMemoryModels = new Map<string, BanditModelState>();
+                // R2に空のJSONオブジェクトを書き込む
+                await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify({}));
             }
         } catch (error: unknown) {
             const err = this.normalizeError(error);
