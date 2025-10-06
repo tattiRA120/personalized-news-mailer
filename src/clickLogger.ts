@@ -157,17 +157,20 @@ export class ClickLogger extends DurableObject {
     // Helper to ensure an alarm is set.
     private async ensureAlarmIsSet(): Promise<void> {
         const currentAlarm = await this.state.storage.getAlarm();
-        if (currentAlarm === null) {
-            this.logInfo('Alarm not set. Setting a new alarm to run in 60 minutes.');
+        if (currentAlarm === null || currentAlarm < Date.now()) { // アラームが設定されていないか、過去の時刻の場合
+            this.logInfo('Alarm not set or expired. Setting a new alarm to run in 60 minutes.');
             // Set an alarm to run in 60 minutes (3600 * 1000 ms)
             const oneHour = 60 * 60 * 1000;
             await this.state.storage.setAlarm(Date.now() + oneHour);
+        } else {
+            this.logDebug(`Alarm already set for ${new Date(currentAlarm).toISOString()}.`);
         }
     }
 
     // Handle requests to the Durable Object
     async fetch(request: Request): Promise<Response> {
         // Ensure an alarm is set to periodically save data.
+        // This is crucial for ensuring alarm() is called even if the DO is idle for a long time.
         await this.ensureAlarmIsSet();
 
         const url = new URL(request.url);
