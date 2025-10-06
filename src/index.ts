@@ -62,7 +62,7 @@ export default {
 
 		// --- User Registration Handler ---
 		if (request.method === 'POST' && path === '/register') {
-			logInfo('Registration request received');
+			logDebug('Registration request received');
 			try {
 				const { email } = await request.json() as { email: string };
 
@@ -85,7 +85,7 @@ export default {
 				}
 
 				await createUserProfile(userId, email, env);
-				logInfo(`User registered successfully: ${userId}`, { userId, email });
+				logDebug(`User registered successfully: ${userId}`, { userId, email });
 
 				if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) {
 					logError('Missing Google OAuth environment variables for consent URL generation.', null);
@@ -101,7 +101,7 @@ export default {
 				authUrl.searchParams.set('response_type', 'code');
 				authUrl.searchParams.set('state', userId);
 
-				logInfo(`Generated OAuth consent URL for user ${userId}`, { userId, authUrl: authUrl.toString() });
+				logDebug(`Generated OAuth consent URL for user ${userId}`, { userId, authUrl: authUrl.toString() });
 
 				return new Response(JSON.stringify({ message: 'User registered. Please authorize Gmail access.', authUrl: authUrl.toString() }), {
 					status: 201,
@@ -116,7 +116,7 @@ export default {
 
 		// --- Click Tracking Handler ---
 		if (request.method === 'GET' && path === '/track-click') {
-			logInfo('Click tracking request received');
+			logDebug('Click tracking request received');
 			const userId = url.searchParams.get('userId');
 			const articleId = url.searchParams.get('articleId');
 			const encodedRedirectUrl = url.searchParams.get('redirectUrl');
@@ -149,7 +149,7 @@ export default {
                 );
 
 				if (logClickResponse.ok) {
-					logInfo(`Click logged successfully for user ${userId}, article ${articleId}`, { userId, articleId });
+					logDebug(`Click logged successfully for user ${userId}, article ${articleId}`, { userId, articleId });
 				} else {
 					logError(`Failed to log click for user ${userId}, article ${articleId}: ${logClickResponse.statusText}`, null, { userId, articleId, status: logClickResponse.status, statusText: logClickResponse.statusText });
 				}
@@ -164,7 +164,7 @@ export default {
 
 		// --- Feedback Tracking Handler ---
 		if (request.method === 'GET' && path === '/track-feedback') {
-			logInfo('Feedback tracking request received');
+			logDebug('Feedback tracking request received');
 			const userId = url.searchParams.get('userId');
 			const articleId = url.searchParams.get('articleId');
 			const feedback = url.searchParams.get('feedback'); // 'interested' or 'not_interested'
@@ -192,7 +192,7 @@ export default {
 				);
 
 				if (logFeedbackResponse.ok) {
-					logInfo(`Feedback logged successfully for user ${userId}, article ${articleId}, feedback: ${feedback}`, { userId, articleId, feedback });
+					logDebug(`Feedback logged successfully for user ${userId}, article ${articleId}, feedback: ${feedback}`, { userId, articleId, feedback });
 				} else {
 					logError(`Failed to log feedback for user ${userId}, article ${articleId}: ${logFeedbackResponse.statusText}`, null, { userId, articleId, status: logFeedbackResponse.status, statusText: logFeedbackResponse.statusText });
 				}
@@ -211,7 +211,7 @@ export default {
 
 		// --- OAuth2 Callback Handler ---
 		if (request.method === 'GET' && path === '/oauth2callback') {
-			logInfo('OAuth2 callback request received');
+			logDebug('OAuth2 callback request received');
 
 			const code = url.searchParams.get('code');
 			const userId = url.searchParams.get('state');
@@ -260,7 +260,7 @@ export default {
 				}
 
 				await env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken);
-				logInfo(`Successfully stored refresh token for user ${userId}.`, { userId });
+				logDebug(`Successfully stored refresh token for user ${userId}.`, { userId });
 
 				return new Response('Authorization successful. You can close this window.', { status: 200 });
 
@@ -272,10 +272,10 @@ export default {
 
 		// --- Get Articles for Education Handler ---
 		if (request.method === 'GET' && path === '/get-articles-for-education') {
-			logInfo('Request received for articles for education');
+			logDebug('Request received for articles for education');
 			try {
 				const articles: NewsArticle[] = await collectNews(env);
-				logInfo(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
+				logDebug(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
 				const articlesForEducation = articles.map((article: NewsArticle) => ({
 					articleId: article.articleId,
@@ -297,7 +297,7 @@ export default {
 
 		// --- Submit Interests Handler ---
 		if (request.method === 'POST' && path === '/submit-interests') {
-			logInfo('Submit interests request received');
+			logDebug('Submit interests request received');
 			try {
 				const { userId, selectedArticles } = await request.json() as { userId: string, selectedArticles: NewsArticle[] };
 
@@ -313,9 +313,9 @@ export default {
 					return new Response('User not found', { status: 404 });
 				}
 
-				logInfo(`User education articles processed successfully for user ${userId}.`, { userId });
+				logDebug(`User education articles processed successfully for user ${userId}.`, { userId });
 
-				logInfo(`Learning from user education for user ${userId}...`, { userId });
+				logDebug(`Learning from user education for user ${userId}...`, { userId });
 
 				const articlesNeedingEmbedding: NewsArticle[] = [];
 				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
@@ -335,7 +335,7 @@ export default {
 				}
 
 				if (articlesNeedingEmbedding.length > 0) {
-					logInfo(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
+					logDebug(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
 					// 埋め込み生成をトリガーし、即座にレスポンスを返す
 					// バンディットモデルの更新はBatchQueueDOからのコールバックに任せる
 					await generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false); // userIdを渡す
@@ -347,11 +347,11 @@ export default {
 					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
 					const batchSize = 10;
-					logInfo(`Sending selected articles with existing embeddings for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length, batchSize });
+					logDebug(`Sending selected articles with existing embeddings for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length, batchSize });
 
 					for (let i = 0; i < selectedArticlesWithEmbeddings.length; i += batchSize) {
 						const batch = selectedArticlesWithEmbeddings.slice(i, i + batchSize);
-						logInfo(`Sending batch ${Math.floor(i / batchSize) + 1} with ${batch.length} articles for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1, batchCount: batch.length });
+						logDebug(`Sending batch ${Math.floor(i / batchSize) + 1} with ${batch.length} articles for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1, batchCount: batch.length });
 
 						const learnResponse = await clickLogger.fetch(
                             new Request(`${env.WORKER_BASE_URL}/learn-from-education`, {
@@ -362,12 +362,12 @@ export default {
                         );
 
 						if (learnResponse.ok) {
-							logInfo(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
+							logDebug(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
 						} else {
 							logError(`Failed to send batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, batchNumber: Math.floor(i / batchSize) + 1, status: learnResponse.status, statusText: learnResponse.statusText });
 						}
 					}
-					logInfo(`Finished sending all batches for learning to ClickLogger for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length });
+					logDebug(`Finished sending all batches for learning to ClickLogger for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length });
 				} else {
 					logWarning(`No selected articles with existing embeddings to send for learning for user ${userId}.`, { userId });
 				}
@@ -382,7 +382,7 @@ export default {
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		} else if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
-			logInfo('Request received to delete all Durable Object data');
+			logDebug('Request received to delete all Durable Object data');
 			try {
 				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
@@ -394,7 +394,7 @@ export default {
                 );
 
 				if (deleteResponse.ok) {
-					logInfo('Successfully triggered deletion of all bandit models.');
+					logDebug('Successfully triggered deletion of all bandit models.');
 					return new Response('Triggered deletion of all bandit models.', { status: 200 });
 				} else {
 					logError(`Failed to trigger deletion of all bandit models: ${deleteResponse.statusText}`, null, { status: deleteResponse.status, statusText: deleteResponse.statusText });

@@ -53,16 +53,16 @@ export class ClickLogger extends DurableObject {
 
         // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
-            this.logInfo('WASMモジュールを初期化します...');
-            await init(wasm); // WASMモジュールの初期化
-            this.logInfo('WASMモジュールの初期化完了');
+            this.logDebug('WASMモジュールを初期化します...');
+            await init({ module: wasm }); // WASMモジュールの初期化
+            this.logDebug('WASMモジュールの初期化完了');
             await this.loadModelsFromR2();
         });
     }
 
     // Load all bandit models from a single R2 object.
     private async loadModelsFromR2(): Promise<void> {
-        this.logInfo(`Attempting to load all bandit models from R2 key: ${this.modelsR2Key}`);
+        this.logDebug(`Attempting to load all bandit models from R2 key: ${this.modelsR2Key}`);
         try {
             const object = await this.env.BANDIT_MODELS.get(this.modelsR2Key);
 
@@ -77,9 +77,9 @@ export class ClickLogger extends DurableObject {
                         alpha: model.alpha,
                     }
                 ]));
-                this.logInfo(`Successfully loaded ${this.inMemoryModels.size} bandit models from R2.`);
+                this.logDebug(`Successfully loaded ${this.inMemoryModels.size} bandit models from R2.`);
             } else {
-                this.logInfo('No existing bandit models file found in R2. Starting with an empty map.');
+                this.logDebug('No existing bandit models file found in R2. Starting with an empty map.');
                 this.inMemoryModels = new Map<string, BanditModelState>();
             }
         } catch (error: unknown) {
@@ -92,7 +92,7 @@ export class ClickLogger extends DurableObject {
 
     // Save all in-memory bandit models to a single R2 object.
     private async saveModelsToR2(): Promise<void> {
-        this.logInfo(`Attempting to save ${this.inMemoryModels.size} bandit models to R2.`);
+        this.logDebug(`Attempting to save ${this.inMemoryModels.size} bandit models to R2.`);
         try {
             const modelsToSave = Object.fromEntries(
                 Array.from(this.inMemoryModels.entries()).map(([userId, model]) => [
@@ -107,7 +107,7 @@ export class ClickLogger extends DurableObject {
             );
             await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify(modelsToSave));
             this.dirty = false; // Reset dirty flag after successful save
-            this.logInfo('Successfully saved all bandit models to R2.');
+            this.logDebug('Successfully saved all bandit models to R2.');
         } catch (error: unknown) {
             const err = this.normalizeError(error);
             this.logError('Failed to save bandit models to R2.', err, {
@@ -137,7 +137,7 @@ export class ClickLogger extends DurableObject {
         };
         this.inMemoryModels.set(userId, newModel);
         this.dirty = true;
-        this.logInfo(`Initialized new bandit model for userId: ${userId}`);
+        this.logDebug(`Initialized new bandit model for userId: ${userId}`);
         return newModel;
     }
 
@@ -147,7 +147,7 @@ export class ClickLogger extends DurableObject {
             this.logInfo('Alarm triggered. Saving dirty models to R2.');
             await this.saveModelsToR2();
         } else {
-            this.logInfo('Alarm triggered, but no changes to save.');
+            this.logDebug('Alarm triggered, but no changes to save.');
         }
 
         // Process unclicked articles
@@ -158,7 +158,7 @@ export class ClickLogger extends DurableObject {
     private async ensureAlarmIsSet(): Promise<void> {
         const currentAlarm = await this.state.storage.getAlarm();
         if (currentAlarm === null || currentAlarm < Date.now()) { // アラームが設定されていないか、過去の時刻の場合
-            this.logInfo('Alarm not set or expired. Setting a new alarm to run in 60 minutes.');
+            this.logDebug('Alarm not set or expired. Setting a new alarm to run in 60 minutes.');
             // Set an alarm to run in 60 minutes (3600 * 1000 ms)
             const oneHour = 60 * 60 * 1000;
             await this.state.storage.setAlarm(Date.now() + oneHour);
@@ -298,7 +298,7 @@ export class ClickLogger extends DurableObject {
                         const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
                         embedding = [...originalEmbedding, normalizedAge]; // 鮮度情報を付加して拡張
 
-                        this.logInfo(`Successfully re-fetched and extended embedding for article ${articleId}. New dimension: ${embedding.length}`, { userId, articleId, newEmbeddingLength: embedding.length });
+                        this.logDebug(`Successfully re-fetched and extended embedding for article ${articleId}. New dimension: ${embedding.length}`, { userId, articleId, newEmbeddingLength: embedding.length });
                     } else {
                         this.logError(`Failed to re-fetch original embedding for article ${articleId} from articles table. Cannot update bandit model.`, null, { userId, articleId });
                         return new Response('Failed to re-fetch original embedding', { status: 500 });
@@ -370,10 +370,10 @@ export class ClickLogger extends DurableObject {
                 if (statements.length > 0) {
                     await this.env.DB.batch(statements);
                 } else {
-                    this.logInfo(`No valid sent articles to log for user ${userId}.`, { userId });
+                    this.logDebug(`No valid sent articles to log for user ${userId}.`, { userId });
                 }
 
-                this.logInfo(`Successfully logged ${sentArticles.length} sent articles for user ${userId}`);
+                this.logDebug(`Successfully logged ${sentArticles.length} sent articles for user ${userId}`);
                 return new Response('Sent articles logged', { status: 200 });
 
             } catch (error) {
@@ -411,7 +411,7 @@ export class ClickLogger extends DurableObject {
                 if (logStatements.length > 0) {
                     await this.env.DB.batch(logStatements);
                     this.dirty = true;
-                    this.logInfo(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
+                    this.logDebug(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
                 }
                 return new Response('Learning from education completed', { status: 200 });
 
@@ -438,11 +438,11 @@ export class ClickLogger extends DurableObject {
                         // 256次元のembeddingに鮮度情報 (0.0) を追加して257次元にする
                         const embeddingWithFreshness = [...embed.embedding, 0.0];
                         await this.updateBanditModel(banditModel, embeddingWithFreshness, 1.0, userId); // 報酬は1.0
-                        this.logInfo(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
+                        this.logDebug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
                     this.dirty = true; // モデルが変更されたことをマーク
                 } else {
-                    this.logInfo('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
+                    this.logDebug('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
                 }
                 
                 return new Response('Embedding completed callback processed', { status: 200 });
@@ -465,7 +465,7 @@ export class ClickLogger extends DurableObject {
 
                 await this.updateBanditModel(banditModel, embedding, reward, userId);
                 this.dirty = true;
-                this.logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
+                this.logDebug(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
                 return new Response('Bandit model updated', { status: 200 });
 
             } catch (error) {
@@ -495,17 +495,17 @@ export class ClickLogger extends DurableObject {
 
     // Process unclicked articles and update bandit models
     private async processUnclickedArticles(): Promise<void> {
-        this.logInfo('Starting to process unclicked articles.');
+        this.logDebug('Starting to process unclicked articles.');
         try {
             // Get all user IDs that have sent articles
             const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM sent_articles`).all<{ user_id: string }>();
             const userIds = results.map(row => row.user_id);
-            this.logInfo(`Found ${userIds.length} users with sent articles to process.`, { userCount: userIds.length });
+            this.logDebug(`Found ${userIds.length} users with sent articles to process.`, { userCount: userIds.length });
 
             const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000); // 24時間前
 
             for (const userId of userIds) {
-                this.logInfo(`Processing unclicked articles for user: ${userId}`, { userId });
+                this.logDebug(`Processing unclicked articles for user: ${userId}`, { userId });
                 const unclickedArticles = await this.env.DB.prepare(
                     `SELECT sa.article_id, sa.embedding
                      FROM sent_articles sa
@@ -529,12 +529,12 @@ export class ClickLogger extends DurableObject {
                             updatedCount++;
                         }
                     }
-                    this.logInfo(`Updated bandit model for user ${userId} with -0.1 reward for ${updatedCount} unclicked articles.`, { userId, updatedCount });
+                    this.logDebug(`Updated bandit model for user ${userId} with -0.1 reward for ${updatedCount} unclicked articles.`, { userId, updatedCount });
                 } else {
-                    this.logInfo(`No unclicked articles found for user ${userId} within the last 24 hours.`, { userId });
+                    this.logDebug(`No unclicked articles found for user ${userId} within the last 24 hours.`, { userId });
                 }
             }
-            this.logInfo('Finished processing unclicked articles.');
+            this.logDebug('Finished processing unclicked articles.');
         } catch (error) {
             this.logError('Error processing unclicked articles:', error);
         }

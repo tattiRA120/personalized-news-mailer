@@ -29,22 +29,22 @@ interface NewsArticleWithEmbedding extends NewsArticle {
  */
 export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isTestRun: boolean = false): Promise<void> {
     const { logError, logInfo, logWarning, logDebug } = initLogger(env);
-    logInfo('Mail delivery orchestration started', { scheduledTime: scheduledTime.toISOString(), isTestRun });
+    logDebug('Mail delivery orchestration started', { scheduledTime: scheduledTime.toISOString(), isTestRun });
 
     try {
         // --- 1. News Collection ---
-        logInfo('Starting news collection...');
+        logDebug('Starting news collection...');
         const articles = await collectNews(env);
-        logInfo(`Collected ${articles.length} articles.`, { articleCount: articles.length });
+        logDebug(`Collected ${articles.length} articles.`, { articleCount: articles.length });
 
         if (articles.length === 0) {
-            logInfo('No articles collected. Skipping further steps.');
+            logDebug('No articles collected. Skipping further steps.');
             return;
         }
 
         // --- 1. 新規記事のみをD1に保存 ---
         const articleIds = articles.map(a => a.articleId).filter(Boolean) as string[];
-        logInfo(`Collected ${articleIds.length} article IDs from new articles.`, { count: articleIds.length });
+        logDebug(`Collected ${articleIds.length} article IDs from new articles.`, { count: articleIds.length });
 
         let newArticles: NewsArticle[] = [];
         if (articleIds.length > 0) {
@@ -63,11 +63,11 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
             logDebug(`Found ${existingArticleIds.size} existing article IDs in D1.`, { count: existingArticleIds.size });
 
             newArticles = articles.filter(article => article.articleId && !existingArticleIds.has(article.articleId));
-            logInfo(`Filtered down to ${newArticles.length} new articles to be saved.`, { count: newArticles.length });
+            logDebug(`Filtered down to ${newArticles.length} new articles to be saved.`, { count: newArticles.length });
 
             if (newArticles.length > 0) {
                 await saveArticlesToD1(newArticles, env); // d1ServiceのsaveArticlesToD1を使用
-                logInfo(`Saved ${newArticles.length} new articles to D1.`, { count: newArticles.length });
+                logDebug(`Saved ${newArticles.length} new articles to D1.`, { count: newArticles.length });
             }
         }
 
@@ -75,23 +75,23 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
         // UTC 13時 (日本時間 22時) のCronトリガーでのみ埋め込みバッチジョブを作成
         if (scheduledHourUTC === 13) {
-            logInfo('Starting embedding generation for articles missing embeddings in D1.');
+            logDebug('Starting embedding generation for articles missing embeddings in D1.');
             const articlesMissingEmbedding = await getArticlesFromD1(env, 1000, 0, "embedding IS NULL") as NewsArticleWithEmbedding[];
-            logInfo(`Found ${articlesMissingEmbedding.length} articles missing embeddings in D1.`, { count: articlesMissingEmbedding.length });
+            logDebug(`Found ${articlesMissingEmbedding.length} articles missing embeddings in D1.`, { count: articlesMissingEmbedding.length });
 
             if (articlesMissingEmbedding.length > 0) {
                 await generateAndSaveEmbeddings(articlesMissingEmbedding, env, "__SYSTEM_EMBEDDING__", false);
             } else {
-                logInfo('No articles found that need embedding. Skipping batch job creation.');
+                logDebug('No articles found that need embedding. Skipping batch job creation.');
             }
         }
 
         // UTC 23時 (日本時間 8時) のCronトリガー、またはテスト実行の場合にメール送信と関連動作を実行
         if (isTestRun || scheduledHourUTC === 23) {
             // --- Fetch articles from D1 ---
-            logInfo('Fetching articles from D1 for email sending (only articles with embeddings).');
+            logDebug('Fetching articles from D1 for email sending (only articles with embeddings).');
             const articlesWithEmbeddings = await getArticlesFromD1(env, 1000) as NewsArticleWithEmbedding[]; // d1ServiceのgetArticlesFromD1を使用
-            logInfo(`Fetched ${articlesWithEmbeddings.length} articles with embeddings from D1.`, { count: articlesWithEmbeddings.length });
+            logDebug(`Fetched ${articlesWithEmbeddings.length} articles with embeddings from D1.`, { count: articlesWithEmbeddings.length });
 
             if (articlesWithEmbeddings.length === 0) {
                 logWarning('No articles with embeddings found in D1. Cannot proceed with personalization.', null);
@@ -99,20 +99,20 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
             }
 
             // --- 2. Get all users ---
-            logInfo('Fetching all user IDs...');
+            logDebug('Fetching all user IDs...');
             const userIds = await getAllUserIds(env);
-            logInfo(`Found ${userIds.length} users to process.`, { userCount: userIds.length });
+            logDebug(`Found ${userIds.length} users to process.`, { userCount: userIds.length });
 
             if (userIds.length === 0) {
-                logInfo('No users found. Skipping email sending.');
+                logDebug('No users found. Skipping email sending.');
                 return; // メール送信をスキップ
             }
 
             // --- Process each user ---
-            logInfo('Processing news for each user...');
+            logDebug('Processing news for each user...');
             for (const userId of userIds) {
                 try {
-                    logInfo(`Processing user: ${userId}`);
+                    logDebug(`Processing user: ${userId}`);
 
                     const userProfile = await getUserProfile(userId, env);
 
@@ -120,13 +120,13 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         logError(`User profile not found for ${userId}. Skipping email sending for this user.`, null, { userId });
                         continue;
                     }
-                    logInfo(`Loaded user profile for ${userId}.`);
+                    logDebug(`Loaded user profile for ${userId}.`);
 
                     const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
                     const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
                     // --- 3. Article Selection (MMR + Bandit) ---
-                    logInfo(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
+                    logDebug(`Starting article selection (MMR + Bandit) for user ${userId}...`, { userId });
                     const numberOfArticlesToSend = 5;
 
                     // Get user's CTR for dynamic parameter adjustment
@@ -177,7 +177,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         }
                         
                         articlesForSelection = [...exploitationArticles, ...explorationArticles];
-                        logInfo(`Created a candidate pool of ${articlesForSelection.length} articles (${exploitationArticles.length} exploitation, ${explorationArticles.length} exploration).`, { userId });
+                        logDebug(`Created a candidate pool of ${articlesForSelection.length} articles (${exploitationArticles.length} exploitation, ${explorationArticles.length} exploration).`, { userId });
 
                     } else {
                         // Fallback for users without an embedding profile: use the latest articles
@@ -185,17 +185,17 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         articlesForSelection = articlesWithFeatures.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
                     }
 
-                    logInfo(`Selecting personalized articles for user ${userId} from ${articlesForSelection.length} candidates.`, { userId, candidateCount: articlesForSelection.length });
+                    logDebug(`Selecting personalized articles for user ${userId} from ${articlesForSelection.length} candidates.`, { userId, candidateCount: articlesForSelection.length });
                     const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfile, clickLogger, userId, numberOfArticlesToSend, userCTR, 0.5, env) as NewsArticleWithEmbedding[];
-                    logInfo(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
+                    logDebug(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
 
                     if (selectedArticles.length === 0) {
-                        logInfo('No articles selected. Skipping email sending for this user.', { userId });
+                        logDebug('No articles selected. Skipping email sending for this user.', { userId });
                         continue;
                     }
 
                     // --- 4. Email Generation & Sending ---
-                    logInfo(`Generating and sending email for user ${userId}...`, { userId });
+                    logDebug(`Generating and sending email for user ${userId}...`, { userId });
                     const recipientEmail = userProfile.email;
                     if (!recipientEmail) {
                         logError(`User profile for ${userId} does not contain an email address. Skipping email sending.`, null, { userId });
@@ -206,13 +206,13 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     const emailResponse = await sendNewsEmail(env as any, recipientEmail, userId, selectedArticles, sender);
 
                     if (emailResponse.ok) {
-                        logInfo(`Personalized news email sent to ${recipientEmail} via Gmail API.`, { userId, email: recipientEmail });
+                        logDebug(`Personalized news email sent to ${recipientEmail} via Gmail API.`, { userId, email: recipientEmail });
                     } else {
                         logError(`Failed to send email to ${recipientEmail} via Gmail API: ${emailResponse.statusText}`, null, { userId, email: recipientEmail, status: emailResponse.status, statusText: emailResponse.statusText });
                     }
 
                     // --- 5. Log Sent Articles to Durable Object ---
-                    logInfo(`Logging sent articles to ClickLogger for user ${userId}...`, { userId });
+                    logDebug(`Logging sent articles to ClickLogger for user ${userId}...`, { userId });
                     // embeddingが存在し、かつ次元が257である記事のみをフィルタリングして保存
                     const filteredSentArticlesData = selectedArticles
                         .filter(article => article.embedding && article.embedding.length === 257)
@@ -234,17 +234,17 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         );
 
                         if (logSentResponse.ok) {
-                            logInfo(`Successfully logged sent articles for user ${userId}.`, { userId });
+                            logDebug(`Successfully logged sent articles for user ${userId}.`, { userId });
                         } else {
                             logError(`Failed to log sent articles for user ${userId}: ${logSentResponse.statusText}`, null, { userId, status: logSentResponse.status, statusText: logSentResponse.statusText });
                         }
                     }
 
                     // --- 6. Process Click Logs and Update Bandit Model ---
-                    logInfo(`Processing click logs and updating bandit model for user ${userId}...`, { userId });
+                    logDebug(`Processing click logs and updating bandit model for user ${userId}...`, { userId });
 
                     const clickLogs = await getClickLogsForUser(env, userId); // d1ServiceのgetClickLogsForUserを使用
-                    logInfo(`Found ${clickLogs.length} click logs to process for user ${userId}.`, { userId, count: clickLogs.length });
+                    logDebug(`Found ${clickLogs.length} click logs to process for user ${userId}.`, { userId, count: clickLogs.length });
 
                     if (clickLogs.length > 0) {
                         const updatePromises = clickLogs.map(async clickLog => {
@@ -262,7 +262,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                                 );
 
                                 if (updateResponse.ok) {
-                                    logInfo(`Successfully updated bandit model from click for article ${articleId} for user ${userId}.`, { userId, articleId });
+                                    logDebug(`Successfully updated bandit model from click for article ${articleId} for user ${userId}.`, { userId, articleId });
                                 } else {
                                     logError(`Failed to update bandit model from click for article ${articleId} for user ${userId}: ${updateResponse.statusText}`, null, { userId, articleId, status: updateResponse.status, statusText: updateResponse.statusText });
                                 }
@@ -271,23 +271,23 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                             }
                         });
                         await Promise.all(updatePromises);
-                        logInfo(`Finished processing click logs and updating bandit model for user ${userId}.`, { userId });
+                        logDebug(`Finished processing click logs and updating bandit model for user ${userId}.`, { userId });
 
                         // 処理済みのクリックログをD1から削除
                         const clickLogArticleIdsToDelete = clickLogs.map(log => log.article_id);
                         await deleteProcessedClickLogs(env, userId, clickLogArticleIdsToDelete); // d1ServiceのdeleteProcessedClickLogsを使用
 
                     } else {
-                        logInfo(`No click logs to process for user ${userId}.`, { userId });
+                        logDebug(`No click logs to process for user ${userId}.`, { userId });
                     }
 
                     // --- 7. Clean up old logs in D1 ---
-                    logInfo(`Starting cleanup of old logs for user ${userId}...`, { userId });
+                    logDebug(`Starting cleanup of old logs for user ${userId}...`, { userId });
                     const daysToKeepLogs = 30;
                     const cutoffTimestamp = Date.now() - daysToKeepLogs * 24 * 60 * 60 * 1000;
                     await cleanupOldUserLogs(env, userId, cutoffTimestamp); // d1ServiceのcleanupOldUserLogsを使用
 
-                    logInfo(`Finished processing user ${userId}.`, { userId });
+                    logDebug(`Finished processing user ${userId}.`, { userId });
 
                 } catch (userProcessError) {
                     logError(`Error processing user ${userId}:`, userProcessError, { userId });
@@ -295,7 +295,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
             } // End of user loop
 
             // --- 8. Clean up old articles in D1 ---
-            logInfo('Starting D1 article cleanup...');
+            logDebug('Starting D1 article cleanup...');
             try {
                 const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
                 await deleteOldArticlesFromD1(env, twentyFourHoursAgo, true); // embeddingがNULLの24時間以上前の記事を削除
@@ -308,7 +308,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
             }
         }
 
-        logInfo('Mail delivery orchestration finished.');
+        logDebug('Mail delivery orchestration finished.');
 
     } catch (mainError) {
         logError('Error during mail delivery orchestration:', mainError);
