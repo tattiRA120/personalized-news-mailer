@@ -44,13 +44,13 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
             const query = `INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders}`;
             const stmt = env.DB.prepare(query);
 
-            const bindParams: (string | number | undefined | null)[] = []; // nullを許容するように型を変更
+            const bindParams: (string | number | null)[] = [];
             for (const article of chunk) {
                 bindParams.push(
                     article.articleId,
                     article.title,
                     article.link,
-                    article.publishedAt,
+                    article.publishedAt || Date.now(), // publishedAtがundefinedの場合は現在時刻をセット
                     article.content || '', // contentがundefinedの場合は空文字列
                     null // 新しい記事のembeddingはNULLに設定
                 );
