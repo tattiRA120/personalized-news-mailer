@@ -408,7 +408,38 @@ export class ClickLogger extends DurableObject {
                 const logStatements = [];
                 for (const article of selectedArticles) {
                     if (article.embedding) {
-                        await this.updateBanditModel(banditModel, article.embedding, 1.0, userId);
+                        let embeddingToUse = article.embedding;
+
+                        // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理
+                        if (embeddingToUse.length !== banditModel.dimension) {
+                            this.logWarning(`Embedding dimension mismatch for article ${article.articleId} from selectedArticles. Attempting to re-fetch and extend.`, {
+                                userId,
+                                articleId: article.articleId,
+                                selectedArticleEmbeddingLength: embeddingToUse.length,
+                                modelDimension: banditModel.dimension
+                            });
+
+                            // D1のarticlesテーブルから元のembeddingとpublished_atを再取得
+                            const originalArticle = await this.env.DB.prepare(
+                                `SELECT embedding, published_at FROM articles WHERE article_id = ?`
+                            ).bind(article.articleId).first<{ embedding: string, published_at: string }>();
+
+                            if (originalArticle && originalArticle.embedding && originalArticle.published_at) {
+                                const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
+                                const now = Date.now();
+                                const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
+                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                                embeddingToUse = [...originalEmbedding, normalizedAge]; // 鮮度情報を付加して拡張
+
+                                this.logDebug(`Successfully re-fetched and extended embedding for article ${article.articleId}. New dimension: ${embeddingToUse.length}`, { userId, articleId: article.articleId, newEmbeddingLength: embeddingToUse.length });
+                            } else {
+                                this.logError(`Failed to re-fetch original embedding for article ${article.articleId} from articles table. Cannot update bandit model.`, null, { userId, articleId: article.articleId });
+                                // エラーが発生した場合でも、この記事の学習はスキップし、次の記事に進む
+                                continue;
+                            }
+                        }
+
+                        await this.updateBanditModel(banditModel, embeddingToUse, 1.0, userId);
                         logStatements.push(
                             this.env.DB.prepare(
                                 `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
