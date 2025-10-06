@@ -452,6 +452,7 @@ export class ClickLogger extends DurableObject {
                     await this.env.DB.batch(logStatements);
                     this.dirty = true;
                     this.logDebug(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
+                    await this.saveModelsToR2(); // モデルの変更を即座にR2へ保存
                 }
                 return new Response('Learning from education completed', { status: 200 });
 
