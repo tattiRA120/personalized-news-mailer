@@ -316,35 +316,46 @@ export default {
 					});
 				}
 
-				logDebug(`User education articles processed successfully for user ${userId}.`, { userId });
+				logDebug(`User education articles received for user ${userId}.`, { userId, selectedArticleCount: selectedArticles.length });
 
-				logDebug(`Learning from user education for user ${userId}...`, { userId });
+				// 1. 選択された記事をD1に保存（重複はINSERT OR IGNOREでスキップされる）
+				await saveArticlesToD1(selectedArticles, env);
+				logDebug(`Selected articles saved to D1 for user ${userId}.`, { userId, savedArticleCount: selectedArticles.length });
 
 				const articlesNeedingEmbedding: NewsArticle[] = [];
 				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
 
+				// 2. D1から各記事の最新の状態（特にembeddingの有無）を再取得
 				for (const selectedArticle of selectedArticles) {
 					const articleId = selectedArticle.articleId;
-					// D1から埋め込み済みの記事のみを取得
-					const articleInD1: ArticleWithEmbedding[] = await getArticlesFromD1(env, 1, 0, "article_id = ? AND embedding IS NOT NULL", [articleId]);
-					const embedding = articleInD1.length > 0 ? articleInD1[0].embedding : undefined;
+					// D1から記事IDが一致する記事を取得（embeddingの有無は問わない）
+					const articleInD1: ArticleWithEmbedding[] = await getArticlesFromD1(env, 1, 0, "article_id = ?", [articleId]);
 
-					if (embedding) {
-						selectedArticlesWithEmbeddings.push({ articleId: articleId, embedding: embedding });
+					if (articleInD1.length > 0) {
+						const article = articleInD1[0];
+						if (article.embedding) {
+							// 既にembeddingが存在する場合
+							selectedArticlesWithEmbeddings.push({ articleId: article.articleId, embedding: article.embedding });
+						} else {
+							// embeddingがまだ存在しない場合（生成中または未生成）
+							articlesNeedingEmbedding.push(selectedArticle);
+						}
 					} else {
-						logWarning(`Embedding not found in D1 for selected article: "${selectedArticle.title}". Adding to embedding queue.`, { articleTitle: selectedArticle.title, articleLink: selectedArticle.articleId });
-						articlesNeedingEmbedding.push(selectedArticle);
+						// ここに到達することはないはずだが、念のためログ
+						logWarning(`Article "${selectedArticle.title}" (ID: ${articleId}) not found in D1 after saving. This should not happen.`, { articleId, articleTitle: selectedArticle.title });
+						articlesNeedingEmbedding.push(selectedArticle); // embeddingが必要なリストに追加
 					}
 				}
 
+				// 3. embeddingが必要な記事があれば、非同期で生成をトリガー
 				if (articlesNeedingEmbedding.length > 0) {
 					logDebug(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
-					// 埋め込み生成をトリガーし、即座にレスポンスを返す
-					// バンディットモデルの更新はBatchQueueDOからのコールバックに任せる
-					await generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false); // userIdを渡す
+					await generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false);
+				} else {
+					logDebug(`No new embeddings needed for selected articles for user ${userId}.`, { userId });
 				}
 
-				// 既に埋め込みがある記事のみでバンディットモデルを更新
+				// 4. 既に埋め込みがある記事のみでバンディットモデルを更新
 				if (selectedArticlesWithEmbeddings.length > 0) {
 					const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
 					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);

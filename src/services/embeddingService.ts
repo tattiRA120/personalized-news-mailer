@@ -15,44 +15,12 @@ export async function generateAndSaveEmbeddings(articles: NewsArticleWithEmbeddi
     const { logError, logInfo, logWarning, logDebug } = initLogger(env);
     logDebug(`${isDebug ? 'Debug: ' : ''}Starting OpenAI Batch API embedding job creation for user ${userId}...`);
 
-    // D1から既存の記事のarticle_idとembeddingの有無を取得
-    const { results: existingArticlesInDb } = await env.DB.prepare("SELECT article_id, embedding FROM articles").all();
-    const existingArticleIdsWithEmbedding = new Set(
-        (existingArticlesInDb as any[])
-            .filter(row => row.embedding !== null && row.embedding !== undefined && row.article_id !== null && row.article_id !== undefined)
-            .map(row => row.article_id)
-    );
-    logDebug(`${isDebug ? 'Debug: ' : ''}Found ${existingArticleIdsWithEmbedding.size} articles with existing embeddings in D1 (based on article ID).`, { count: existingArticleIdsWithEmbedding.size });
+    // generateAndSaveEmbeddingsは、引数で渡されたarticlesのみを処理対象とする
+    // D1からembeddingがNULLの記事を取得してマージするロジックは削除
+    // 呼び出し元でembeddingが必要な記事のみをフィルタリングして渡すことを想定
+    let articlesToEmbed = articles;
 
-    // D1からembeddingがNULLの記事を取得
-    const { results: articlesMissingEmbeddingInD1 } = await env.DB.prepare("SELECT article_id, title, url, published_at, content FROM articles WHERE embedding IS NULL").all();
-    logDebug(`${isDebug ? 'Debug: ' : ''}Found ${articlesMissingEmbeddingInD1.length} articles missing embeddings in D1.`, { count: articlesMissingEmbeddingInD1.length });
-
-    // 新しく収集された記事と、D1から取得した未embedding記事を結合
-    // 重複を避けるため、Mapを使用してarticleIdでユニークなリストを作成
-    const combinedArticlesMap = new Map<string, NewsArticleWithEmbedding>();
-    articles.forEach(article => {
-        if (article.articleId) {
-            combinedArticlesMap.set(article.articleId, article);
-        }
-    });
-    (articlesMissingEmbeddingInD1 as any[]).forEach(row => {
-        if (row.article_id && !combinedArticlesMap.has(row.article_id)) { // 新しい記事にない場合のみ追加
-            combinedArticlesMap.set(row.article_id, {
-                articleId: row.article_id,
-                title: row.title,
-                link: row.url,
-                publishedAt: row.published_at,
-                content: row.content, // D1から取得したcontentを割り当てる
-                sourceName: 'D1_missing_embedding', // 識別用にソースを追加 (NewsArticleにsourceNameがあるので)
-            });
-        }
-    });
-
-    let articlesToEmbed = Array.from(combinedArticlesMap.values())
-        .filter(article => article.articleId && !existingArticleIdsWithEmbedding.has(article.articleId));
-
-    logDebug(`${isDebug ? 'Debug: ' : ''}Filtered down to ${articlesToEmbed.length} articles that need embedding.`, { articlesToEmbedCount: articlesToEmbed.length, totalCollected: articles.length });
+    logDebug(`${isDebug ? 'Debug: ' : ''}Received ${articlesToEmbed.length} articles for embedding.`, { articlesToEmbedCount: articlesToEmbed.length });
 
     if (articlesToEmbed.length === 0) {
         logDebug(`${isDebug ? 'Debug: ' : ''}No articles found that need embedding. Skipping batch job creation.`);
