@@ -6,6 +6,7 @@ import { NewsArticle } from './newsCollector';
 import { Env } from './index';
 import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
 import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
+import { updateUserProfile } from './userProfile';
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -148,6 +149,25 @@ export class ClickLogger extends DurableObject {
         this.dirty = true;
         this.logDebug(`Initialized new bandit model for userId: ${userId}`);
         return newModel;
+    }
+
+    // ユーザープロファイルの埋め込みをD1に更新するプライベートメソッド
+    private async updateUserProfileEmbeddingInD1(userId: string, banditModel: BanditModelState): Promise<void> {
+        this.logDebug(`Attempting to update user profile embedding in D1 for user: ${userId}`);
+        try {
+            // BanditModelのbベクトルをユーザーの興味プロファイルとして使用
+            // L2ノルムで正規化
+            const bVector = Array.from(banditModel.b);
+            const norm = Math.sqrt(bVector.reduce((sum, val) => sum + val * val, 0));
+            const normalizedEmbedding = norm > 0 ? bVector.map(val => val / norm) : new Array(banditModel.dimension).fill(0);
+
+            // userProfile.ts の updateUserProfile 関数を呼び出す
+            await updateUserProfile({ userId: userId, email: '', embedding: normalizedEmbedding }, this.env);
+            this.logInfo(`Successfully updated user profile embedding in D1 for user: ${userId}`);
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logError('Error updating user profile embedding in D1:', err, { userId, errorName: err.name, errorMessage: err.message });
+        }
     }
 
     async alarm() {
@@ -697,6 +717,9 @@ export class ClickLogger extends DurableObject {
             // dimension は変わらないので更新不要
 
             this.logDebug(`Bandit model updated for user ${userId} with reward ${reward.toFixed(2)}.`, { userId, reward });
+
+            // バンディットモデル更新後、ユーザープロファイルの埋め込みも更新
+            await this.updateUserProfileEmbeddingInD1(userId, banditModel);
         } catch (error: unknown) {
             const err = this.normalizeError(error);
             this.logError("Error during WASM bandit model update:", err, {
