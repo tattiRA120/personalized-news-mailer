@@ -5,7 +5,7 @@
  */
 
 import { initLogger } from './logger';
-import { OPENAI_EMBEDDING_MODEL } from './config';
+import { OPENAI_EMBEDDING_MODEL, OPENAI_EMBEDDING_DIMENSION } from './config';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
 
@@ -194,7 +194,7 @@ export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
             model: OPENAI_EMBEDDING_MODEL,
             input: `${article.title}. ${article.summary || ''}`,
             encoding_format: "float",
-            dimensions: 256
+            dimensions: OPENAI_EMBEDDING_DIMENSION
         }
     })).join('\n');
 }

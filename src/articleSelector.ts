@@ -37,7 +37,7 @@ export function cosineSimilarity(vec1: number[], vec2: number[]): number {
 // ClickLogger Durable Object を引数として受け取り、バンディットモデルからUCB値を取得する
 export async function selectPersonalizedArticles(
     articles: NewsArticle[],
-    userProfile: UserProfile,
+    userProfileEmbeddingForSelection: number[],
     clickLogger: DurableObjectStub<ClickLogger>, // Durable Object インスタンスを受け取る
     userId: string,
     count: number,
@@ -50,7 +50,7 @@ export async function selectPersonalizedArticles(
         return [];
     }
 
-    logInfo(`Selecting personalized articles for user ${userProfile.userId}`, { userId: userProfile.userId, articleCount: articles.length, count });
+    logInfo(`Selecting personalized articles for user ${userId}`, { userId, articleCount: articles.length, count });
 
     // Durable Object から記事のUCB値を取得
     const articlesWithEmbeddings = articles
@@ -71,25 +71,25 @@ export async function selectPersonalizedArticles(
 
             if (response.ok) {
                 ucbValues = await response.json();
-                logInfo(`Received ${ucbValues.length} UCB values from ClickLogger.`, { userId: userProfile.userId, ucbCount: ucbValues.length });
+                logInfo(`Received ${ucbValues.length} UCB values from ClickLogger.`, { userId, ucbCount: ucbValues.length });
                 if (ucbValues.length === 0) {
-                    logWarning(`ClickLogger returned empty UCB values for user ${userId}.`, { userId: userProfile.userId });
+                    logWarning(`ClickLogger returned empty UCB values for user ${userId}.`, { userId });
                 }
             } else {
                 const errorText = await response.text();
-                logError(`Failed to get UCB values from ClickLogger: ${response.statusText}`, undefined, { userId: userProfile.userId, status: response.status, statusText: response.statusText, errorText });
+                logError(`Failed to get UCB values from ClickLogger: ${response.statusText}`, undefined, { userId, status: response.status, statusText: response.statusText, errorText });
             }
         } catch (error) {
-            logError('Error fetching UCB values from ClickLogger:', error, { userId: userProfile.userId });
+            logError('Error fetching UCB values from ClickLogger:', error, { userId });
         }
     } else {
-        logWarning("No articles with embeddings to send to ClickLogger for UCB calculation.", { userId: userProfile.userId });
+        logWarning("No articles with embeddings to send to ClickLogger for UCB calculation.", { userId });
     }
 
 
     // 記事にUCB値をマッピングし、最終的な関連度スコアを計算
-    // ユーザーの興味関心データ（userProfile.embedding）を取得
-    const userInterestEmbedding = userProfile.embedding;
+    // ユーザーの興味関心データ（userProfileEmbeddingForSelection）を取得
+    const userInterestEmbedding = userProfileEmbeddingForSelection;
 
     const articlesWithFinalScore = articles.map(article => {
         const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.articleId); // articleId で検索
@@ -112,7 +112,7 @@ export async function selectPersonalizedArticles(
         const finalScore = interestRelevance * interestWeight + ucb * ucbWeight;
 
         logDebug(`Article "${article.title}" - Interest Relevance: ${interestRelevance.toFixed(4)}, UCB: ${ucb.toFixed(4)}, Final Score: ${finalScore.toFixed(4)}`, {
-            userId: userProfile.userId,
+            userId,
             articleTitle: article.title,
             interestRelevance: interestRelevance,
             ucb: ucb,
@@ -129,7 +129,7 @@ export async function selectPersonalizedArticles(
     // 最終スコアで降順にソート
     const sortedArticles = [...articlesWithFinalScore].sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
 
-    logInfo(`Sorted articles by final score.`, { userId: userProfile.userId });
+    logInfo(`Sorted articles by final score.`, { userId });
 
     const selected: NewsArticle[] = [];
     const remaining = [...sortedArticles];
@@ -138,7 +138,7 @@ export async function selectPersonalizedArticles(
     const firstArticle = remaining.shift();
     if (firstArticle) {
         selected.push(firstArticle);
-        logInfo(`Selected first article: "${firstArticle.title}" (Final Score: ${firstArticle.finalScore})`, { userId: userProfile.userId, articleTitle: firstArticle.title, finalScore: firstArticle.finalScore });
+        logInfo(`Selected first article: "${firstArticle.title}" (Final Score: ${firstArticle.finalScore})`, { userId, articleTitle: firstArticle.title, finalScore: firstArticle.finalScore });
     }
 
     // 残りからMMRに基づいて記事を選択
@@ -176,15 +176,15 @@ export async function selectPersonalizedArticles(
         if (bestArticleIndex !== -1) {
             const [nextArticle] = remaining.splice(bestArticleIndex, 1);
             selected.push(nextArticle);
-            logInfo(`Selected article "${nextArticle.title}" using MMR (MMR Score: ${bestMMRScore}).`, { userId: userProfile.userId, articleTitle: nextArticle.title, mmrScore: bestMMRScore });
+            logInfo(`Selected article "${nextArticle.title}" using MMR (MMR Score: ${bestMMRScore}).`, { userId, articleTitle: nextArticle.title, mmrScore: bestMMRScore });
         } else {
             // 適切な記事が見つからなかった場合（例: 全ての記事のembeddingがないなど）
-            logWarning("Could not find a suitable article using MMR. Stopping selection.", { userId: userProfile.userId, selectedCount: selected.length, remainingCount: remaining.length });
+            logWarning("Could not find a suitable article using MMR. Stopping selection.", { userId, selectedCount: selected.length, remainingCount: remaining.length });
             break;
         }
     }
 
-    logInfo(`Finished personalized article selection. Selected ${selected.length} articles.`, { userId: userProfile.userId, selectedCount: selected.length });
+    logInfo(`Finished personalized article selection. Selected ${selected.length} articles.`, { userId, selectedCount: selected.length });
     return selected;
 }
 

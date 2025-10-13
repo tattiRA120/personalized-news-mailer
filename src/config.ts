@@ -23,6 +23,7 @@ export const NEWS_RSS_URLS: string[] = [
 ];
 
 export const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
+export const OPENAI_EMBEDDING_DIMENSION = 256; // OpenAI埋め込みベクトルの次元
 
 // You can add other configuration variables here, like API keys (though better to use Workers Secrets for sensitive info)
 // export const NEWS_API_KEY: string | undefined = undefined;

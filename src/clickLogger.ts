@@ -7,6 +7,10 @@ import { Env } from './index';
 import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
 import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 import { updateUserProfile } from './userProfile';
+import { OPENAI_EMBEDDING_DIMENSION } from './config';
+
+// 記事の鮮度情報を1次元追加するため、最終的な埋め込みベクトルの次元は OPENAI_EMBEDDING_DIMENSION + 1 となる
+const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1;
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -130,7 +134,7 @@ export class ClickLogger extends DurableObject {
     
     // Initialize a new bandit model for a specific user.
     private initializeNewBanditModel(userId: string): BanditModelState {
-        const dimension = 257; // Dimension for text-embedding-3-small + 1 (freshness)
+        const dimension = EXTENDED_EMBEDDING_DIMENSION; // Dimension for text-embedding-3-small + 1 (freshness)
         const aInvArray = new Float64Array(dimension * dimension).fill(0);
         const bArray = new Float64Array(dimension).fill(0);
 
