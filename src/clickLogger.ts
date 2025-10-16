@@ -364,7 +364,31 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                const ucbValues = await this.getUCBValues(userId, banditModel, articlesWithEmbeddings, userCTR);
+                // 記事の公開日時を取得し、鮮度情報を付与する
+                const now = Date.now();
+                const articlesWithFreshness = await Promise.all(articlesWithEmbeddings.map(async (article) => {
+                    const articleData = await this.env.DB.prepare(
+                        `SELECT published_at FROM articles WHERE article_id = ?`
+                    ).bind(article.articleId).first<{ published_at: string }>();
+
+                    if (articleData && articleData.published_at) {
+                        const ageInHours = (now - new Date(articleData.published_at).getTime()) / (1000 * 60 * 60);
+                        const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
+                        return {
+                            ...article,
+                            embedding: [...article.embedding, normalizedAge],
+                        };
+                    }
+                    // 記事情報が取得できない場合は、鮮度情報なしで返すか、デフォルト値を設定する
+                    // ここでは、エラーの原因を特定しやすくするため、nullを返す
+                    this.logWarning(`Could not find published_at for article ${article.articleId}. Skipping for UCB calculation.`);
+                    return null;
+                }));
+
+                // nullを除外
+                const validArticles = articlesWithFreshness.filter(Boolean) as { articleId: string, embedding: number[] }[];
+
+                const ucbValues = await this.getUCBValues(userId, banditModel, validArticles, userCTR);
                 // Limit logging to the first 10 UCB values for performance
                 const limitedUcbValues = ucbValues.slice(0, 10).map(u => ({ articleId: u.articleId, ucb: u.ucb.toFixed(4) }));
                 this.logDebug(
