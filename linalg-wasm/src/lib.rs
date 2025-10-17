@@ -109,47 +109,84 @@ pub fn update_bandit_model(
     utils::set_panic_hook();
 
     let mut model: BanditModel = serde_wasm_bindgen::from_value(model_js)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize BanditModel: {}", e)))?;
 
     let d = model.dimension;
+
+    // 1) reject zero-dimension early
+    if d == 0 {
+        return Err(JsValue::from_str("Bandit model dimension cannot be zero."));
+    }
+
+    // 2) basic length checks for a_inv and b
+    if model.a_inv.len() != d * d {
+        return Err(JsValue::from_str(&format!(
+            "Bandit model A_inv length mismatch: expected {}, got {}",
+            d * d,
+            model.a_inv.len()
+        )));
+    }
+
+    if model.b.len() != d {
+        return Err(JsValue::from_str(&format!(
+            "Bandit model b length mismatch: expected {}, got {}",
+            d,
+            model.b.len()
+        )));
+    }
+
+    // 3) check finite elements in a_inv and b and embedding
+    if model.a_inv.iter().any(|&v| !v.is_finite()) {
+        return Err(JsValue::from_str("Bandit model A_inv contains non-finite values (NaN/Inf)."));
+    }
+    if model.b.iter().any(|&v| !v.is_finite()) {
+        return Err(JsValue::from_str("Bandit model b contains non-finite values (NaN/Inf)."));
+    }
+    if embedding.iter().any(|&v| !v.is_finite()) {
+        return Err(JsValue::from_str("Embedding contains non-finite values (NaN/Inf)."));
+    }
+
     if embedding.len() != d {
         return Err(JsValue::from_str("Embedding dimension mismatch."));
     }
 
     let x = ArrayView::from(embedding);
     let mut a_inv = Array2::from_shape_vec((d, d), model.a_inv)
-        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        .map_err(|e| JsValue::from_str(&format!("A_inv shape error: {}", e)))?;
     let mut b = ArrayView::from(&model.b).to_owned();
 
-    // Sherman-Morrison formula を使用して A_inv を更新
-    // A_new_inv = A_old_inv - (A_old_inv * x * x^T * A_old_inv) / (1 + x^T * A_old_inv * x)
-
-    // 1. A_old_inv * x
-    let a_inv_x = a_inv.dot(&x); // d x 1 ベクトル
-
-    // 2. x^T * A_old_inv * x
-    let x_t_a_inv_x = x.dot(&a_inv_x); // スカラー
-
-    // 3. denominator = 1 + x^T * A_old_inv * x
+    // Sherman-Morrison computation
+    let a_inv_x = a_inv.dot(&x);
+    let x_t_a_inv_x = x.dot(&a_inv_x);
     let denominator = 1.0 + x_t_a_inv_x;
 
-    if denominator == 0.0 {
-        return Err(JsValue::from_str("Denominator is zero in Sherman-Morrison update."));
+    // 4) robust near-zero check
+    const EPS: f64 = 1e-12;
+    if !denominator.is_finite() {
+        return Err(JsValue::from_str("Denominator is non-finite (NaN/Inf) in Sherman-Morrison update."));
+    }
+    if denominator.abs() < EPS {
+        return Err(JsValue::from_str("Denominator too small in Sherman-Morrison update (numerical instability)."));
     }
 
-    // 4. numerator_matrix = (A_old_inv * x) * (x^T * A_old_inv)
-    // (d x 1) * (1 x d) = d x d 行列
-    let numerator_matrix = a_inv_x.insert_axis(ndarray::Axis(1)).dot(&x.insert_axis(ndarray::Axis(0)).dot(&a_inv));
+    // 5) compute numerator safely (shapes already validated)
+    let numerator_matrix = a_inv_x
+        .insert_axis(ndarray::Axis(1))
+        .dot(&x.insert_axis(ndarray::Axis(0)).dot(&a_inv));
 
-    // 5. A_new_inv = A_old_inv - numerator_matrix / denominator
+    // 6) subtract, then update b
     a_inv = a_inv - numerator_matrix / denominator;
 
-    // b = b + reward * x
     let x_scaled = x.to_owned() * reward;
+    // ensure shapes match before addition
+    if b.len() != x_scaled.len() {
+        return Err(JsValue::from_str("Shape mismatch when updating b."));
+    }
     b = b + x_scaled;
 
+    // finalize
     model.a_inv = a_inv.into_raw_vec();
     model.b = b.into_raw_vec();
 
-    Ok(serde_wasm_bindgen::to_value(&model)?)
+    Ok(serde_wasm_bindgen::to_value(&model).map_err(|e| JsValue::from_str(&e.to_string()))?)
 }
