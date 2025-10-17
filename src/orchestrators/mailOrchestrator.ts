@@ -133,37 +133,49 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     // Get user's CTR for dynamic parameter adjustment
                     const userCTR = await getUserCTR(env, userId);
 
-                    // 鮮度情報を追加した後の埋め込み次元
                     const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1;
 
-                    // userProfile.embeddingをEXTENDED_EMBEDDING_DIMENSIONに調整
+                    // ユーザープロファイルの埋め込みベクトルを準備
                     let userProfileEmbeddingForSelection: number[];
-                    if (userProfile.embedding && userProfile.embedding.length > 0) {
-                        if (userProfile.embedding.length === OPENAI_EMBEDDING_DIMENSION) {
-                            // 鮮度情報がない場合は0を追加して次元を揃える
-                            userProfileEmbeddingForSelection = [...userProfile.embedding, 0];
-                        } else if (userProfile.embedding.length === EXTENDED_EMBEDDING_DIMENSION) {
-                            userProfileEmbeddingForSelection = userProfile.embedding;
-                        } else {
-                            logWarning(`User ${userId} has an embedding of unexpected dimension ${userProfile.embedding.length}. Initializing with zero vector for selection.`, { userId, embeddingLength: userProfile.embedding.length });
-                            userProfileEmbeddingForSelection = new Array(EXTENDED_EMBEDDING_DIMENSION).fill(0);
-                        }
+                    if (userProfile.embedding && userProfile.embedding.length === OPENAI_EMBEDDING_DIMENSION) {
+                        // ユーザープロファイルに鮮度情報がない場合は0を追加して次元を揃える
+                        userProfileEmbeddingForSelection = [...userProfile.embedding, 0];
+                    } else if (userProfile.embedding && userProfile.embedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                        userProfileEmbeddingForSelection = userProfile.embedding;
                     } else {
-                        logDebug(`User ${userId} has no embedding profile. Initializing with zero vector for selection.`, { userId });
+                        logWarning(`User ${userId} has an embedding of unexpected dimension ${userProfile.embedding?.length}. Initializing with zero vector for selection.`, { userId, embeddingLength: userProfile.embedding?.length });
                         userProfileEmbeddingForSelection = new Array(EXTENDED_EMBEDDING_DIMENSION).fill(0);
                     }
 
-                    // --- Feature Engineering: Add article freshness ---
+                    // 記事の埋め込みベクトルに鮮度情報を追加
                     const now = Date.now();
-                    // embeddingが存在する記事のみを対象とする
-                    const articlesWithFeatures = articlesWithEmbeddings
-                        .filter(article => article.embedding !== undefined && article.embedding.length === OPENAI_EMBEDDING_DIMENSION) // 元の次元が正しいもののみを対象
+                    const articlesWithExtendedEmbeddings = await Promise.all(
+                        articlesWithEmbeddings
+                            .filter(article => article.embedding && article.embedding.length === OPENAI_EMBEDDING_DIMENSION)
+                            .map(async (article) => {
+                                const articleData = await getArticleByIdFromD1(article.articleId, env); // D1Serviceの関数を直接呼び出す
+                                let normalizedAge = 0; // デフォルト値
+
+                                if (articleData && articleData.publishedAt) {
+                                    const ageInHours = (now - new Date(articleData.publishedAt).getTime()) / (1000 * 60 * 60);
+                                    normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
+                                } else {
+                                    logWarning(`Could not find publishedAt for article ${article.articleId}. Using default freshness.`, { articleId: article.articleId });
+                                }
+
+                                return {
+                                    ...article,
+                                    embedding: [...article.embedding!, normalizedAge], // 鮮度情報を追加
+                                };
+                            })
+                    );
+
+                    // embeddingが存在し、かつ次元がEXTENDED_EMBEDDING_DIMENSIONである記事のみを対象とする
+                    const articlesWithFeatures = articlesWithExtendedEmbeddings
+                        .filter(article => article.embedding !== undefined && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
                         .map(article => {
-                            const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
-                            // Normalize age (e.g., cap at 7 days, scale to 0-1)
-                            const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                            // 既存のembeddingに鮮度情報を追加
-                            return { ...article, embedding: [...article.embedding!, normalizedAge] };
+                            // ここでは既に鮮度情報が追加されているため、そのまま返す
+                            return { ...article };
                         });
 
                     // UCB計算の負荷を軽減しつつ、より多くの記事を対象とするため、記事候補を戦略的にサンプリング
@@ -173,17 +185,18 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     let articlesForSelection: NewsArticleWithEmbedding[] = [];
 
+                    // ユーザープロファイルの埋め込みベクトルが有効な場合のみ類似度計算を行う
                     if (userProfileEmbeddingForSelection.length === EXTENDED_EMBEDDING_DIMENSION && userProfileEmbeddingForSelection.some(val => val !== 0)) {
-                        // NOTE: We use the original embeddings (without freshness) for similarity calculation.
+                        // NOTE: 類似度計算には鮮度情報を含まない元の埋め込みベクトルを使用
                         const userProfileOriginalEmbedding = userProfileEmbeddingForSelection.slice(0, OPENAI_EMBEDDING_DIMENSION);
-                        const articlesWithSimilarity = articlesWithEmbeddings
-                            .filter(article => article.embedding && article.embedding.length === OPENAI_EMBEDDING_DIMENSION) // 元の次元が正しいもののみを対象
+                        const articlesWithSimilarity = articlesWithExtendedEmbeddings
+                            .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
                             .map(article => ({
                                 ...article,
-                                similarity: cosineSimilarity(userProfileOriginalEmbedding, article.embedding!),
+                                similarity: cosineSimilarity(userProfileOriginalEmbedding, article.embedding!.slice(0, OPENAI_EMBEDDING_DIMENSION)),
                             })).sort((a, b) => b.similarity - a.similarity);
 
-                        // Exploitation: Get top N articles based on similarity
+                        // Exploitation: 類似度に基づいて上位N件の記事を取得
                         const exploitationArticles = articlesWithSimilarity.slice(0, EXPLOITATION_COUNT);
                         const exploitationArticleIds = new Set(exploitationArticles.map(a => a.articleId));
 

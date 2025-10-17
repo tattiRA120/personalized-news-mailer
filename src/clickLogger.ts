@@ -10,7 +10,7 @@ import { updateUserProfile } from './userProfile';
 import { OPENAI_EMBEDDING_DIMENSION } from './config';
 
 // 記事の鮮度情報を1次元追加するため、最終的な埋め込みベクトルの次元は OPENAI_EMBEDDING_DIMENSION + 1 となる
-const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1;
+export const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1; // orchestratorから参照するためexport
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {
@@ -364,31 +364,8 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                // 記事の公開日時を取得し、鮮度情報を付与する
-                const now = Date.now();
-                const articlesWithFreshness = await Promise.all(articlesWithEmbeddings.map(async (article) => {
-                    const articleData = await this.env.DB.prepare(
-                        `SELECT published_at FROM articles WHERE article_id = ?`
-                    ).bind(article.articleId).first<{ published_at: string }>();
-
-                    if (articleData && articleData.published_at) {
-                        const ageInHours = (now - new Date(articleData.published_at).getTime()) / (1000 * 60 * 60);
-                        const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
-                        return {
-                            ...article,
-                            embedding: [...article.embedding, normalizedAge],
-                        };
-                    }
-                    // 記事情報が取得できない場合は、鮮度情報なしで返すか、デフォルト値を設定する
-                    // ここでは、エラーの原因を特定しやすくするため、nullを返す
-                    this.logWarning(`Could not find published_at for article ${article.articleId}. Skipping for UCB calculation.`);
-                    return null;
-                }));
-
-                // nullを除外
-                const validArticles = articlesWithFreshness.filter(Boolean) as { articleId: string, embedding: number[] }[];
-
-                const ucbValues = await this.getUCBValues(userId, banditModel, validArticles, userCTR);
+                // articlesWithEmbeddings は既に鮮度情報が付与された257次元のembeddingを持つことを想定
+                const ucbValues = await this.getUCBValues(userId, banditModel, articlesWithEmbeddings, userCTR);
                 // Limit logging to the first 10 UCB values for performance
                 const limitedUcbValues = ucbValues.slice(0, 10).map(u => ({ articleId: u.articleId, ucb: u.ucb.toFixed(4) }));
                 this.logDebug(
@@ -524,7 +501,8 @@ export class ClickLogger extends DurableObject {
                     }
 
                     for (const embed of embeddings) {
-                        // 256次元のembeddingに鮮度情報 (0.0) を追加して257次元にする
+                        // embedding-completed-callback は OpenAI Batch API からのコールバックであり、
+                        // ここで受け取るembeddingは256次元であるため、鮮度情報 (0.0) を追加して257次元にする。
                         const embeddingWithFreshness = [...embed.embedding, 0.0];
                         await this.updateBanditModel(banditModel, embeddingWithFreshness, 1.0, userId); // 報酬は1.0
                         this.logDebug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
