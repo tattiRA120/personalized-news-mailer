@@ -128,7 +128,7 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
  * @returns 記事オブジェクト、またはnull
  */
 export async function getArticleByIdFromD1(articleId: string, env: Env): Promise<ArticleWithEmbedding | null> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const { logError, logInfo, logWarning, logDebug } = initLogger(env);
     logInfo(`Fetching article by ID from D1: ${articleId}.`);
     try {
         const { results } = await env.DB.prepare("SELECT article_id, title, url, published_at, content, embedding FROM articles WHERE article_id = ?").bind(articleId).all<any>();
@@ -144,7 +144,7 @@ export async function getArticleByIdFromD1(articleId: string, env: Env): Promise
                 embedding: row.embedding ? JSON.parse(row.embedding) : undefined, // embeddingはD1から取得し、必要に応じて付与
                 publishedAt: row.published_at,
             };
-            logInfo(`Found article by ID: ${articleId}.`, { articleId });
+            logDebug(`Found article by ID: ${articleId}.`, { articleId });
             return article;
         }
         logWarning(`Article with ID ${articleId} not found in D1.`, { articleId });
