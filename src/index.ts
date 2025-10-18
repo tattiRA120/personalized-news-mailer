@@ -63,8 +63,17 @@ export default {
 		// --- User Registration Handler ---
 		if (request.method === 'POST' && path === '/register') {
 			logDebug('Registration request received');
+			let requestBody;
 			try {
-				const { email } = await request.json() as { email: string };
+				requestBody = await request.json();
+				logDebug('Registration request body:', requestBody);
+			} catch (jsonError) {
+				logError('Failed to parse registration request body as JSON:', jsonError);
+				return new Response('Invalid JSON in request body', { status: 400 });
+			}
+
+			try {
+				const { email } = requestBody as { email: string };
 
 				if (!email) {
 					logWarning('Registration failed: Missing email in request body.');
