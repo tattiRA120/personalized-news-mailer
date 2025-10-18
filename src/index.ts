@@ -80,6 +80,13 @@ export default {
 					return new Response('Missing email', { status: 400 });
 				}
 
+				// Basic email format validation
+				const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+				if (!emailRegex.test(email)) {
+					logWarning(`Registration failed: Invalid email format for ${email}.`, { email });
+					return new Response('Invalid email format', { status: 400 });
+				}
+
 				const encoder = new TextEncoder();
 				const data = encoder.encode(email);
 				const hashBuffer = await crypto.subtle.digest('SHA-256', data);
