@@ -23,7 +23,7 @@ interface D1Result {
  * @returns 保存された記事の数
  */
 export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promise<number> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const { logError, logInfo } = initLogger(env);
     if (articles.length === 0) {
         logInfo('No articles to save to D1. Skipping.');
         return 0;
@@ -84,7 +84,7 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
  * @returns 取得された記事の配列
  */
 export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: number = 0, whereClause: string = '', bindParams: any[] = []): Promise<ArticleWithEmbedding[]> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const { logError, logInfo } = initLogger(env);
     logInfo(`Fetching articles from D1 with limit ${limit}, offset ${offset}, where: ${whereClause}.`);
     try {
         let query = `SELECT article_id, title, url, published_at, content, embedding FROM articles`;
@@ -128,8 +128,8 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
  * @returns 記事オブジェクト、またはnull
  */
 export async function getArticleByIdFromD1(articleId: string, env: Env): Promise<ArticleWithEmbedding | null> {
-    const { logError, logInfo, logWarning, logDebug } = initLogger(env);
-    logInfo(`Fetching article by ID from D1: ${articleId}.`);
+    const { logError, logWarning, logDebug } = initLogger(env);
+    logDebug(`Fetching article by ID from D1: ${articleId}.`);
     try {
         const { results } = await env.DB.prepare("SELECT article_id, title, url, published_at, content, embedding FROM articles WHERE article_id = ?").bind(articleId).all<any>();
         if (results && results.length > 0) {
@@ -163,7 +163,7 @@ export async function getArticleByIdFromD1(articleId: string, env: Env): Promise
  * @returns 更新が成功したかどうか
  */
 export async function updateArticleEmbeddingInD1(articleId: string, embedding: number[], env: Env): Promise<boolean> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const { logError, logInfo } = initLogger(env);
     logInfo(`Updating embedding for article ${articleId} in D1.`);
     try {
         const { success, error, meta } = await env.DB.prepare("UPDATE articles SET embedding = ? WHERE article_id = ?").bind(JSON.stringify(embedding), articleId).run() as D1Result;
@@ -188,7 +188,7 @@ export async function updateArticleEmbeddingInD1(articleId: string, embedding: n
  * @returns 削除された記事の数
  */
 export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number, embeddingIsNull: boolean = false): Promise<number> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const { logError, logInfo } = initLogger(env);
     logInfo(`Deleting old articles from D1 older than ${new Date(cutoffTimestamp).toISOString()}. Embedding IS NULL: ${embeddingIsNull}`);
     try {
         let selectQuery = `SELECT article_id FROM articles WHERE published_at < ?`;
@@ -254,7 +254,7 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
  * @returns 削除されたログエントリの数
  */
 export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimestamp: number): Promise<number> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const { logError, logInfo } = initLogger(env);
     logInfo(`Cleaning up old logs for user ${userId} in DB older than ${new Date(cutoffTimestamp).toISOString()}.`);
     let totalDeleted = 0;
     try {
@@ -344,7 +344,7 @@ export async function getUnclickedSentArticles(env: Env, userId: string, sinceTi
  * @returns 未処理のクリックログの配列
  */
 export async function getClickLogsForUser(env: Env, userId: string): Promise<{ article_id: string, timestamp: number }[]> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const { logError, logInfo } = initLogger(env);
     logInfo(`Fetching click logs for user ${userId} from DB.`);
     try {
         const { results } = await env.DB.prepare( 
@@ -366,7 +366,7 @@ export async function getClickLogsForUser(env: Env, userId: string): Promise<{ a
  * @returns 削除されたログエントリの数
  */
 export async function deleteProcessedClickLogs(env: Env, userId: string, articleIdsToDelete: string[]): Promise<number> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const { logError, logInfo } = initLogger(env);
     if (articleIdsToDelete.length === 0) {
         logInfo('No click logs to delete. Skipping.');
         return 0;
