@@ -166,7 +166,14 @@ export class ClickLogger extends DurableObject {
             const normalizedEmbedding = norm > 0 ? bVector.map(val => val / norm) : new Array(banditModel.dimension).fill(0);
 
             // userProfile.ts の updateUserProfile 関数を呼び出す
-            await updateUserProfile({ userId: userId, email: '', embedding: normalizedEmbedding }, this.env);
+            // email を保持するために、まず現在のユーザープロファイルを取得する
+            const currentUserProfile = await this.env.DB.prepare(
+                `SELECT email FROM users WHERE user_id = ?`
+            ).bind(userId).first<{ email: string }>();
+
+            const emailToUpdate = currentUserProfile?.email || ''; // 既存のemailを使用、なければ空文字列
+
+            await updateUserProfile({ userId: userId, email: emailToUpdate, embedding: normalizedEmbedding }, this.env);
             this.logInfo(`Successfully updated user profile embedding in D1 for user: ${userId}`);
         } catch (error: unknown) {
             const err = this.normalizeError(error);
