@@ -89,19 +89,13 @@ p {
     pointer-events: none; /* クリックイベントを無効化 */
 }
 
-.radio-label input[type="radio"]:checked {
-    /* input自体は非表示なので、ここでは直接スタイルを適用しない */
-}
-
 .radio-label input[type="radio"]:checked + span {
     /* spanはlabelの子要素なので、labelの背景色を変更する */
     /* ここではボーダーとシャドウのみを適用し、背景色は親のlabelで制御 */
-    border: 2px solid #0056b3; /* 選択時に濃い青のボーダー */
-    box-shadow: 0 0 0 2px #007bff; /* 選択時に青いシャドウ */
+    border: 2px solid #6c757d; /* 選択時にグレーのボーダー */
+    box-shadow: 0 0 0 2px #6c757d; /* 選択時にグレーのシャドウ */
     font-weight: bold;
-    /* spanのpaddingとmarginを調整して、label全体が選択されたように見せる */
-    padding: 8px 15px;
-    margin: -8px -15px;
+    /* spanのpaddingとmarginを削除し、labelのpaddingを利用 */
     border-radius: 15px;
     display: block;
     width: 100%;
@@ -111,19 +105,18 @@ p {
 
 /* 選択されたラベルの背景色を変更 */
 .radio-label.interested-label input[type="radio"]:checked + span {
-    background-color: #218838; /* 選択時の緑色を少し濃く */
+    background-color: #6c757d; /* 選択時はグレー */
 }
 
 .radio-label.not-interested-label input[type="radio"]:checked + span {
-    background-color: #c82333; /* 選択時の赤色を少し濃く */
+    background-color: #6c757d; /* 選択時はグレー */
 }
 
-/* 既存のチェックボックススタイルはラジオボタンには不要なので削除 */
-/* .article-item input[type="checkbox"] {
+.article-item input[type="checkbox"] {
     margin-right: 15px;
     margin-top: 5px;
     transform: scale(1.2);
-} */
+}
 
 .article-content {
     flex-grow: 1;
