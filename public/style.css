@@ -52,39 +52,36 @@ p {
     display: flex;
     align-items: center;
     padding: 8px 15px;
-    border: 1px solid #ccc;
+    border: 1px solid transparent; /* デフォルトで透明なボーダー */
     border-radius: 20px; /* 角を丸くする */
     cursor: pointer;
     transition: all 0.3s ease;
-    background-color: #f0f0f0;
-    color: #555;
+    color: white; /* テキスト色を白に */
     font-size: 0.9em;
+    flex-grow: 1; /* 横幅を均等に広げる */
+    justify-content: center; /* テキストを中央揃え */
+}
+
+.interested-label {
+    background-color: #28a745; /* 緑色 */
+}
+
+.not-interested-label {
+    background-color: #dc3545; /* 赤色 */
 }
 
 .radio-label:hover {
-    background-color: #e0e0e0;
-    border-color: #999;
+    opacity: 0.8; /* ホバーで少し透明にする */
 }
 
-.radio-label input[type="radio"] {
-    display: none; /* 元のラジオボタンを非表示にする */
+.radio-label input[type="radio"]:checked {
+    border: 2px solid #0056b3; /* 選択時に濃い青のボーダー */
+    box-shadow: 0 0 0 2px #007bff; /* 選択時に青いシャドウ */
+    opacity: 1;
 }
 
 .radio-label input[type="radio"]:checked + span {
-    background-color: #007bff;
-    color: white;
-    border-color: #007bff;
-    padding: 8px 15px; /* spanにもpaddingを適用してボタン全体が色付くように */
-    border-radius: 20px;
-    margin: -8px -15px; /* paddingを打ち消すためのネガティブマージン */
-    display: block; /* spanをブロック要素にしてpaddingを有効にする */
-}
-
-/* 選択されたラベルのスタイル */
-.radio-label input[type="radio"]:checked {
-    background-color: #007bff;
-    color: white;
-    border-color: #007bff;
+    font-weight: bold;
 }
 
 .radio-label input[type="radio"]:checked + span {

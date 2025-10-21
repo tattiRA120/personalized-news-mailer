@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const interestedLabel = document.createElement('label');
             interestedLabel.htmlFor = `interested-${article.articleId}`;
-            interestedLabel.className = 'radio-label';
+            interestedLabel.className = 'radio-label interested-label';
             interestedLabel.innerHTML = `
                 <input type="radio" id="interested-${article.articleId}" name="interest-${article.articleId}" value="interested">
                 <span>興味あり</span>
@@ -71,7 +71,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const notInterestedLabel = document.createElement('label');
             notInterestedLabel.htmlFor = `not-interested-${article.articleId}`;
-            notInterestedLabel.className = 'radio-label';
+            notInterestedLabel.className = 'radio-label not-interested-label';
             notInterestedLabel.innerHTML = `
                 <input type="radio" id="not-interested-${article.articleId}" name="interest-${article.articleId}" value="not_interested">
                 <span>興味なし</span>
