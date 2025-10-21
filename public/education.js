@@ -81,7 +81,11 @@ document.addEventListener('DOMContentLoaded', () => {
             interestSelection.appendChild(interestedLabel);
             interestSelection.appendChild(notInterestedLabel);
 
-            articleItem.appendChild(articleContent);
+            const articleMainContent = document.createElement('div');
+            articleMainContent.className = 'article-main-content';
+            articleMainContent.appendChild(articleContent);
+
+            articleItem.appendChild(articleMainContent);
             articleItem.appendChild(interestSelection);
 
             articlesListDiv.appendChild(articleItem);
