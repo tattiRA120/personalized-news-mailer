@@ -155,7 +155,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await response.json();
 
             if (response.ok) {
-                messageElement.textContent = result.message || '選択結果が送信されました。';
+                let displayMessage = result.message || '選択結果が送信されました。';
+                // education.htmlでは不要な部分を削除
+                if (displayMessage.includes('埋め込み生成が必要な記事は非同期で処理されます。')) {
+                    displayMessage = displayMessage.replace('埋め込み生成が必要な記事は非同期で処理されます。', '').trim();
+                }
+                messageElement.textContent = displayMessage;
                 messageElement.className = '';
             } else {
                 throw new Error(result.message || `HTTP error! status: ${response.status}`);
