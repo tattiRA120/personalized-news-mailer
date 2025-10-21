@@ -39,7 +39,7 @@ p {
     padding: 15px;
     margin-bottom: 15px;
     display: flex;
-    align-items: flex-start;
+    flex-direction: column; /* 記事コンテンツと興味選択ボタンを縦に並べる */
 }
 
 .interest-selection {
@@ -76,16 +76,20 @@ p {
     opacity: 0.8; /* ホバーで少し透明にする */
 }
 
+.radio-label input[type="radio"] {
+    position: absolute; /* 絶対配置 */
+    opacity: 0; /* 透明にして非表示 */
+    width: 0;
+    height: 0;
+    pointer-events: none; /* クリックイベントを無効化 */
+}
+
 .radio-label input[type="radio"]:checked + span {
     border: 2px solid #0056b3; /* 選択時に濃い青のボーダー */
     box-shadow: 0 0 0 2px #007bff; /* 選択時に青いシャドウ */
     opacity: 1;
     font-weight: bold;
     /* 背景色とテキスト色は既に.interested-label/.not-interested-labelで設定されているため、ここでは変更しない */
-}
-
-.radio-label input[type="radio"]:checked + span {
-    font-weight: bold;
 }
 
 /* 既存のチェックボックススタイルはラジオボタンには不要なので削除 */
