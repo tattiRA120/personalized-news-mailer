@@ -60,29 +60,25 @@ document.addEventListener('DOMContentLoaded', () => {
             const interestSelection = document.createElement('div');
             interestSelection.className = 'interest-selection';
 
-            const interestedInput = document.createElement('input');
-            interestedInput.type = 'radio';
-            interestedInput.id = `interested-${article.articleId}`;
-            interestedInput.name = `interest-${article.articleId}`;
-            interestedInput.value = 'interested';
-            interestedInput.addEventListener('change', checkAllArticlesSelected);
             const interestedLabel = document.createElement('label');
             interestedLabel.htmlFor = `interested-${article.articleId}`;
-            interestedLabel.textContent = '興味あり';
+            interestedLabel.className = 'radio-label';
+            interestedLabel.innerHTML = `
+                <input type="radio" id="interested-${article.articleId}" name="interest-${article.articleId}" value="interested">
+                <span>興味あり</span>
+            `;
+            interestedLabel.querySelector('input').addEventListener('change', checkAllArticlesSelected);
 
-            const notInterestedInput = document.createElement('input');
-            notInterestedInput.type = 'radio';
-            notInterestedInput.id = `not-interested-${article.articleId}`;
-            notInterestedInput.name = `interest-${article.articleId}`;
-            notInterestedInput.value = 'not_interested';
-            notInterestedInput.addEventListener('change', checkAllArticlesSelected);
             const notInterestedLabel = document.createElement('label');
             notInterestedLabel.htmlFor = `not-interested-${article.articleId}`;
-            notInterestedLabel.textContent = '興味なし';
+            notInterestedLabel.className = 'radio-label';
+            notInterestedLabel.innerHTML = `
+                <input type="radio" id="not-interested-${article.articleId}" name="interest-${article.articleId}" value="not_interested">
+                <span>興味なし</span>
+            `;
+            notInterestedLabel.querySelector('input').addEventListener('change', checkAllArticlesSelected);
 
-            interestSelection.appendChild(interestedInput);
             interestSelection.appendChild(interestedLabel);
-            interestSelection.appendChild(notInterestedInput);
             interestSelection.appendChild(notInterestedLabel);
 
             articleItem.appendChild(articleContent);
