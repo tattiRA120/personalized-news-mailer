@@ -23,7 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             const articles = await response.json();
             displayArticles(articles);
-            submitButton.disabled = false; // 記事が読み込まれたらボタンを有効化
+            submitButton.disabled = false; // 記事が読み込まれたらボタンを常に有効化
         } catch (error) {
             console.error('Error fetching dissimilar articles:', error);
             articlesListDiv.innerHTML = '<p class="error">記事の読み込みに失敗しました。</p>';
@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <input type="radio" id="interested-${article.articleId}" name="interest-${article.articleId}" value="interested">
                 <span>興味あり</span>
             `;
-            interestedLabel.querySelector('input').addEventListener('change', checkAllArticlesSelected);
+            interestedLabel.querySelector('input').addEventListener('change', handleInterestChange);
 
             const notInterestedLabel = document.createElement('label');
             notInterestedLabel.htmlFor = `not-interested-${article.articleId}`;
@@ -76,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <input type="radio" id="not-interested-${article.articleId}" name="interest-${article.articleId}" value="not_interested">
                 <span>興味なし</span>
             `;
-            notInterestedLabel.querySelector('input').addEventListener('change', checkAllArticlesSelected);
+            notInterestedLabel.querySelector('input').addEventListener('change', handleInterestChange);
 
             interestSelection.appendChild(interestedLabel);
             interestSelection.appendChild(notInterestedLabel);
@@ -92,11 +92,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // すべての記事が選択されたかチェックする関数
-    function checkAllArticlesSelected() {
-        const totalArticles = articlesListDiv.querySelectorAll('.article-item').length;
-        const selectedArticleGroups = articlesListDiv.querySelectorAll('.article-item .interest-selection input:checked').length;
-        submitButton.disabled = totalArticles !== selectedArticleGroups;
+    // 興味選択が変更されたときのハンドラ
+    function handleInterestChange(event) {
+        const selectedRadio = event.target;
+        const radioGroupName = selectedRadio.name;
+        const articleItem = selectedRadio.closest('.article-item');
+
+        // 同じグループのすべてのラジオボタンのラベルを取得
+        const allRadiosInGroup = articleItem.querySelectorAll(`input[name="${radioGroupName}"]`);
+        allRadiosInGroup.forEach(radio => {
+            const label = radio.closest('.radio-label');
+            if (radio.checked) {
+                // 選択されたボタンはデフォルトの色を維持
+                label.classList.remove('deselected');
+            } else {
+                // 選択されていないボタンはグレーにする
+                label.classList.add('deselected');
+            }
+        });
     }
 
     // 選択された記事をWorkerに送信する関数

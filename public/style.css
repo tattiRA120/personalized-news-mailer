@@ -77,6 +77,10 @@ p {
     background-color: #dc3545; /* 赤色 */
 }
 
+.radio-label.deselected {
+    background-color: #6c757d; /* 選択されていないボタンはグレー */
+}
+
 .radio-label:hover {
     opacity: 0.8; /* ホバーで少し透明にする */
 }
@@ -92,8 +96,8 @@ p {
 .radio-label input[type="radio"]:checked + span {
     /* spanはlabelの子要素なので、labelの背景色を変更する */
     /* ここではボーダーとシャドウのみを適用し、背景色は親のlabelで制御 */
-    border: 2px solid #6c757d; /* 選択時にグレーのボーダー */
-    box-shadow: 0 0 0 2px #6c757d; /* 選択時にグレーのシャドウ */
+    border: 2px solid #0056b3; /* 選択時に濃い青のボーダー */
+    box-shadow: 0 0 0 2px #007bff; /* 選択時に青いシャドウ */
     font-weight: bold;
     /* spanのpaddingとmarginを削除し、labelのpaddingを利用 */
     border-radius: 15px;
@@ -105,14 +109,6 @@ p {
     box-sizing: border-box;
 }
 
-/* 選択されたラベルの背景色を変更 */
-.radio-label.interested-label input[type="radio"]:checked + span {
-    background-color: #6c757d; /* 選択時はグレー */
-}
-
-.radio-label.not-interested-label input[type="radio"]:checked + span {
-    background-color: #6c757d; /* 選択時はグレー */
-}
 
 .article-item input[type="checkbox"] {
     margin-right: 15px;
