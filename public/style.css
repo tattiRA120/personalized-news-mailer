@@ -44,6 +44,8 @@ p {
 
 .interest-selection {
     display: flex;
+    flex-direction: row; /* 明示的に横並びを指定 */
+    flex-wrap: wrap; /* スペースが足りない場合に折り返す */
     gap: 10px; /* ラジオボタン間のスペース */
     margin-top: 10px;
 }
@@ -74,14 +76,12 @@ p {
     opacity: 0.8; /* ホバーで少し透明にする */
 }
 
-.radio-label input[type="radio"]:checked {
+.radio-label input[type="radio"]:checked + span {
     border: 2px solid #0056b3; /* 選択時に濃い青のボーダー */
     box-shadow: 0 0 0 2px #007bff; /* 選択時に青いシャドウ */
     opacity: 1;
-}
-
-.radio-label input[type="radio"]:checked + span {
     font-weight: bold;
+    /* 背景色とテキスト色は既に.interested-label/.not-interested-labelで設定されているため、ここでは変更しない */
 }
 
 .radio-label input[type="radio"]:checked + span {
