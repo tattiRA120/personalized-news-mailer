@@ -3,18 +3,23 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>教育プログラム - 類似度の低い記事</title>
-    <link rel="stylesheet" href="/public/style.css">
+    <title>教育プログラム - 興味のある記事を選択してください</title>
+    <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="container">
-        <h1>教育プログラム: 類似度の低い記事</h1>
-        <p>このページでは、互いに内容が異なる記事を組み合わせて表示します。新しい発見があるかもしれません。</p>
-        <div id="articles-container" class="articles-grid">
-            <!-- 記事がここに動的に挿入されます -->
-            <p>記事を読み込み中...</p>
+        <h1>教育プログラム - 興味のある記事を選択してください</h1>
+        <p>このページでは、互いに内容が異なる記事を組み合わせて表示します。あなたの興味関心を理解し、よりパーソナルなニュースをお届けするために利用させていただきます。</p>
+        <div id="articles-list">
+            <!-- 記事リストはJavaScriptでここに表示されます -->
+            <p>記事を読み込んでいます...</p>
         </div>
+        <button id="submit-button" disabled>
+            <span class="button-text">選択した記事を送信</span>
+            <div class="spinner"></div>
+        </button>
+        <p id="message"></p>
     </div>
-    <script src="/public/education.js"></script>
+    <script src="education.js"></script>
 </body>
 </html>
