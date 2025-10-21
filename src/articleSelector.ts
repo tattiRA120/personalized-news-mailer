@@ -3,7 +3,7 @@
 
 import { UserProfile } from './userProfile';
 import { ClickLogger } from './clickLogger';
-import { logError, logInfo, logWarning, logDebug } from './logger';
+import { logError, logInfo, logWarning, logDebug, initLogger } from './logger';
 import { NewsArticle } from './newsCollector';
 import { getArticleByIdFromD1 } from './services/d1Service'; // D1ServiceからgetArticleByIdFromD1をインポート
 import { Env } from './index';
@@ -185,6 +185,83 @@ export async function selectPersonalizedArticles(
     }
 
     logInfo(`Finished personalized article selection. Selected ${selected.length} articles.`, { userId, selectedCount: selected.length });
+    return selected;
+}
+
+/**
+ * D1に保存されている記事の中から、互いに類似度が低い記事を組み合わせて選択します。
+ * @param articles 選択対象となる記事の配列（embeddingを含む）
+ * @param count 選択する記事の数
+ * @param env 環境変数
+ * @returns 選択された記事の配列
+ */
+export async function selectDissimilarArticles(
+    articles: NewsArticle[],
+    count: number,
+    env: Env
+): Promise<NewsArticle[]> {
+    const { logError, logInfo, logWarning, logDebug } = initLogger(env);
+
+    if (articles.length === 0 || count <= 0) {
+        logInfo("No articles or count is zero, returning empty selection for dissimilar articles.", { articleCount: articles.length, count });
+        return [];
+    }
+
+    // embeddingがない記事は除外
+    const articlesWithEmbeddings = articles.filter(article => article.embedding !== undefined && article.embedding.length > 0);
+
+    if (articlesWithEmbeddings.length < count) {
+        logWarning(`Not enough articles with embeddings to select ${count} dissimilar articles. Selecting all available.`, { available: articlesWithEmbeddings.length, requested: count });
+        return articlesWithEmbeddings;
+    }
+
+    logInfo(`Selecting ${count} dissimilar articles from ${articlesWithEmbeddings.length} available articles.`, { availableCount: articlesWithEmbeddings.length, requestedCount: count });
+
+    const selected: NewsArticle[] = [];
+    const remaining = [...articlesWithEmbeddings];
+
+    // 最初の記事をランダムに選択
+    const randomIndex = Math.floor(Math.random() * remaining.length);
+    const firstArticle = remaining.splice(randomIndex, 1)[0];
+    selected.push(firstArticle);
+    logDebug(`Selected first article randomly: "${firstArticle.title}"`, { articleTitle: firstArticle.title });
+
+    // 残りから類似度が低い記事を選択
+    while (selected.length < count && remaining.length > 0) {
+        let bestDissimilarityScore = -Infinity;
+        let bestArticleIndex = -1;
+
+        for (let i = 0; i < remaining.length; i++) {
+            const currentArticle = remaining[i];
+            let maxSimilarityWithSelected = 0;
+
+            for (const selectedArticle of selected) {
+                // embeddingが存在することはフィルタリング済み
+                const similarity = cosineSimilarity(currentArticle.embedding!, selectedArticle.embedding!);
+                maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarity);
+            }
+
+            // スコア = 1 - (選択済みリスト内の各記事とのコサイン類似度の最大値)
+            // 類似度が低いほどスコアが高くなる
+            const dissimilarityScore = 1 - maxSimilarityWithSelected;
+
+            if (dissimilarityScore > bestDissimilarityScore) {
+                bestDissimilarityScore = dissimilarityScore;
+                bestArticleIndex = i;
+            }
+        }
+
+        if (bestArticleIndex !== -1) {
+            const [nextArticle] = remaining.splice(bestArticleIndex, 1);
+            selected.push(nextArticle);
+            logDebug(`Selected article "${nextArticle.title}" with dissimilarity score: ${bestDissimilarityScore.toFixed(4)}`, { articleTitle: nextArticle.title, dissimilarityScore: bestDissimilarityScore });
+        } else {
+            logWarning("Could not find a suitable dissimilar article. Stopping selection.", { selectedCount: selected.length, remainingCount: remaining.length });
+            break;
+        }
+    }
+
+    logInfo(`Finished selecting dissimilar articles. Selected ${selected.length} articles.`, { selectedCount: selected.length });
     return selected;
 }
 

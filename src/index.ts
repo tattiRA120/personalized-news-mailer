@@ -8,6 +8,7 @@ import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding } from './ser
 import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
 import { decodeHtmlEntities } from './utils/htmlDecoder';
+import { selectDissimilarArticles } from './articleSelector';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	DB: D1Database;
@@ -566,7 +567,36 @@ export default {
                 });
             } catch (error) {
                 logError('Debug: Error during test email delivery:', error, { requestUrl: request.url });
-                return new Response('Internal Server Error during test email delivery', { status: 500 });
+				return new Response('Internal Server Error during test email delivery', { status: 500 });
+			}
+        } else if (request.method === 'GET' && path === '/get-dissimilar-articles') {
+            logDebug('Request received for dissimilar articles for education program');
+            try {
+                // D1からembeddingを持つすべての記事を取得
+                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, 'embedding IS NOT NULL');
+                logDebug(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1.`, { count: allArticlesWithEmbeddings.length });
+
+                // 類似度の低い記事を20件選択
+                const dissimilarArticles = await selectDissimilarArticles(allArticlesWithEmbeddings, 20, env);
+                logDebug(`Selected ${dissimilarArticles.length} dissimilar articles.`, { count: dissimilarArticles.length });
+
+                // フロントエンドに返すために必要な情報のみを抽出
+                const articlesForResponse = dissimilarArticles.map((article: NewsArticle) => ({ // NewsArticle 型を明示的に指定
+                    articleId: article.articleId,
+                    title: article.title,
+                    summary: article.summary,
+                    link: article.link,
+                    sourceName: article.sourceName,
+                }));
+
+                return new Response(JSON.stringify(articlesForResponse), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                logError('Error fetching dissimilar articles:', error, { requestUrl: request.url });
+                return new Response('Error fetching dissimilar articles', { status: 500 });
             }
         }
 
