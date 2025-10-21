@@ -148,7 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 body: JSON.stringify({
                     userId: userId,
-                    responses: responses, // 記事データの配列を送信
+                    selectedArticles: responses, // 記事データの配列を送信 (キー名を変更)
                 }),
             });
 
