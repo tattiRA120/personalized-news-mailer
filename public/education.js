@@ -45,11 +45,6 @@ document.addEventListener('DOMContentLoaded', () => {
             articleItem.className = 'article-item';
             articleItem.dataset.link = article.link; // 記事のリンクをdata属性として追加
 
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.value = article.articleId; // 記事IDとして使用
-            checkbox.id = `article-${article.articleId}`; // 一意なIDを設定
-
             const articleContent = document.createElement('div');
             articleContent.className = 'article-content';
 
@@ -62,59 +57,85 @@ document.addEventListener('DOMContentLoaded', () => {
             articleContent.appendChild(title);
             articleContent.appendChild(summary);
 
-            articleItem.appendChild(checkbox);
+            const interestSelection = document.createElement('div');
+            interestSelection.className = 'interest-selection';
+
+            const interestedInput = document.createElement('input');
+            interestedInput.type = 'radio';
+            interestedInput.id = `interested-${article.articleId}`;
+            interestedInput.name = `interest-${article.articleId}`;
+            interestedInput.value = 'interested';
+            interestedInput.addEventListener('change', checkAllArticlesSelected);
+            const interestedLabel = document.createElement('label');
+            interestedLabel.htmlFor = `interested-${article.articleId}`;
+            interestedLabel.textContent = '興味あり';
+
+            const notInterestedInput = document.createElement('input');
+            notInterestedInput.type = 'radio';
+            notInterestedInput.id = `not-interested-${article.articleId}`;
+            notInterestedInput.name = `interest-${article.articleId}`;
+            notInterestedInput.value = 'not_interested';
+            notInterestedInput.addEventListener('change', checkAllArticlesSelected);
+            const notInterestedLabel = document.createElement('label');
+            notInterestedLabel.htmlFor = `not-interested-${article.articleId}`;
+            notInterestedLabel.textContent = '興味なし';
+
+            interestSelection.appendChild(interestedInput);
+            interestSelection.appendChild(interestedLabel);
+            interestSelection.appendChild(notInterestedInput);
+            interestSelection.appendChild(notInterestedLabel);
+
             articleItem.appendChild(articleContent);
+            articleItem.appendChild(interestSelection);
 
             articlesListDiv.appendChild(articleItem);
         });
     }
 
+    // すべての記事が選択されたかチェックする関数
+    function checkAllArticlesSelected() {
+        const totalArticles = articlesListDiv.querySelectorAll('.article-item').length;
+        const selectedArticleGroups = articlesListDiv.querySelectorAll('.article-item .interest-selection input:checked').length;
+        submitButton.disabled = totalArticles !== selectedArticleGroups;
+    }
+
     // 選択された記事をWorkerに送信する関数
-    async function submitSelectedArticles() {
-        // 送信開始時にボタンを無効化し、ローディングアニメーションを表示
+    async function submitInterestResponses() {
         submitButton.disabled = true;
         submitButton.classList.add('loading');
         messageElement.textContent = '送信中...';
-        messageElement.className = ''; // メッセージをリセット
+        messageElement.className = '';
 
-        const selectedArticlesData = [];
-        articlesListDiv.querySelectorAll('.article-item input[type="checkbox"]:checked').forEach(checkbox => {
-            const articleItem = checkbox.closest('.article-item');
-            const titleElement = articleItem.querySelector('h3');
-            const summaryElement = articleItem.querySelector('p');
-            const articleLink = articleItem.dataset.link; // data属性からリンクを取得
+        const responses = [];
+        articlesListDiv.querySelectorAll('.article-item').forEach(articleItem => {
+            const articleId = articleItem.querySelector('input[type="radio"]').name.split('-')[1];
+            const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
 
-            selectedArticlesData.push({
-                articleId: checkbox.value,
-                title: titleElement ? titleElement.textContent : '',
-                summary: summaryElement ? summaryElement.textContent : '',
-                link: articleLink, // リンクも送信データに含める
-            });
-
-            // 選択された記事を新しいタブで開く
-            if (articleLink) {
-                window.open(articleLink, '_blank');
+            if (selectedInterest) {
+                responses.push({
+                    articleId: articleId,
+                    interest: selectedInterest.value,
+                });
             }
         });
 
-        if (selectedArticlesData.length === 0) {
+        if (responses.length === 0) {
             messageElement.textContent = '記事を選択してください。';
             messageElement.className = 'error';
-            submitButton.disabled = false; // 記事が選択されていない場合はボタンを再度有効化
-            submitButton.classList.remove('loading'); // ローディングを停止
+            submitButton.disabled = false;
+            submitButton.classList.remove('loading');
             return;
         }
 
         try {
-            // Workerの新しいエンドポイントに選択結果を送信
-            const response = await fetch('/submit-interests', {
+            const response = await fetch('/submit-interests', { // エンドポイントは既存のものを利用
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
                     userId: userId,
-                    selectedArticles: selectedArticlesData, // 記事データの配列を送信
+                    responses: responses, // 記事データの配列を送信
                 }),
             });
 
@@ -122,30 +143,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (response.ok) {
                 messageElement.textContent = result.message || '選択結果が送信されました。';
-                messageElement.className = ''; // 成功時はエラークラスを削除
-                // submitButton.disabled = true; // 送信後はボタンを無効化 (成功時は再送信不要のため)
+                messageElement.className = '';
             } else {
                 throw new Error(result.message || `HTTP error! status: ${response.status}`);
             }
         } catch (error) {
-            console.error('Error submitting selected articles:', error);
+            console.error('Error submitting interest responses:', error);
             messageElement.textContent = `送信に失敗しました: ${error.message}`;
             messageElement.className = 'error';
         } finally {
-            // 処理完了後にローディングアニメーションを停止し、ボタンを有効化
             submitButton.classList.remove('loading');
-            // エラー時のみボタンを再有効化。成功時は無効のまま。
             if (messageElement.className === 'error') {
                 submitButton.disabled = false;
             } else {
-                submitButton.disabled = true; // 成功時はボタンを無効化
+                submitButton.disabled = true;
             }
         }
     }
 
-    // 送信ボタンのイベントリスナー
-    submitButton.addEventListener('click', submitSelectedArticles);
+    submitButton.addEventListener('click', submitInterestResponses);
 
-    // ページロード時に記事リストを取得
     fetchDissimilarArticles();
 });
