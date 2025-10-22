@@ -241,7 +241,7 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
         logInfo(`Finished deleting old articles from D1. Total deleted records across all tables: ${totalDeleted}.`, { totalDeleted });
         return totalDeleted;
     } catch (error) {
-        logError('Error during D1 article cleanup:', error);
+        logError('Error during D1 article cleanup:', error, { errorDetails: error });
         return 0;
     }
 }
@@ -271,7 +271,7 @@ export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimesta
         logInfo(`Finished cleanup of old logs for user ${userId} in DB. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
         return totalDeleted;
     } catch (error) {
-        logError(`Error during cleanup of old user logs for user ${userId}:`, error);
+        logError(`Error during cleanup of old user logs for user ${userId}:`, error, { userId, errorDetails: error });
         return totalDeleted;
     }
 }
