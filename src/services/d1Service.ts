@@ -116,7 +116,7 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
         logInfo(`Fetched ${articles.length} articles from D1.`, { count: articles.length });
         return articles;
     } catch (error) {
-        logError('Error fetching articles from D1:', error);
+        logError('Error fetching articles from D1:', error, { errorDetails: error });
         return [];
     }
 }
@@ -150,7 +150,7 @@ export async function getArticleByIdFromD1(articleId: string, env: Env): Promise
         logWarning(`Article with ID ${articleId} not found in D1.`, { articleId });
         return null;
     } catch (error) {
-        logError(`Error fetching article by ID ${articleId} from D1:`, error);
+        logError(`Error fetching article by ID ${articleId} from D1:`, error, { articleId, errorDetails: error });
         return null;
     }
 }
