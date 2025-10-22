@@ -116,7 +116,7 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
         logInfo(`Fetched ${articles.length} articles from D1.`, { count: articles.length });
         return articles;
     } catch (error) {
-        logError('Error fetching articles from D1:', error, { errorDetails: error });
+        logError('Error fetching articles from D1:', error, { errorDetails: error instanceof Error ? error.message : error });
         return [];
     }
 }
@@ -150,7 +150,7 @@ export async function getArticleByIdFromD1(articleId: string, env: Env): Promise
         logWarning(`Article with ID ${articleId} not found in D1.`, { articleId });
         return null;
     } catch (error) {
-        logError(`Error fetching article by ID ${articleId} from D1:`, error, { articleId, errorDetails: error });
+        logError(`Error fetching article by ID ${articleId} from D1:`, error, { articleId, errorDetails: error instanceof Error ? error.message : error });
         return null;
     }
 }
@@ -241,7 +241,7 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
         logInfo(`Finished deleting old articles from D1. Total deleted records across all tables: ${totalDeleted}.`, { totalDeleted });
         return totalDeleted;
     } catch (error) {
-        logError('Error during D1 article cleanup:', error, { errorDetails: error });
+        logError('Error during D1 article cleanup:', error, { errorDetails: error instanceof Error ? error.message : error });
         return 0;
     }
 }
@@ -271,7 +271,7 @@ export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimesta
         logInfo(`Finished cleanup of old logs for user ${userId} in DB. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
         return totalDeleted;
     } catch (error) {
-        logError(`Error during cleanup of old user logs for user ${userId}:`, error, { userId, errorDetails: error });
+        logError(`Error during cleanup of old user logs for user ${userId}:`, error, { userId, errorDetails: error instanceof Error ? error.message : error });
         return totalDeleted;
     }
 }
