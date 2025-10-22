@@ -569,6 +569,52 @@ export default {
                 logError('Debug: Error during test email delivery:', error, { requestUrl: request.url });
 				return new Response('Internal Server Error during test email delivery', { status: 500 });
 			}
+        } else if (request.method === 'POST' && path === '/debug/generate-oauth-url') {
+            logDebug('Debug: Generate OAuth URL request received');
+            const debugApiKey = request.headers.get('X-Debug-Key');
+            if (debugApiKey !== env.DEBUG_API_KEY) {
+                logWarning('Debug: Unauthorized access attempt to /debug/generate-oauth-url', { providedKey: debugApiKey });
+                return new Response('Unauthorized', { status: 401 });
+            }
+            try {
+                const { email } = await request.json() as { email: string };
+                if (!email) {
+                    logWarning('Debug: Generate OAuth URL failed: Missing email in request body.');
+                    return new Response('Missing email', { status: 400 });
+                }
+
+                const encoder = new TextEncoder();
+                const data = encoder.encode(email);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const userId = Array.from(new Uint8Array(hashBuffer))
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('');
+
+                if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) {
+                    logError('Missing Google OAuth environment variables for consent URL generation.', null);
+                    return new Response('Server configuration error', { status: 500 });
+                }
+
+                const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+                authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
+                authUrl.searchParams.set('redirect_uri', env.GOOGLE_REDIRECT_URI);
+                authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.send');
+                authUrl.searchParams.set('access_type', 'offline');
+                authUrl.searchParams.set('prompt', 'consent');
+                authUrl.searchParams.set('response_type', 'code');
+                authUrl.searchParams.set('state', userId);
+
+                logDebug(`Debug: Generated OAuth consent URL for user ${userId}`, { userId, authUrl: authUrl.toString() });
+
+                return new Response(JSON.stringify({ message: 'OAuth consent URL generated.', authUrl: authUrl.toString() }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' },
+                });
+
+            } catch (error) {
+                logError('Debug: Error during OAuth URL generation:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error during OAuth URL generation', { status: 500 });
+            }
         } else if (request.method === 'GET' && path === '/get-dissimilar-articles') {
             logDebug('Request received for dissimilar articles for education program');
             try {
