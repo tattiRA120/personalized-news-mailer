@@ -220,7 +220,7 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
                     logInfo(`Deleted ${meta?.changes || 0} entries from ${table} for old articles.`, { table, deletedCount: meta?.changes || 0 });
                     totalDeleted += meta?.changes || 0;
                 } else {
-                    logError(`Failed to delete entries from ${table} for old articles: ${error}`, null, { table, error });
+                    logError(`Failed to delete entries from ${table} for old articles:`, error, { table });
                 }
             }
         }
@@ -234,7 +234,7 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
                 logInfo(`Successfully deleted ${meta?.changes || 0} old articles from 'articles' table.`, { deletedCount: meta?.changes || 0 });
                 totalDeleted += meta?.changes || 0;
             } else {
-                logError(`Failed to delete old articles from 'articles' table: ${error}`, null, { error });
+                logError(`Failed to delete old articles from 'articles' table:`, error, { error });
             }
         }
 

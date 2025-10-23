@@ -149,26 +149,23 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     // 記事の埋め込みベクトルに鮮度情報を追加
                     const now = Date.now();
-                    const articlesWithExtendedEmbeddings = await Promise.all(
-                        articlesWithEmbeddings
-                            .filter(article => article.embedding && article.embedding.length === OPENAI_EMBEDDING_DIMENSION)
-                            .map(async (article) => {
-                                const articleData = await getArticleByIdFromD1(article.articleId, env); // D1Serviceの関数を直接呼び出す
-                                let normalizedAge = 0; // デフォルト値
+                    const articlesWithExtendedEmbeddings = articlesWithEmbeddings
+                        .filter(article => article.embedding && article.embedding.length === OPENAI_EMBEDDING_DIMENSION)
+                        .map((article) => {
+                            let normalizedAge = 0; // デフォルト値
 
-                                if (articleData && articleData.publishedAt) {
-                                    const ageInHours = (now - new Date(articleData.publishedAt).getTime()) / (1000 * 60 * 60);
-                                    normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
-                                } else {
-                                    logWarning(`Could not find publishedAt for article ${article.articleId}. Using default freshness.`, { articleId: article.articleId });
-                                }
+                            if (article.publishedAt) { // 既存のarticleオブジェクトからpublishedAtを取得
+                                const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
+                                normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
+                            } else {
+                                logWarning(`Could not find publishedAt for article ${article.articleId}. Using default freshness.`, { articleId: article.articleId });
+                            }
 
-                                return {
-                                    ...article,
-                                    embedding: [...article.embedding!, normalizedAge], // 鮮度情報を追加
-                                };
-                            })
-                    );
+                            return {
+                                ...article,
+                                embedding: [...article.embedding!, normalizedAge], // 鮮度情報を追加
+                            };
+                        });
 
                     // embeddingが存在し、かつ次元がEXTENDED_EMBEDDING_DIMENSIONである記事のみを対象とする
                     const articlesWithFeatures = articlesWithExtendedEmbeddings
