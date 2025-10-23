@@ -2,7 +2,7 @@ export const NEWS_RSS_URLS: string[] = [
     // マスメディア系
     'https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com&ceid=JP:ja&hl=ja&gl=JP', // Reuters News via Google News
     'https://assets.wor.jp/rss/rdf/bloomberg/top.rdf', // Bloomberg via RSS愛好会
-    'https://www.nhk.or.jp/rss/news/cat0.xml', // NHKニュース
+    'https://news.web.nhk/n-data/conf/na/rss/cat0.xml', // NHKニュース
     // ネットメディア(テック・ガジェット系)
     'https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml', // ITmedia NEWS
     'https://rss.itmedia.co.jp/rss/2.0/aiplus.xml', // ITmedia AI＋
@@ -34,7 +34,7 @@ export const RSS_FETCH_CHUNK_SIZE = 10; // RSSフィード取得時のチャン�
 export const NEWS_SOURCE_LOGOS: { [key: string]: string } = {
     'Reuters': 'https://cdn.freebiesupply.com/logos/large/2x/reuters-6-logo-png-transparent.png',
     'Bloomberg': 'https://images.ctfassets.net/lr0atmu04u9z/1PGS2NP94z5RP7L61GzIbm/85665ad1eadfd9c965448ad67097aba0/new_bloomberg_logosvg.png',
-    'NHK': 'https://www3.nhk.or.jp/news/img/fb_futa16_600px.png',
+    'NHK': 'https://news.web.nhk/assets/ogp/nhk-one-news.png',
     'ITmedia': 'https://is3-ssl.mzstatic.com/image/thumb/Podcasts115/v4/bd/0a/43/bd0a4322-3dce-7ae3-12fa-2625bd554cd1/mza_12590752468951394902.png/500x500bb.jpg',
     'ITmedia AI＋': 'https://is3-ssl.mzstatic.com/image/thumb/Podcasts115/v4/bd/0a/43/bd0a4322-3dce-7ae3-12fa-2625bd554cd1/mza_12590752468951394902.png/500x500bb.jpg',
     'ITmedia PC USER': 'https://is3-ssl.mzstatic.com/image/thumb/Podcasts115/v4/bd/0a/43/bd0a4322-3dce-7ae3-12fa-2625bd554cd1/mza_12590752468951394902.png/500x500bb.jpg',
