@@ -298,7 +298,7 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                     sourceName = 'Zenn';
                 } else if (sourceName.includes('qiita.com')) {
                     sourceName = 'Qiita';
-                } else if (sourceName.includes('nhk.or.jp')) {
+                } else if (sourceName.includes('news.web.nhk')) {
                     sourceName = 'NHK';
                 } else if (sourceName.includes('itmedia.co.jp')) {
                     sourceName = 'ITmedia';
