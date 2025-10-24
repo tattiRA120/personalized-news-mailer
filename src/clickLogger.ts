@@ -308,25 +308,19 @@ export class ClickLogger extends DurableObject {
                     return new Response('Article embedding not found', { status: 404 });
                 }
 
-                let embedding = JSON.parse(articleResult.embedding) as number[];
+                let embedding: number[] | undefined;
 
-                // 3. Update the bandit model
-                let banditModel = this.inMemoryModels.get(userId);
-                if (!banditModel) {
-                    this.logWarning(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
-                    banditModel = this.initializeNewBanditModel(userId);
-                }
+                // 2.1. sent_articles テーブルから embedding を取得
+                const sentArticleResult = await this.env.DB.prepare(
+                    `SELECT embedding FROM sent_articles WHERE user_id = ? AND article_id = ? ORDER BY timestamp DESC LIMIT 1`
+                ).bind(userId, articleId).first<{ embedding: string }>();
 
-                // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理
-                if (embedding.length !== banditModel.dimension) {
-                    this.logWarning(`Embedding dimension mismatch for article ${articleId} from sent_articles. Attempting to re-fetch and extend.`, {
-                        userId,
-                        articleId,
-                        sentArticleEmbeddingLength: embedding.length,
-                        modelDimension: banditModel.dimension
-                    });
-
-                    // D1のarticlesテーブルから元のembeddingを再取得
+                if (sentArticleResult && sentArticleResult.embedding) {
+                    embedding = JSON.parse(sentArticleResult.embedding) as number[];
+                    this.logDebug(`Found embedding in sent_articles for article ${articleId} for user ${userId}.`, { userId, articleId });
+                } else {
+                    // 2.2. sent_articles にない場合、articles テーブルから embedding を取得
+                    this.logDebug(`Embedding not found in sent_articles for article ${articleId} for user ${userId}. Attempting to fetch from articles table.`, { userId, articleId });
                     const originalArticle = await this.env.DB.prepare(
                         `SELECT embedding, published_at FROM articles WHERE article_id = ?`
                     ).bind(articleId).first<{ embedding: string, published_at: string }>();
@@ -337,20 +331,40 @@ export class ClickLogger extends DurableObject {
                         const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
                         const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
                         embedding = [...originalEmbedding, normalizedAge]; // 鮮度情報を付加して拡張
-
-                        this.logDebug(`Successfully re-fetched and extended embedding for article ${articleId}. New dimension: ${embedding.length}`, { userId, articleId, newEmbeddingLength: embedding.length });
+                        this.logDebug(`Successfully fetched and extended embedding from articles table for article ${articleId}. New dimension: ${embedding.length}`, { userId, articleId, newEmbeddingLength: embedding.length });
                     } else {
-                        this.logError(`Failed to re-fetch original embedding for article ${articleId} from articles table. Cannot update bandit model.`, null, { userId, articleId });
-                        return new Response('Failed to re-fetch original embedding', { status: 500 });
+                        this.logWarning(`Could not find embedding for article ${articleId} for user ${userId} in either sent_articles or articles table. Cannot update bandit model.`, { userId, articleId });
+                        return new Response('Article embedding not found in any table', { status: 404 });
                     }
+                }
+
+                // 3. Update the bandit model
+                let banditModel = this.inMemoryModels.get(userId);
+                if (!banditModel) {
+                    this.logWarning(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
+                    banditModel = this.initializeNewBanditModel(userId);
+                }
+
+                // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理 (既に上記で処理済みだが念のため)
+                if (embedding.length !== banditModel.dimension) {
+                    this.logError(`Final embedding dimension mismatch for article ${articleId}. Expected ${banditModel.dimension}, got ${embedding.length}. Cannot update bandit model.`, null, {
+                        userId,
+                        articleId,
+                        embeddingLength: embedding.length,
+                        modelDimension: banditModel.dimension
+                    });
+                    return new Response('Embedding dimension mismatch', { status: 500 });
                 }
 
                 await this.updateBanditModel(banditModel, embedding, reward, userId);
                 this.dirty = true;
                 this.logInfo(`Successfully updated bandit model from feedback for article ${articleId} for user ${userId}`, { userId, articleId, feedback, reward });
                 
-                // 4. (Optional) Log the feedback to a new table or extend click_logs
-                // For now, we skip this step.
+                // 4. Log the feedback to education_logs table
+                await this.env.DB.prepare(
+                    `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
+                ).bind(userId, articleId, timestamp, feedback).run();
+                this.logInfo(`Logged feedback to education_logs for user ${userId}, article ${articleId}, feedback: ${feedback}`);
 
                 return new Response('Feedback logged and model updated', { status: 200 });
 

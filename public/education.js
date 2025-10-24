@@ -119,26 +119,17 @@ document.addEventListener('DOMContentLoaded', () => {
         messageElement.textContent = '送信中...';
         messageElement.className = '';
 
-        const responses = [];
+        const feedbackPromises = [];
         articlesListDiv.querySelectorAll('.article-item').forEach(articleItem => {
             const articleId = articleItem.querySelector('input[type="radio"]').name.split('-')[1];
             const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
-            const titleElement = articleItem.querySelector('.article-content h3');
-            const summaryElement = articleItem.querySelector('.article-content p');
-            const articleLink = articleItem.dataset.link;
-
             if (selectedInterest) {
-                responses.push({
-                    articleId: articleId,
-                    interest: selectedInterest.value,
-                    title: titleElement ? titleElement.textContent : '',
-                    summary: summaryElement ? summaryElement.textContent : '',
-                    link: articleLink || '',
-                });
+                const feedbackUrl = `/track-feedback?userId=${userId}&articleId=${encodeURIComponent(articleId)}&feedback=${selectedInterest.value}`;
+                feedbackPromises.push(fetch(feedbackUrl, { method: 'GET' }));
             }
         });
 
-        if (responses.length === 0) {
+        if (feedbackPromises.length === 0) {
             messageElement.textContent = '記事を選択してください。';
             messageElement.className = 'error';
             submitButton.disabled = false;
@@ -147,29 +138,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            const response = await fetch('/submit-education-interests', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    userId: userId,
-                    selectedArticles: responses, // 記事データの配列を送信
-                }),
-            });
+            const responses = await Promise.all(feedbackPromises);
+            const allOk = responses.every(res => res.ok);
 
-            const result = await response.json();
-
-            if (response.ok) {
-                let displayMessage = result.message || '選択結果が送信されました。';
-                // education.htmlでは不要な部分を削除
-                if (displayMessage.includes('埋め込み生成が必要な記事は非同期で処理されます。')) {
-                    displayMessage = displayMessage.replace('埋め込み生成が必要な記事は非同期で処理されます。', '').trim();
-                }
-                messageElement.textContent = displayMessage;
+            if (allOk) {
+                messageElement.textContent = '選択結果が送信されました。';
                 messageElement.className = '';
             } else {
-                throw new Error(result.message || `HTTP error! status: ${response.status}`);
+                const failedResponses = responses.filter(res => !res.ok);
+                const errorMessages = await Promise.all(failedResponses.map(res => res.text()));
+                throw new Error(`一部のフィードバックの送信に失敗しました: ${errorMessages.join(', ')}`);
             }
         } catch (error) {
             console.error('Error submitting interest responses:', error);
