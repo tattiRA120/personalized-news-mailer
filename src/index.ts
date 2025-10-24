@@ -312,9 +312,9 @@ export default {
 			}
 		}
 
-		// --- Submit Interests Handler ---
+		// --- Submit Interests Handler (for public/script.js - existing functionality) ---
 		if (request.method === 'POST' && path === '/submit-interests') {
-			logDebug('Submit interests request received');
+			logDebug('Submit interests request received from public/script.js');
 			try {
 				const { userId, selectedArticles } = await request.json() as { userId: string, selectedArticles: NewsArticle[] };
 
@@ -333,7 +333,7 @@ export default {
 					});
 				}
 
-				logDebug(`User education articles received for user ${userId}.`, { userId, selectedArticleCount: selectedArticles.length });
+				logDebug(`User selected articles received for user ${userId} from public/script.js.`, { userId, selectedArticleCount: selectedArticles.length });
 
 				const articlesNeedingEmbedding: NewsArticle[] = [];
 				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
@@ -388,7 +388,14 @@ export default {
                             new Request(`${env.WORKER_BASE_URL}/learn-from-education`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ userId: userId, selectedArticles: batch }),
+                                body: JSON.stringify({
+                                    userId: userId,
+                                    selectedArticles: batch.map(article => ({
+                                        articleId: article.articleId,
+                                        embedding: article.embedding!,
+                                        reward: 1.0, // public/script.js からは常に興味ありとして報酬1.0
+                                    })),
+                                }),
                             })
                         );
 
@@ -410,6 +417,146 @@ export default {
 
 			} catch (error) {
 				logError('Error submitting interests:', error, { requestUrl: request.url });
+				return new Response('Internal Server Error', { status: 500 });
+			}
+		}
+
+		// --- Submit Education Interests Handler (for public/education.js) ---
+		if (request.method === 'POST' && path === '/submit-education-interests') {
+			logDebug('Submit education interests request received from public/education.js');
+			try {
+				interface SelectedArticleFeedback {
+					articleId: string;
+					interest: 'interested' | 'not_interested';
+					title: string;
+					summary: string;
+					link: string;
+				}
+				const { userId, selectedArticles } = await request.json() as { userId: string, selectedArticles: SelectedArticleFeedback[] };
+
+				if (!userId || !Array.isArray(selectedArticles)) {
+					logWarning('Submit education interests failed: Missing userId or selectedArticles in request body.');
+					return new Response('Missing parameters', { status: 400 });
+				}
+
+				const userProfile = await getUserProfile(userId, env);
+
+				if (!userProfile) {
+					logWarning(`Submit education interests failed: User profile not found for ${userId}.`, { userId });
+					return new Response(JSON.stringify({ message: 'User not found' }), {
+						status: 404,
+						headers: { 'Content-Type': 'application/json' },
+					});
+				}
+
+				logDebug(`User education articles received for user ${userId}.`, { userId, selectedArticleCount: selectedArticles.length });
+
+				const articlesToProcess: { articleId: string; interest: 'interested' | 'not_interested'; embedding?: number[]; }[] = [];
+				const articlesNeedingEmbedding: NewsArticle[] = [];
+
+				// 1. 選択された記事の中から、既にD1に存在しembeddingを持っている記事を先に問い合わせる
+				const articleIds = selectedArticles.map(article => article.articleId);
+				const existingArticlesWithEmbeddingsInD1: ArticleWithEmbedding[] = await getArticlesFromD1(env, articleIds.length, 0, `article_id IN (${articleIds.map(() => '?').join(',')}) AND embedding IS NOT NULL`, articleIds);
+				const existingArticleIdsWithEmbeddingsMap = new Map(existingArticlesWithEmbeddingsInD1.map(article => [article.articleId, article.embedding]));
+
+				// 2. 新しい記事だけをD1に保存（重複はINSERT OR IGNOREでスキップされる）
+				const articlesToSaveToD1: NewsArticle[] = selectedArticles.map(sa => ({
+					articleId: sa.articleId,
+					title: sa.title,
+					summary: sa.summary,
+					link: sa.link,
+					sourceName: '', // education.jsからは提供されないため空
+					content: '', // education.jsからは提供されないため空
+					publishedAt: Date.now(), // 現在時刻
+				}));
+				await saveArticlesToD1(articlesToSaveToD1, env);
+				logDebug(`Selected articles saved to D1 for user ${userId}.`, { userId, savedArticleCount: articlesToSaveToD1.length });
+
+				// 3. embeddingがないと判明した記事と、新たに追加した記事を対象に、embedding生成処理を開始する
+				for (const selectedArticle of selectedArticles) {
+					const existingEmbedding = existingArticleIdsWithEmbeddingsMap.get(selectedArticle.articleId);
+					if (existingEmbedding) {
+						// 既にembeddingが存在する記事
+						articlesToProcess.push({
+							articleId: selectedArticle.articleId,
+							interest: selectedArticle.interest,
+							embedding: existingEmbedding,
+						});
+					} else {
+						// embeddingがまだ存在しない記事（新規保存されたか、以前から存在したがembeddingがなかった記事）
+						articlesNeedingEmbedding.push({
+							articleId: selectedArticle.articleId,
+							title: selectedArticle.title,
+							summary: selectedArticle.summary,
+							link: selectedArticle.link,
+							sourceName: '', // education.jsからは提供されないため空
+							content: '', // education.jsからは提供されないため空
+							publishedAt: Date.now(), // 現在時刻
+						});
+						articlesToProcess.push({
+							articleId: selectedArticle.articleId,
+							interest: selectedArticle.interest,
+							embedding: undefined, // embeddingは後で生成される
+						});
+					}
+				}
+
+				if (articlesNeedingEmbedding.length > 0) {
+					logDebug(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
+					await generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false);
+				} else {
+					logDebug(`No new embeddings needed for selected articles for user ${userId}.`, { userId });
+				}
+
+				// 4. 既に埋め込みがある記事、または埋め込みが生成された記事でバンディットモデルを更新
+				// embedding生成が非同期のため、ここでは既存のembeddingを持つ記事のみを処理する
+				// embeddingが生成された記事は、embedding-completed-callback で処理される
+				const articlesWithExistingEmbeddingsForLearning = articlesToProcess.filter(a => a.embedding !== undefined);
+
+				if (articlesWithExistingEmbeddingsForLearning.length > 0) {
+					const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+					const batchSize = 10;
+					logDebug(`Sending selected articles with existing embeddings for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: articlesWithExistingEmbeddingsForLearning.length, batchSize });
+
+					for (let i = 0; i < articlesWithExistingEmbeddingsForLearning.length; i += batchSize) {
+						const batch = articlesWithExistingEmbeddingsForLearning.slice(i, i + batchSize);
+						logDebug(`Sending batch ${Math.floor(i / batchSize) + 1} with ${batch.length} articles for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1, batchCount: batch.length });
+
+						const learnResponse = await clickLogger.fetch(
+                            new Request(`${env.WORKER_BASE_URL}/learn-from-education`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    userId: userId,
+                                    selectedArticles: batch.map(article => ({
+                                        articleId: article.articleId,
+                                        embedding: article.embedding!,
+                                        reward: article.interest === 'interested' ? 1.0 : -1.0, // 報酬をここで決定
+                                    })),
+                                }),
+                            })
+                        );
+
+						if (learnResponse.ok) {
+							logDebug(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
+						} else {
+							logError(`Failed to send batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, batchNumber: Math.floor(i / batchSize) + 1, status: learnResponse.status, statusText: learnResponse.statusText });
+						}
+					}
+					logDebug(`Finished sending all batches for learning to ClickLogger for user ${userId}.`, { userId, totalCount: articlesWithExistingEmbeddingsForLearning.length });
+				} else {
+					logWarning(`No selected articles with existing embeddings to send for learning for user ${userId}.`, { userId });
+				}
+
+				return new Response(JSON.stringify({ message: '興味関心の更新が開始されました。埋め込み生成が必要な記事は非同期で処理されます。' }), {
+					headers: { 'Content-Type': 'application/json' },
+					status: 200,
+				});
+
+			} catch (error) {
+				logError('Error submitting education interests:', error, { requestUrl: request.url });
 				return new Response('Internal Server Error', { status: 500 });
 			}
 		} else if (request.method === 'POST' && path === '/delete-all-durable-object-data') {

@@ -123,11 +123,17 @@ document.addEventListener('DOMContentLoaded', () => {
         articlesListDiv.querySelectorAll('.article-item').forEach(articleItem => {
             const articleId = articleItem.querySelector('input[type="radio"]').name.split('-')[1];
             const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
+            const titleElement = articleItem.querySelector('.article-content h3');
+            const summaryElement = articleItem.querySelector('.article-content p');
+            const articleLink = articleItem.dataset.link;
 
             if (selectedInterest) {
                 responses.push({
                     articleId: articleId,
                     interest: selectedInterest.value,
+                    title: titleElement ? titleElement.textContent : '',
+                    summary: summaryElement ? summaryElement.textContent : '',
+                    link: articleLink || '',
                 });
             }
         });
@@ -141,14 +147,14 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         try {
-            const response = await fetch('/submit-interests', { // エンドポイントは既存のものを利用
+            const response = await fetch('/submit-education-interests', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
                     userId: userId,
-                    selectedArticles: responses, // 記事データの配列を送信 (キー名を変更)
+                    selectedArticles: responses, // 記事データの配列を送信
                 }),
             });
 

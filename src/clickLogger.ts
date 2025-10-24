@@ -255,7 +255,7 @@ export class ClickLogger extends DurableObject {
         // /learn-from-education エンドポイントのリクエストボディの型定義
         interface LearnFromEducationRequestBody {
             userId: string;
-            selectedArticles: { articleId: string, embedding: number[] }[];
+            selectedArticles: { articleId: string, embedding: number[], reward: number }[];
         }
 
         // /embedding-completed-callback エンドポイントのリクエストボディの型定義
@@ -439,7 +439,7 @@ export class ClickLogger extends DurableObject {
 
                 const logStatements = [];
                 for (const article of selectedArticles) {
-                    if (article.embedding) {
+                    if (article.embedding && article.reward !== undefined) {
                         let embeddingToUse = article.embedding;
 
                         // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理
@@ -454,9 +454,9 @@ export class ClickLogger extends DurableObject {
                             // D1のarticlesテーブルから元のembeddingとpublished_atを再取得
                             const originalArticle = await this.env.DB.prepare(
                                 `SELECT embedding, published_at FROM articles WHERE article_id = ?`
-                            ).bind(article.articleId).first<{ embedding: string, published_at: string }>();
+                            ).bind(article.articleId).first<{ embedding: string, published_at: string | null }>()
 
-                            if (originalArticle && originalArticle.embedding && originalArticle.published_at) {
+                            if (originalArticle && originalArticle.embedding && originalArticle.published_at !== null) {
                                 const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
                                 const now = Date.now();
                                 const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
@@ -471,11 +471,11 @@ export class ClickLogger extends DurableObject {
                             }
                         }
 
-                        await this.updateBanditModel(banditModel, embeddingToUse, 1.0, userId);
+                        await this.updateBanditModel(banditModel, embeddingToUse, article.reward, userId);
                         logStatements.push(
                             this.env.DB.prepare(
                                 `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
-                            ).bind(userId, article.articleId, Date.now(), 'selected')
+                            ).bind(userId, article.articleId, Date.now(), article.reward > 0 ? 'interested' : 'not_interested')
                         );
                     }
                 }
