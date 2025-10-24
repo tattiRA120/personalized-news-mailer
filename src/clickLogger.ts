@@ -323,18 +323,39 @@ export class ClickLogger extends DurableObject {
                     this.logDebug(`Embedding not found in sent_articles for article ${articleId} for user ${userId}. Attempting to fetch from articles table.`, { userId, articleId });
                     const originalArticle = await this.env.DB.prepare(
                         `SELECT embedding, published_at FROM articles WHERE article_id = ?`
-                    ).bind(articleId).first<{ embedding: string, published_at: string }>();
+                    ).bind(articleId).first<{ embedding: string | null, published_at: string | null }>(); // null許容型に変更
+
+                    this.logDebug(`Original article fetch result for ${articleId}:`, {
+                        userId,
+                        articleId,
+                        originalArticle: originalArticle,
+                        embeddingRaw: originalArticle?.embedding,
+                        publishedAtRaw: originalArticle?.published_at
+                    });
 
                     if (originalArticle && originalArticle.embedding && originalArticle.published_at) {
-                        const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
-                        const now = Date.now();
-                        const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
-                        const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                        embedding = [...originalEmbedding, normalizedAge]; // 鮮度情報を付加して拡張
-                        this.logDebug(`Successfully fetched and extended embedding from articles table for article ${articleId}. New dimension: ${embedding.length}`, { userId, articleId, newEmbeddingLength: embedding.length });
+                        try {
+                            const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
+                            this.logDebug(`Parsed original embedding for ${articleId}:`, { userId, articleId, parsedEmbedding: originalEmbedding.slice(0, 5) }); // 最初の5要素のみログ
+
+                            const now = Date.now();
+                            const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
+                            const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            embedding = [...originalEmbedding, normalizedAge]; // 鮮度情報を付加して拡張
+                            this.logDebug(`Successfully fetched and extended embedding from articles table for article ${articleId}. New dimension: ${embedding.length}`, { userId, articleId, newEmbeddingLength: embedding.length });
+                        } catch (parseError) {
+                            this.logError(`Error parsing embedding JSON for article ${articleId}:`, parseError, { userId, articleId, embeddingRaw: originalArticle.embedding });
+                            return new Response('Error parsing article embedding', { status: 500 });
+                        }
                     } else {
-                        this.logWarning(`Could not find embedding for article ${articleId} for user ${userId} in either sent_articles or articles table. Cannot update bandit model.`, { userId, articleId });
-                        return new Response('Article embedding not found in any table', { status: 404 });
+                        this.logWarning(`Could not find valid embedding or published_at for article ${articleId} for user ${userId} in articles table. Cannot update bandit model.`, {
+                            userId,
+                            articleId,
+                            originalArticleExists: !!originalArticle,
+                            embeddingExists: !!originalArticle?.embedding,
+                            publishedAtExists: !!originalArticle?.published_at
+                        });
+                        return new Response('Article embedding or published_at not found in articles table', { status: 404 });
                     }
                 }
 
