@@ -3,15 +3,15 @@
 
 import { UserProfile } from './userProfile';
 import { ClickLogger } from './clickLogger';
-import { logError, logInfo, logWarning, logDebug, initLogger } from './logger';
+import { Logger } from './logger';
 import { NewsArticle } from './newsCollector';
 import { getArticleByIdFromD1 } from './services/d1Service'; // D1ServiceからgetArticleByIdFromD1をインポート
 import { Env } from './index';
 
 // コサイン類似度を計算するヘルパー関数
-export function cosineSimilarity(vec1: number[], vec2: number[]): number {
+export function cosineSimilarity(vec1: number[], vec2: number[], logger: Logger): number {
     if (vec1.length !== vec2.length || vec1.length === 0) {
-        logWarning("Vector dimensions mismatch or zero length for cosine similarity.", { vec1Length: vec1.length, vec2Length: vec2.length });
+        logger.warn("Vector dimensions mismatch or zero length for cosine similarity.", { vec1Length: vec1.length, vec2Length: vec2.length });
         return 0; // ベクトルのサイズが異なるかゼロの場合は類似度なし
     }
 
@@ -26,7 +26,7 @@ export function cosineSimilarity(vec1: number[], vec2: number[]): number {
     }
 
     if (norm1 === 0 || norm2 === 0) {
-        logWarning("Zero vector encountered for cosine similarity.", { norm1, norm2 });
+        logger.warn("Zero vector encountered for cosine similarity.", { norm1, norm2 });
         return 0; // ゼロベクトルとの類似度なし
     }
 
@@ -45,12 +45,13 @@ export async function selectPersonalizedArticles(
     lambda: number = 0.5, // MMR パラメータ
     env: Env
 ): Promise<NewsArticle[]> {
+    const logger = new Logger(env); // Loggerインスタンスを生成
     if (articles.length === 0 || count <= 0) {
-        logInfo("No articles or count is zero, returning empty selection.", { articleCount: articles.length, count });
+        logger.info("No articles or count is zero, returning empty selection.", { articleCount: articles.length, count });
         return [];
     }
 
-    logInfo(`Selecting personalized articles for user ${userId}`, { userId, articleCount: articles.length, count });
+    logger.info(`Selecting personalized articles for user ${userId}`, { userId, articleCount: articles.length, count });
 
     // Durable Object から記事のUCB値を取得
     const articlesWithEmbeddings = articles
@@ -71,19 +72,19 @@ export async function selectPersonalizedArticles(
 
             if (response.ok) {
                 ucbValues = await response.json();
-                logInfo(`Received ${ucbValues.length} UCB values from ClickLogger.`, { userId, ucbCount: ucbValues.length });
+                logger.info(`Received ${ucbValues.length} UCB values from ClickLogger.`, { userId, ucbCount: ucbValues.length });
                 if (ucbValues.length === 0) {
-                    logWarning(`ClickLogger returned empty UCB values for user ${userId}.`, { userId });
+                    logger.warn(`ClickLogger returned empty UCB values for user ${userId}.`, { userId });
                 }
             } else {
                 const errorText = await response.text();
-                logError(`Failed to get UCB values from ClickLogger: ${response.statusText}`, undefined, { userId, status: response.status, statusText: response.statusText, errorText });
+                logger.error(`Failed to get UCB values from ClickLogger: ${response.statusText}`, undefined, { userId, status: response.status, statusText: response.statusText, errorText });
             }
         } catch (error) {
-            logError('Error fetching UCB values from ClickLogger:', error, { userId });
+            logger.error('Error fetching UCB values from ClickLogger:', error, { userId });
         }
     } else {
-        logWarning("No articles with embeddings to send to ClickLogger for UCB calculation.", { userId });
+        logger.warn("No articles with embeddings to send to ClickLogger for UCB calculation.", { userId });
     }
 
 
@@ -98,7 +99,7 @@ export async function selectPersonalizedArticles(
         // ユーザーの興味関心との関連度を計算 (コサイン類似度を使用)
         let interestRelevance = 0;
         if (userInterestEmbedding && article.embedding) {
-            interestRelevance = cosineSimilarity(userInterestEmbedding, article.embedding);
+            interestRelevance = cosineSimilarity(userInterestEmbedding, article.embedding, logger); // loggerを渡す
         }
 
         // Dynamically adjust ucbWeight based on user CTR
@@ -107,11 +108,11 @@ export async function selectPersonalizedArticles(
         const interestWeight = 1.0; // Keep interest relevance weight constant
         const baseUcbWeight = 1.0;
         const ucbWeight = baseUcbWeight + (1 - userCTR) * 1.0; // ucbWeight ranges from 1.0 (CTR=1) to 2.0 (CTR=0)
-        logDebug(`Using dynamic ucbWeight: ${ucbWeight.toFixed(4)} based on CTR: ${userCTR.toFixed(4)}`);
+        logger.debug(`Using dynamic ucbWeight: ${ucbWeight.toFixed(4)} based on CTR: ${userCTR.toFixed(4)}`);
 
         const finalScore = interestRelevance * interestWeight + ucb * ucbWeight;
 
-        logDebug(`Article "${article.title}" - Interest Relevance: ${interestRelevance.toFixed(4)}, UCB: ${ucb.toFixed(4)}, Final Score: ${finalScore.toFixed(4)}`, {
+        logger.debug(`Article "${article.title}" - Interest Relevance: ${interestRelevance.toFixed(4)}, UCB: ${ucb.toFixed(4)}, Final Score: ${finalScore.toFixed(4)}`, {
             userId,
             articleTitle: article.title,
             interestRelevance: interestRelevance,
@@ -129,7 +130,7 @@ export async function selectPersonalizedArticles(
     // 最終スコアで降順にソート
     const sortedArticles = [...articlesWithFinalScore].sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
 
-    logInfo(`Sorted articles by final score.`, { userId });
+    logger.info(`Sorted articles by final score.`, { userId });
 
     const selected: NewsArticle[] = [];
     const remaining = [...sortedArticles];
@@ -138,7 +139,7 @@ export async function selectPersonalizedArticles(
     const firstArticle = remaining.shift();
     if (firstArticle) {
         selected.push(firstArticle);
-        logInfo(`Selected first article: "${firstArticle.title}" (Final Score: ${firstArticle.finalScore})`, { userId, articleTitle: firstArticle.title, finalScore: firstArticle.finalScore });
+        logger.info(`Selected first article: "${firstArticle.title}" (Final Score: ${firstArticle.finalScore})`, { userId, articleTitle: firstArticle.title, finalScore: firstArticle.finalScore });
     }
 
     // 残りからMMRに基づいて記事を選択
@@ -153,7 +154,7 @@ export async function selectPersonalizedArticles(
             if (currentArticle.embedding) {
                 for (const selectedArticle of selected) {
                     if (selectedArticle.embedding) {
-                        const similarity = cosineSimilarity(currentArticle.embedding, selectedArticle.embedding);
+                        const similarity = cosineSimilarity(currentArticle.embedding, selectedArticle.embedding, logger); // loggerを渡す
                         maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarity);
                     }
                 }
@@ -176,15 +177,15 @@ export async function selectPersonalizedArticles(
         if (bestArticleIndex !== -1) {
             const [nextArticle] = remaining.splice(bestArticleIndex, 1);
             selected.push(nextArticle);
-            logInfo(`Selected article "${nextArticle.title}" using MMR (MMR Score: ${bestMMRScore}).`, { userId, articleTitle: nextArticle.title, mmrScore: bestMMRScore });
+            logger.info(`Selected article "${nextArticle.title}" using MMR (MMR Score: ${bestMMRScore}).`, { userId, articleTitle: nextArticle.title, mmrScore: bestMMRScore });
         } else {
             // 適切な記事が見つからなかった場合（例: 全ての記事のembeddingがないなど）
-            logWarning("Could not find a suitable article using MMR. Stopping selection.", { userId, selectedCount: selected.length, remainingCount: remaining.length });
+            logger.warn("Could not find a suitable article using MMR. Stopping selection.", { userId, selectedCount: selected.length, remainingCount: remaining.length });
             break;
         }
     }
 
-    logInfo(`Finished personalized article selection. Selected ${selected.length} articles.`, { userId, selectedCount: selected.length });
+    logger.info(`Finished personalized article selection. Selected ${selected.length} articles.`, { userId, selectedCount: selected.length });
     return selected;
 }
 
@@ -200,10 +201,10 @@ export async function selectDissimilarArticles(
     count: number,
     env: Env
 ): Promise<NewsArticle[]> {
-    const { logError, logInfo, logWarning, logDebug } = initLogger(env);
+    const logger = new Logger(env); // Loggerインスタンスを生成
 
     if (articles.length === 0 || count <= 0) {
-        logInfo("No articles or count is zero, returning empty selection for dissimilar articles.", { articleCount: articles.length, count });
+        logger.info("No articles or count is zero, returning empty selection for dissimilar articles.", { articleCount: articles.length, count });
         return [];
     }
 
@@ -211,11 +212,11 @@ export async function selectDissimilarArticles(
     const articlesWithEmbeddings = articles.filter(article => article.embedding !== undefined && article.embedding.length > 0);
 
     if (articlesWithEmbeddings.length < count) {
-        logWarning(`Not enough articles with embeddings to select ${count} dissimilar articles. Selecting all available.`, { available: articlesWithEmbeddings.length, requested: count });
+        logger.warn(`Not enough articles with embeddings to select ${count} dissimilar articles. Selecting all available.`, { available: articlesWithEmbeddings.length, requested: count });
         return articlesWithEmbeddings;
     }
 
-    logInfo(`Selecting ${count} dissimilar articles from ${articlesWithEmbeddings.length} available articles.`, { availableCount: articlesWithEmbeddings.length, requestedCount: count });
+    logger.info(`Selecting ${count} dissimilar articles from ${articlesWithEmbeddings.length} available articles.`, { availableCount: articlesWithEmbeddings.length, requestedCount: count });
 
     const selected: NewsArticle[] = [];
     const remaining = [...articlesWithEmbeddings];
@@ -224,7 +225,7 @@ export async function selectDissimilarArticles(
     const randomIndex = Math.floor(Math.random() * remaining.length);
     const firstArticle = remaining.splice(randomIndex, 1)[0];
     selected.push(firstArticle);
-    logDebug(`Selected first article randomly: "${firstArticle.title}"`, { articleTitle: firstArticle.title });
+    logger.debug(`Selected first article randomly: "${firstArticle.title}"`, { articleTitle: firstArticle.title });
 
     // 残りから類似度が低い記事を選択
     while (selected.length < count && remaining.length > 0) {
@@ -237,7 +238,7 @@ export async function selectDissimilarArticles(
 
             for (const selectedArticle of selected) {
                 // embeddingが存在することはフィルタリング済み
-                const similarity = cosineSimilarity(currentArticle.embedding!, selectedArticle.embedding!);
+                const similarity = cosineSimilarity(currentArticle.embedding!, selectedArticle.embedding!, logger); // loggerを渡す
                 maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarity);
             }
 
@@ -254,26 +255,26 @@ export async function selectDissimilarArticles(
         if (bestArticleIndex !== -1) {
             const [nextArticle] = remaining.splice(bestArticleIndex, 1);
             selected.push(nextArticle);
-            logDebug(`Selected article "${nextArticle.title}" with dissimilarity score: ${bestDissimilarityScore.toFixed(4)}`, { articleTitle: nextArticle.title, dissimilarityScore: bestDissimilarityScore });
+            logger.debug(`Selected article "${nextArticle.title}" with dissimilarity score: ${bestDissimilarityScore.toFixed(4)}`, { articleTitle: nextArticle.title, dissimilarityScore: bestDissimilarityScore });
         } else {
-            logWarning("Could not find a suitable dissimilar article. Stopping selection.", { selectedCount: selected.length, remainingCount: remaining.length });
+            logger.warn("Could not find a suitable dissimilar article. Stopping selection.", { selectedCount: selected.length, remainingCount: remaining.length });
             break;
         }
     }
 
-    logInfo(`Finished selecting dissimilar articles. Selected ${selected.length} articles.`, { selectedCount: selected.length });
+    logger.info(`Finished selecting dissimilar articles. Selected ${selected.length} articles.`, { selectedCount: selected.length });
     return selected;
 }
 
 
 // Basic function to select top N articles based on score (元の関数も残しておく)
 export function selectTopArticles(articles: NewsArticle[], count: number): NewsArticle[] {
-    logInfo(`Selecting top ${count} articles based on score.`, { count, articleCount: articles.length });
+    // logInfo(`Selecting top ${count} articles based on score.`, { count, articleCount: articles.length }); // ログ出力を削除
     // Sort articles by score in descending order
     const sortedArticles = articles.sort((a, b) => (b.score || 0) - (a.score || 0));
 
     // Select the top N articles
     const selected = sortedArticles.slice(0, count);
-    logInfo(`Selected ${selected.length} top articles.`, { selectedCount: selected.length });
+    // logInfo(`Selected ${selected.length} top articles.`, { selectedCount: selected.length }); // ログ出力を削除
     return selected;
 }

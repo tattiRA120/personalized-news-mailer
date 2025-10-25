@@ -1,5 +1,5 @@
 // Gmail API を使用してメールを送信するクライアント
-import { initLogger } from './logger';
+import { Logger } from './logger'; // Loggerクラスをインポート
 import { Env } from './index'; 
 
 interface SendEmailParams {
@@ -19,13 +19,13 @@ export interface GmailClientEnv extends Env {
 
 // リフレッシュトークンを使用して新しいアクセストークンを取得し、KVに保存する関数
 async function refreshAndStoreAccessToken(userId: string, env: GmailClientEnv): Promise<string | null> {
-    const { logError, logInfo, logWarning } = initLogger(env);
-    logInfo(`Attempting to refresh and store access token for user ${userId}.`, { userId });
+    const logger = new Logger(env); // Loggerインスタンスを生成
+    logger.info(`Attempting to refresh and store access token for user ${userId}.`, { userId });
     try {
         const refreshToken = await env['mail-news-gmail-tokens'].get(`refresh_token:${userId}`);
 
         if (!refreshToken) {
-            logWarning(`Refresh token not found for user ${userId}.`, { userId });
+            logger.warn(`Refresh token not found for user ${userId}.`, { userId });
             return null;
         }
 
@@ -45,11 +45,11 @@ async function refreshAndStoreAccessToken(userId: string, env: GmailClientEnv): 
         if (!tokenResponse.ok) {
             const errorText = await tokenResponse.text();
             if (errorText.includes('"error": "invalid_grant"')) {
-                logError(`Failed to refresh access token for user ${userId}: Invalid Grant. Refresh token might be expired or revoked. User needs to re-authorize.`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
+                logger.error(`Failed to refresh access token for user ${userId}: Invalid Grant. Refresh token might be expired or revoked. User needs to re-authorize.`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
                 await env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
             } else {
                 // invalid_grant 以外のエラーの場合、詳細なエラーテキストをログに出力
-                logError(`Failed to refresh access token for user ${userId}: ${tokenResponse.statusText}. Details: ${errorText}`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
+                logger.error(`Failed to refresh access token for user ${userId}: ${tokenResponse.statusText}. Details: ${errorText}`, null, { userId, status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
             }
             return null;
         }
@@ -62,27 +62,27 @@ async function refreshAndStoreAccessToken(userId: string, env: GmailClientEnv): 
         // 有効期限は現在時刻からの秒数で設定
         await env['mail-news-gmail-tokens'].put(`access_token:${userId}`, newAccessToken, { expirationTtl: expiresIn - 300 }); // 5分前には期限切れとみなす
 
-        logInfo(`Successfully refreshed and stored access token for user ${userId}.`, { userId, expiresIn });
+        logger.info(`Successfully refreshed and stored access token for user ${userId}.`, { userId, expiresIn });
         return newAccessToken;
 
     } catch (error) {
-        logError(`Exception when refreshing and storing access token for user ${userId}:`, error, { userId });
+        logger.error(`Exception when refreshing and storing access token for user ${userId}:`, error, { userId });
         return null;
     }
 }
 
 // アクセストークンを取得する関数 (KVから取得、またはリフレッシュ)
 async function getAccessToken(userId: string, env: GmailClientEnv): Promise<string | null> {
-    const { logError, logInfo, logWarning } = initLogger(env);
-    logInfo(`Attempting to get access token for user ${userId}.`, { userId });
+    const logger = new Logger(env);
+    logger.info(`Attempting to get access token for user ${userId}.`, { userId });
     const accessToken = await env['mail-news-gmail-tokens'].get(`access_token:${userId}`);
 
     if (accessToken) {
-        logInfo(`Found valid access token in KV for user ${userId}.`, { userId });
+        logger.info(`Found valid access token in KV for user ${userId}.`, { userId });
         return accessToken;
     }
 
-    logInfo(`Access token not found or expired in KV for user ${userId}. Attempting to refresh.`, { userId });
+    logger.info(`Access token not found or expired in KV for user ${userId}. Attempting to refresh.`, { userId });
     return await refreshAndStoreAccessToken(userId, env);
 }
 
@@ -107,8 +107,8 @@ function base64urlEncode(str: string): string {
 
 // Gmail API を使用してメールを送信する関数
 export async function sendEmail(userId: string, params: SendEmailParams, env: GmailClientEnv): Promise<Response> {
-  const { logError, logInfo } = initLogger(env);
-  logInfo(`Attempting to send email for user ${userId} via Gmail API.`, { userId, emailParams: params });
+  const logger = new Logger(env); // Loggerインスタンスを生成
+  logger.info(`Attempting to send email for user ${userId} via Gmail API.`, { userId, emailParams: params });
   const GMAIL_API_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 
   try {
@@ -116,7 +116,7 @@ export async function sendEmail(userId: string, params: SendEmailParams, env: Gm
     const accessToken = await getAccessToken(userId, env);
 
     if (!accessToken) {
-        logError(`Failed to get or refresh access token for user ${userId}. Cannot send email.`, null, { userId });
+        logger.error(`Failed to get or refresh access token for user ${userId}. Cannot send email.`, null, { userId });
         return new Response('Error sending email: Could not obtain access token', { status: 500 });
     }
 
@@ -157,15 +157,15 @@ export async function sendEmail(userId: string, params: SendEmailParams, env: Gm
       const errorText = await sendResponse.text();
       // rawEmailContent の一部をログに出力し、機密情報を避ける
       const rawEmailContentSnippet = rawEmailContent.substring(0, Math.min(rawEmailContent.length, 500)); // 最初の500文字
-      logError(`Gmail API returned an error for user ${userId}: ${sendResponse.statusText}`, null, { userId, status: sendResponse.status, statusText: sendResponse.statusText, errorText, emailParams: params, rawEmailContentSnippet });
+      logger.error(`Gmail API returned an error for user ${userId}: ${sendResponse.statusText}`, null, { userId, status: sendResponse.status, statusText: sendResponse.statusText, errorText, emailParams: params, rawEmailContentSnippet });
     } else {
-      logInfo(`Email sent successfully for user ${userId} via Gmail API.`, { userId, emailParams: params });
+      logger.info(`Email sent successfully for user ${userId} via Gmail API.`, { userId, emailParams: params });
     }
 
     return sendResponse;
 
   } catch (error) {
-    logError(`Exception when sending email for user ${userId} with Gmail API:`, error, { userId, emailParams: params });
+    logger.error(`Exception when sending email for user ${userId} with Gmail API:`, error, { userId, emailParams: params });
     return new Response(`Error sending email: ${error}`, { status: 500 });
   }
 }

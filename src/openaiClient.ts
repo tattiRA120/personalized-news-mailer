@@ -4,7 +4,7 @@
  * ファイルアップロード、バッチ埋め込みジョブの作成、結果の取得、ジョブステータスの確認を行う。
  */
 
-import { initLogger } from './logger';
+import { Logger } from './logger';
 import { OPENAI_EMBEDDING_MODEL, OPENAI_EMBEDDING_DIMENSION } from './config';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
@@ -61,9 +61,9 @@ interface OpenAIFile {
  * @returns The uploaded file object or null on failure.
  */
 async function uploadOpenAIFile(filename: string, content: Blob, purpose: string, env: Env): Promise<OpenAIFile | null> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     if (!env.OPENAI_API_KEY) {
-        logError('OPENAI_API_KEY is not set for file upload.', null);
+        logger.error('OPENAI_API_KEY is not set for file upload.', null);
         return null;
     }
 
@@ -83,14 +83,14 @@ async function uploadOpenAIFile(filename: string, content: Blob, purpose: string
 
         const data: OpenAIFile = await response.json();
         if (response.ok) {
-            logInfo(`Successfully uploaded file ${filename} to OpenAI. File ID: ${data.id}`, { fileId: data.id, filename });
+            logger.info(`Successfully uploaded file ${filename} to OpenAI. File ID: ${data.id}`, { fileId: data.id, filename });
             return data;
         } else {
-            logError(`Error uploading file to OpenAI: ${response.statusText}`, null, { status: response.status, statusText: response.statusText, responseBody: data });
+            logger.error(`Error uploading file to OpenAI: ${response.statusText}`, null, { status: response.status, statusText: response.statusText, responseBody: data });
             return null;
         }
     } catch (error) {
-        logError('Exception when uploading file to OpenAI:', error);
+        logger.error('Exception when uploading file to OpenAI:', error);
         return null;
     }
 }
@@ -102,9 +102,9 @@ async function uploadOpenAIFile(filename: string, content: Blob, purpose: string
  * @returns The created batch job object or null on failure.
  */
 export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: Env): Promise<OpenAIBatchJob | null> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     if (!env.OPENAI_API_KEY) {
-        logError('OPENAI_API_KEY is not set for batch job creation.', null);
+        logger.error('OPENAI_API_KEY is not set for batch job creation.', null);
         return null;
     }
 
@@ -128,14 +128,14 @@ export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: En
 
         const data: OpenAIBatchJob = await response.json();
         if (response.ok) {
-            logInfo(`Successfully created OpenAI batch embedding job. Job ID: ${data.id}`, { jobId: data.id, inputFileId });
+            logger.info(`Successfully created OpenAI batch embedding job. Job ID: ${data.id}`, { jobId: data.id, inputFileId });
             return data;
         } else {
-            logError(`Error creating OpenAI batch embedding job: ${response.statusText}`, null, { status: response.status, statusText: response.statusText, responseBody: data });
+            logger.error(`Error creating OpenAI batch embedding job: ${response.statusText}`, null, { status: response.status, statusText: response.statusText, responseBody: data });
             return null;
         }
     } catch (error) {
-        logError('Exception when creating OpenAI batch embedding job:', error);
+        logger.error('Exception when creating OpenAI batch embedding job:', error);
         return null;
     }
 }
@@ -147,9 +147,9 @@ export async function createOpenAIBatchEmbeddingJob(inputFileId: string, env: En
  * @returns The results as a string or null on failure.
  */
 export async function getOpenAIBatchJobResults(output_file_id: string, env: Env): Promise<string | null> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     if (!env.OPENAI_API_KEY) {
-        logError('OPENAI_API_KEY is not set for batch job results retrieval.', null);
+        logger.error('OPENAI_API_KEY is not set for batch job results retrieval.', null);
         return null;
     }
 
@@ -165,14 +165,14 @@ export async function getOpenAIBatchJobResults(output_file_id: string, env: Env)
 
         if (response.ok) {
             const content = await response.text();
-            logInfo(`Successfully retrieved OpenAI batch job results from file ID: ${output_file_id}.`, { output_file_id });
+            logger.info(`Successfully retrieved OpenAI batch job results from file ID: ${output_file_id}.`, { output_file_id });
             return content;
         } else {
-            logError(`Error getting OpenAI batch job results: ${response.statusText}`, null, { status: response.status, statusText: response.statusText });
+            logger.error(`Error getting OpenAI batch job results: ${response.statusText}`, null, { status: response.status, statusText: response.statusText });
             return null;
         }
     } catch (error) {
-        logError('Exception when getting OpenAI batch job results:', error);
+        logger.error('Exception when getting OpenAI batch job results:', error);
         return null;
     }
 }
@@ -206,9 +206,9 @@ export function prepareBatchInputFileContent(articles: NewsArticle[]): string {
  * @returns The batch job object or null on failure.
  */
 export async function getOpenAIBatchJobStatus(batchId: string, env: Env): Promise<OpenAIBatchJob | null> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     if (!env.OPENAI_API_KEY) {
-        logError('OPENAI_API_KEY is not set for batch job status retrieval.', null);
+        logger.error('OPENAI_API_KEY is not set for batch job status retrieval.', null);
         return null;
     }
 
@@ -224,14 +224,14 @@ export async function getOpenAIBatchJobStatus(batchId: string, env: Env): Promis
 
         const data: OpenAIBatchJob = await response.json();
         if (response.ok) {
-            logInfo(`Successfully retrieved OpenAI batch job status for Job ID: ${batchId}. Status: ${data.status}`, { jobId: batchId, status: data.status });
+            logger.info(`Successfully retrieved OpenAI batch job status for Job ID: ${batchId}. Status: ${data.status}`, { jobId: batchId, status: data.status });
             return data;
         } else {
-            logError(`Error getting OpenAI batch job status for Job ID: ${batchId}: ${response.statusText}`, null, { jobId: batchId, status: response.status, statusText: response.statusText, responseBody: data });
+            logger.error(`Error getting OpenAI batch job status for Job ID: ${batchId}: ${response.statusText}`, null, { jobId: batchId, status: response.status, statusText: response.statusText, responseBody: data });
             return null;
         }
     } catch (error) {
-        logError(`Exception when getting OpenAI batch job status for Job ID: ${batchId}:`, error);
+        logger.error(`Exception when getting OpenAI batch job status for Job ID: ${batchId}:`, error);
         return null;
     }
 }

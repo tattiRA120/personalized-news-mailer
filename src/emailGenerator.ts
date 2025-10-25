@@ -1,5 +1,5 @@
 // src/emailGenerator.ts
-import { initLogger } from './logger';
+import { Logger } from './logger';
 
 import { sendEmail as sendEmailWithGmail } from './gmailClient';
 import { Env } from './index';
@@ -22,8 +22,8 @@ interface NewsArticle {
 }
 
 export async function generateNewsEmail(articles: NewsArticle[], userId: string, env: Env): Promise<string> {
-    const { logError, logInfo } = initLogger(env);
-    logInfo(`Generating email content for user ${userId}`, { userId, articleCount: articles.length });
+    const logger = new Logger(env);
+    logger.info(`Generating email content for user ${userId}`, { userId, articleCount: articles.length });
     let htmlContent = '';
     try {
         htmlContent = `
@@ -61,7 +61,7 @@ export async function generateNewsEmail(articles: NewsArticle[], userId: string,
 
     if (articles.length === 0) {
         htmlContent += `<p>本日の新しい記事は見つかりませんでした。</p>`;
-        logInfo(`No articles to include in email for user ${userId}.`, { userId });
+        logger.info(`No articles to include in email for user ${userId}.`, { userId });
     } else {
         for (const article of articles) {
             let imageUrl: string | undefined;
@@ -72,7 +72,7 @@ export async function generateNewsEmail(articles: NewsArticle[], userId: string,
             if (article.sourceName !== 'GIGAZINE') {
                 imageUrl = await getOgpImageUrl(article.link, env);
             } else {
-                logInfo(`Skipping OGP scraping for GIGAZINE article due to policy: ${article.link}`, { url: article.link, sourceName: article.sourceName });
+                logger.info(`Skipping OGP scraping for GIGAZINE article due to policy: ${article.link}`, { url: article.link, sourceName: article.sourceName });
             }
 
             // 2. OGP画像が取得できなかった場合、RSSフィードから画像URLを抽出
@@ -86,7 +86,7 @@ export async function generateNewsEmail(articles: NewsArticle[], userId: string,
             // 3. どちらからも取得できなかった場合、ソースロゴまたは汎用デフォルト画像
             if (!imageUrl) {
                 imageUrl = NEWS_SOURCE_LOGOS[article.sourceName] || NEWS_SOURCE_LOGOS['DEFAULT'];
-                logInfo(`Using source logo or default image for article: ${imageUrl}`, { url: article.link, sourceName: article.sourceName, imageUrl });
+                logger.info(`Using source logo or default image for article: ${imageUrl}`, { url: article.link, sourceName: article.sourceName, imageUrl });
             }
             const trackingLink = `${env.WORKER_BASE_URL}/track-click?userId=${userId}&articleId=${encodeURIComponent(article.articleId)}&redirectUrl=${encodeURIComponent(article.link)}`;
 
@@ -104,12 +104,12 @@ export async function generateNewsEmail(articles: NewsArticle[], userId: string,
                 </div>
             `;
         }
-        logInfo(`Included ${articles.length} articles in email content for user ${userId}.`, { userId, articleCount: articles.length });
+        logger.info(`Included ${articles.length} articles in email content for user ${userId}.`, { userId, articleCount: articles.length });
     }
 
     return htmlContent;
     } catch (error) {
-        logError(`Error generating email content for user ${userId}:`, error, { userId });
+        logger.error(`Error generating email content for user ${userId}:`, error, { userId });
         // エラーが発生した場合、空のコンテンツまたはエラーメッセージを含むコンテンツを返す
         return `<p>ニュースメールコンテンツの生成中にエラーが発生しました。</p>`;
     }
@@ -125,8 +125,8 @@ export async function sendNewsEmail(
   articles: NewsArticle[],
   sender: EmailRecipient // Add sender as an argument
 ): Promise<Response> {
-  const { logError, logInfo } = initLogger(env);
-  logInfo(`Attempting to send email to ${toEmail} from ${sender.email} for user ${userId} via Gmail API.`, { userId, email: toEmail, senderEmail: sender.email });
+  const logger = new Logger(env);
+  logger.info(`Attempting to send email to ${toEmail} from ${sender.email} for user ${userId} via Gmail API.`, { userId, email: toEmail, senderEmail: sender.email });
   const subject = 'あなたのパーソナライズドニュース';
   const htmlContent = await generateNewsEmail(articles, userId, env);
 
@@ -141,14 +141,14 @@ export async function sendNewsEmail(
       // Pass userId and env to the Gmail sendEmail function
       const response = await sendEmailWithGmail(userId, params, env);
       if (response.ok) {
-          logInfo(`Email successfully sent to ${toEmail} for user ${userId} via Gmail API.`, { userId, email: toEmail });
+          logger.info(`Email successfully sent to ${toEmail} for user ${userId} via Gmail API.`, { userId, email: toEmail });
       } else {
           // Error details are logged in gmailClient.ts
-          logError(`Failed to send email to ${toEmail} for user ${userId} via Gmail API: ${response.statusText}`, null, { userId, email: toEmail, status: response.status, statusText: response.statusText });
+          logger.error(`Failed to send email to ${toEmail} for user ${userId} via Gmail API: ${response.statusText}`, null, { userId, email: toEmail, status: response.status, statusText: response.statusText });
       }
       return response;
   } catch (error) {
-      logError(`Exception when sending email to ${toEmail} for user ${userId} via Gmail API:`, error, { userId, email: toEmail });
+      logger.error(`Exception when sending email to ${toEmail} for user ${userId} via Gmail API:`, error, { userId, email: toEmail });
       // エラーが発生した場合は、エラーを含む Response オブジェクトを生成して返す
       return new Response(`Error sending email: ${error}`, { status: 500 });
   }

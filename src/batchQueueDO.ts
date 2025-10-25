@@ -1,4 +1,4 @@
-import { logError, logInfo, logWarning, logDebug } from "./logger";
+import { Logger } from "./logger";
 import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, prepareBatchInputFileContent, getOpenAIBatchJobStatus, getOpenAIBatchJobResults } from "./openaiClient";
 import { NewsArticle } from "./newsCollector";
 import { Env } from "./index";
@@ -58,22 +58,24 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
   state: DurableObjectState;
   env: BatchQueueDOEnv;
   private processingPromise: Promise<void> | null = null;
+  private logger: Logger;
 
   constructor(state: DurableObjectState, env: BatchQueueDOEnv) {
     super(state, env); // 親クラスのコンストラクタを呼び出す
     this.state = state;
     this.env = env;
+    this.logger = new Logger(env);
     this.state.blockConcurrencyWhile(async () => {
       // DOが初期化される際に、未処理のチャンクがあれば処理を開始
       const storedChunks = await this.state.storage.get<BatchChunk[]>("chunks") || [];
       const storedBatchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
 
       if (storedChunks.length > 0) {
-        logDebug("BatchQueueDO initialized with pending chunks. Resuming chunk processing.");
+        this.logger.debug("BatchQueueDO initialized with pending chunks. Resuming chunk processing.");
         this.processQueue();
       }
       if (storedBatchJobs.length > 0) {
-        logDebug("BatchQueueDO initialized with pending batch jobs. Resuming polling.");
+        this.logger.debug("BatchQueueDO initialized with pending batch jobs. Resuming polling.");
         // アラームが設定されていない場合は設定
         if (!await this.state.storage.getAlarm()) {
           // 初期化時にアラームを設定する場合、ポーリング開始時刻も設定
@@ -81,7 +83,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
           await this.state.storage.put("pollingStartTime", now);
           await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
           await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
-          logDebug("Set initial alarm for batch job polling during DO initialization.");
+          this.logger.debug("Set initial alarm for batch job polling during DO initialization.");
         }
       }
     });
@@ -101,7 +103,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         let currentChunks = await this.state.storage.get<BatchChunk[]>("chunks") || [];
         currentChunks = currentChunks.concat(chunks);
         await this.state.storage.put("chunks", currentChunks);
-        logDebug(`Added ${chunks.length} chunks to queue. Total: ${currentChunks.length}`);
+        this.logger.debug(`Added ${chunks.length} chunks to queue. Total: ${currentChunks.length}`);
 
         // 処理が実行中でない場合のみ開始
         if (!this.processingPromise) {
@@ -110,7 +112,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
         return new Response("Chunks queued successfully", { status: 200 });
       } catch (error) {
-        logError("Failed to queue chunks in BatchQueueDO", error);
+        this.logger.error("Failed to queue chunks in BatchQueueDO", error);
         return new Response("Internal Server Error", { status: 500 });
       }
     } else if (path === "/start-polling" && request.method === "POST") {
@@ -123,7 +125,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         let batchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
         batchJobs.push({ batchId, inputFileId, status: "pending", retryCount: 0, userId: userId }); // userIdを保存
         await this.state.storage.put("batchJobs", batchJobs);
-        logDebug(`Added batch job ${batchId} to polling queue for user ${userId || 'N/A'}.`);
+        this.logger.debug(`Added batch job ${batchId} to polling queue for user ${userId || 'N/A'}.`);
 
         // アラームが設定されていない場合のみ設定
         if (!await this.state.storage.getAlarm()) {
@@ -131,16 +133,16 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
           await this.state.storage.put("pollingStartTime", now);
           await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
           await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
-          logDebug("Set initial alarm for batch job polling.");
+          this.logger.debug("Set initial alarm for batch job polling.");
         }
 
         return new Response("Polling started for batch job", { status: 200 });
       } catch (error) {
-        logError("Failed to start polling in BatchQueueDO", error);
+        this.logger.error("Failed to start polling in BatchQueueDO", error);
         return new Response("Internal Server Error", { status: 500 });
       }
     } else if (path === "/debug/trigger-alarm" && request.method === "POST") {
-      logDebug("BatchQueueDO: Debug alarm trigger request received.");
+      this.logger.debug("BatchQueueDO: Debug alarm trigger request received.");
       await this.alarm(); // 直接 alarm() メソッドを呼び出す
       return new Response("Alarm triggered manually.", { status: 200 });
     }
@@ -149,7 +151,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
   }
 
   async alarm() {
-    logDebug("BatchQueueDO: Alarm triggered. Checking batch job statuses.");
+    this.logger.debug("BatchQueueDO: Alarm triggered. Checking batch job statuses.");
     let batchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
     const completedJobs: BatchJobInfo[] = [];
     const failedJobs: BatchJobInfo[] = [];
@@ -172,9 +174,9 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         currentPollingInterval = 60 * 60 * 1000; // 1時間
       }
       await this.state.storage.put("currentPollingInterval", currentPollingInterval);
-      logDebug(`Polling interval adjusted to ${currentPollingInterval / 1000 / 60} minutes based on elapsed time: ${elapsedMinutes.toFixed(2)} minutes.`);
+      this.logger.debug(`Polling interval adjusted to ${currentPollingInterval / 1000 / 60} minutes based on elapsed time: ${elapsedMinutes.toFixed(2)} minutes.`);
     } else {
-      logWarning("Polling start time not found. Using default 1-minute interval.");
+      this.logger.warn("Polling start time not found. Using default 1-minute interval.");
       await this.state.storage.put("pollingStartTime", Date.now()); // 初回アラーム時に設定
       await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
     }
@@ -184,13 +186,13 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         const statusResponse = await getOpenAIBatchJobStatus(jobInfo.batchId, this.env);
         
         if (!statusResponse) {
-            logWarning(`Batch job ${jobInfo.batchId} status response was null. Retrying.`, { jobId: jobInfo.batchId });
+            this.logger.warn(`Batch job ${jobInfo.batchId} status response was null. Retrying.`, { jobId: jobInfo.batchId });
             jobInfo.retryCount = (jobInfo.retryCount || 0) + 1;
             const MAX_POLLING_RETRIES = 5;
             if (jobInfo.retryCount <= MAX_POLLING_RETRIES) {
                 pendingJobs.push(jobInfo);
             } else {
-                logError(`Max polling retries exceeded for batch job ${jobInfo.batchId} due to null response. Skipping.`, new Error('Null status response'), { jobId: jobInfo.batchId });
+                this.logger.error(`Max polling retries exceeded for batch job ${jobInfo.batchId} due to null response. Skipping.`, new Error('Null status response'), { jobId: jobInfo.batchId });
                 failedJobs.push(jobInfo);
             }
             continue;
@@ -198,10 +200,10 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
         jobInfo.status = statusResponse.status; // ステータスを更新
 
-        logDebug(`Batch job ${jobInfo.batchId} status: ${jobInfo.status}`);
+        this.logger.debug(`Batch job ${jobInfo.batchId} status: ${jobInfo.status}`);
 
         if (jobInfo.status === "completed") {
-          logDebug(`Batch job ${jobInfo.batchId} completed. Fetching results.`);
+          this.logger.debug(`Batch job ${jobInfo.batchId} completed. Fetching results.`);
           const resultsContent = await getOpenAIBatchJobResults(statusResponse.output_file_id!, this.env); // output_file_id は completed 時には存在するはず
           
           if (resultsContent) {
@@ -212,7 +214,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
             if (results && results.length > 0) {
                 const embeddingsToUpdate = results.map(r => {
                     if (r.error) {
-                        logWarning(`Batch result item contains an error. Skipping.`, { error: r.error, custom_id: r.custom_id });
+                        this.logger.warn(`Batch result item contains an error. Skipping.`, { error: r.error, custom_id: r.custom_id });
                         return null;
                     }
 
@@ -221,7 +223,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                     const embedding = r.response?.body?.data?.[0]?.embedding;
 
                     if (embedding === undefined || articleId === undefined) {
-                        logWarning(`Batch result item missing embedding or articleId after parsing. Skipping.`, { custom_id: r.custom_id, embeddingExists: embedding !== undefined, articleIdExists: articleId !== undefined });
+                        this.logger.warn(`Batch result item missing embedding or articleId after parsing. Skipping.`, { custom_id: r.custom_id, embeddingExists: embedding !== undefined, articleIdExists: articleId !== undefined });
                         return null;
                     }
                     return {
@@ -232,7 +234,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
                 if (embeddingsToUpdate.length > 0) {
                     await this.updateArticleEmbeddingsInD1(embeddingsToUpdate, this.env);
-                    logDebug(`Updated D1 with embeddings for batch job ${jobInfo.batchId}.`);
+                    this.logger.debug(`Updated D1 with embeddings for batch job ${jobInfo.batchId}.`);
 
                     // ClickLoggerにコールバックを送信
                     const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
@@ -247,26 +249,26 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                             })
                         );
                         if (callbackResponse.ok) {
-                            logDebug(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
+                            this.logger.debug(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
                         } else {
-                            logError(`Failed to send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}): ${callbackResponse.statusText}`, null, { jobId: jobInfo.batchId, status: callbackResponse.status, statusText: callbackResponse.statusText });
+                            this.logger.error(`Failed to send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}): ${callbackResponse.statusText}`, null, { jobId: jobInfo.batchId, status: callbackResponse.status, statusText: callbackResponse.statusText });
                         }
                     } catch (callbackError) {
-                        logError(`Error sending embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, callbackError, { jobId: jobInfo.batchId });
+                        this.logger.error(`Error sending embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, callbackError, { jobId: jobInfo.batchId });
                     }
 
                 } else {
-                    logWarning(`Batch job ${jobInfo.batchId} completed but no valid embeddings to update after filtering.`, { jobId: jobInfo.batchId });
+                    this.logger.warn(`Batch job ${jobInfo.batchId} completed but no valid embeddings to update after filtering.`, { jobId: jobInfo.batchId });
                 }
             } else {
-                logWarning(`Batch job ${jobInfo.batchId} completed but no results found after parsing.`, { jobId: jobInfo.batchId });
+                this.logger.warn(`Batch job ${jobInfo.batchId} completed but no results found after parsing.`, { jobId: jobInfo.batchId });
             }
           } else {
-            logWarning(`Batch job ${jobInfo.batchId} completed but no results content received.`, { jobId: jobInfo.batchId });
+            this.logger.warn(`Batch job ${jobInfo.batchId} completed but no results content received.`, { jobId: jobInfo.batchId });
           }
           completedJobs.push(jobInfo);
         } else if (jobInfo.status === "failed" || jobInfo.status === "cancelled" || jobInfo.status === "cancelling") {
-          logError(`Batch job ${jobInfo.batchId} failed, cancelled, or is cancelling.`, new Error(`Batch job ${jobInfo.batchId} status: ${jobInfo.status}`), { jobId: jobInfo.batchId, status: jobInfo.status });
+          this.logger.error(`Batch job ${jobInfo.batchId} failed, cancelled, or is cancelling.`, new Error(`Batch job ${jobInfo.batchId} status: ${jobInfo.status}`), { jobId: jobInfo.batchId, status: jobInfo.status });
           failedJobs.push(jobInfo);
         } else {
           // pending, in_progress, finalizing など
@@ -276,10 +278,10 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         jobInfo.retryCount = (jobInfo.retryCount || 0) + 1;
         const MAX_POLLING_RETRIES = 5; // ポーリングのリトライ回数
         if (jobInfo.retryCount <= MAX_POLLING_RETRIES) {
-          logWarning(`Error checking status for batch job ${jobInfo.batchId}. Retrying (${jobInfo.retryCount}/${MAX_POLLING_RETRIES}).`, { error: error, jobId: jobInfo.batchId });
+          this.logger.warn(`Error checking status for batch job ${jobInfo.batchId}. Retrying (${jobInfo.retryCount}/${MAX_POLLING_RETRIES}).`, { error: error, jobId: jobInfo.batchId });
           pendingJobs.push(jobInfo); // リトライのためにキューに戻す
         } else {
-          logError(`Max polling retries exceeded for batch job ${jobInfo.batchId}. Skipping.`, error, { jobId: jobInfo.batchId });
+          this.logger.error(`Max polling retries exceeded for batch job ${jobInfo.batchId}. Skipping.`, error, { jobId: jobInfo.batchId });
           failedJobs.push(jobInfo); // 失敗として扱う
         }
       }
@@ -291,9 +293,9 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     if (pendingJobs.length > 0) {
       // 未処理のジョブが残っている場合、次のアラームを設定
       await this.state.storage.setAlarm(Date.now() + currentPollingInterval); // 計算された間隔でアラームを設定
-      logDebug(`Set next alarm for batch job polling in ${currentPollingInterval / 1000 / 60} minutes. Remaining jobs: ${pendingJobs.length}`);
+      this.logger.debug(`Set next alarm for batch job polling in ${currentPollingInterval / 1000 / 60} minutes. Remaining jobs: ${pendingJobs.length}`);
     } else {
-      logDebug("All batch jobs processed. No more alarms scheduled for polling.");
+      this.logger.debug("All batch jobs processed. No more alarms scheduled for polling.");
       // 全てのジョブが完了したら、ポーリング開始時刻と間隔をリセット
       await this.state.storage.delete("pollingStartTime");
       await this.state.storage.delete("currentPollingInterval");
@@ -305,26 +307,26 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
       while (true) {
         let chunks = await this.state.storage.get<BatchChunk[]>("chunks") || [];
         if (chunks.length === 0) {
-          logDebug("BatchQueueDO: No more chunks to process. Stopping chunk processing.");
+          this.logger.debug("BatchQueueDO: No more chunks to process. Stopping chunk processing.");
           this.processingPromise = null; // 処理完了
           break;
         }
 
         const chunkToProcess = chunks.shift(); // キューから最初のチャンクを取得
         if (chunkToProcess) {
-          logDebug(`BatchQueueDO: Processing chunk ${chunkToProcess.chunkIndex}`);
+          this.logger.debug(`BatchQueueDO: Processing chunk ${chunkToProcess.chunkIndex}`);
           await this.processSingleChunk(chunkToProcess);
 
           // 処理したチャンクをストレージから削除し、残りを保存
           await this.state.storage.put("chunks", chunks);
-          logDebug(`BatchQueueDO: Chunk ${chunkToProcess.chunkIndex} processed. Remaining: ${chunks.length}`);
+          this.logger.debug(`BatchQueueDO: Chunk ${chunkToProcess.chunkIndex} processed. Remaining: ${chunks.length}`);
         }
 
         // 次のチャンクを処理する前に短い遅延を挟む (レートリミット回避)
         await new Promise(resolve => setTimeout(resolve, 1000)); // 1秒待機
       }
     } catch (error) {
-      logError("BatchQueueDO: Error during chunk queue processing", error);
+      this.logger.error("BatchQueueDO: Error during chunk queue processing", error);
       this.processingPromise = null; // エラー発生時も処理を停止
     }
   }
@@ -336,34 +338,34 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     const MAX_RETRIES = 3; // 最大リトライ回数
 
     try {
-      logDebug(`Attempting to upload chunk ${chunk.chunkIndex} file: ${filename} (Retry: ${chunk.retryCount || 0})`);
+      this.logger.debug(`Attempting to upload chunk ${chunk.chunkIndex} file: ${filename} (Retry: ${chunk.retryCount || 0})`);
       const uploaded = await uploadOpenAIFile(filename, blob, "batch", this.env);
       if (!uploaded || !uploaded.id) {
-        logError(`Chunk ${chunk.chunkIndex} upload returned no file ID.`, new Error('No file ID returned'), { chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount || 0 });
+        this.logger.error(`Chunk ${chunk.chunkIndex} upload returned no file ID.`, new Error('No file ID returned'), { chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount || 0 });
         // リトライ処理
         await this.handleChunkError(chunk, `Upload failed: No file ID`, MAX_RETRIES);
         return;
       }
-      logDebug(`Chunk ${chunk.chunkIndex} uploaded. File ID: ${uploaded.id}`);
+      this.logger.debug(`Chunk ${chunk.chunkIndex} uploaded. File ID: ${uploaded.id}`);
 
-      logDebug(`Attempting to create batch job for chunk ${chunk.chunkIndex} with file ID: ${uploaded.id}`);
+      this.logger.debug(`Attempting to create batch job for chunk ${chunk.chunkIndex} with file ID: ${uploaded.id}`);
       const job = await createOpenAIBatchEmbeddingJob(
         uploaded.id,
         this.env
       );
       if (!job || !job.id) {
-        logError(`Chunk ${chunk.chunkIndex} batch job creation returned no job ID.`, new Error('No job ID returned'), { chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount || 0 });
+        this.logger.error(`Chunk ${chunk.chunkIndex} batch job creation returned no job ID.`, new Error('No job ID returned'), { chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount || 0 });
         // リトライ処理
         await this.handleChunkError(chunk, `Batch job creation failed: No job ID`, MAX_RETRIES);
         return;
       }
-      logDebug(`Chunk ${chunk.chunkIndex} batch job created. Job ID: ${job.id}`);
+      this.logger.debug(`Chunk ${chunk.chunkIndex} batch job created. Job ID: ${job.id}`);
 
       // バッチジョブが作成されたら、ポーリングキューに追加
       let batchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
       batchJobs.push({ batchId: job.id, inputFileId: uploaded.id, status: "pending", retryCount: 0 });
       await this.state.storage.put("batchJobs", batchJobs);
-      logDebug(`Delegated batch job ${job.id} to polling queue from chunk processing.`);
+      this.logger.debug(`Delegated batch job ${job.id} to polling queue from chunk processing.`);
 
       // アラームが設定されていない場合のみ設定
       if (!await this.state.storage.getAlarm()) {
@@ -371,11 +373,11 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         await this.state.storage.put("pollingStartTime", now);
         await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
         await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
-        logDebug("Set initial alarm for batch job polling from chunk processing.");
+        this.logger.debug("Set initial alarm for batch job polling from chunk processing.");
       }
 
     } catch (e) {
-      logError(`Failed to process chunk ${chunk.chunkIndex} in BatchQueueDO`, e, { chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount || 0 });
+      this.logger.error(`Failed to process chunk ${chunk.chunkIndex} in BatchQueueDO`, e, { chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount || 0 });
       // リトライ処理
       await this.handleChunkError(chunk, e, MAX_RETRIES);
     }
@@ -384,13 +386,13 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
   private async handleChunkError(chunk: BatchChunk, error: any, maxRetries: number): Promise<void> {
     chunk.retryCount = (chunk.retryCount || 0) + 1;
     if (chunk.retryCount <= maxRetries) {
-      logWarning(`BatchQueueDO: Retrying chunk ${chunk.chunkIndex}. Attempt ${chunk.retryCount}/${maxRetries}.`, { error: error, chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount });
+      this.logger.warn(`BatchQueueDO: Retrying chunk ${chunk.chunkIndex}. Attempt ${chunk.retryCount}/${maxRetries}.`, { error: error, chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount });
       // チャンクをキューの先頭に戻す
       let currentChunks = await this.state.storage.get<BatchChunk[]>("chunks") || [];
       currentChunks.unshift(chunk); // 先頭に追加
       await this.state.storage.put("chunks", currentChunks);
     } else {
-      logError(`BatchQueueDO: Max retries (${maxRetries}) exceeded for chunk ${chunk.chunkIndex}. Skipping this chunk.`, error, { chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount });
+      this.logger.error(`BatchQueueDO: Max retries (${maxRetries}) exceeded for chunk ${chunk.chunkIndex}. Skipping this chunk.`, error, { chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount });
       // TODO: 最終的なエラー通知 (例: Slack, Sentry)
     }
   }
@@ -406,9 +408,9 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     for (const rec of records) {
       const existingArticle = await env.DB.prepare('SELECT article_id FROM articles WHERE article_id = ?').bind(rec.articleId).first();
       if (!existingArticle) {
-        logWarning(`Attempted to update non-existent articleId in D1: ${rec.articleId}`, { articleId: rec.articleId });
+        this.logger.warn(`Attempted to update non-existent articleId in D1: ${rec.articleId}`, { articleId: rec.articleId });
       } else {
-        logDebug(`ArticleId exists in D1: ${rec.articleId}`, { articleId: rec.articleId });
+        this.logger.debug(`ArticleId exists in D1: ${rec.articleId}`, { articleId: rec.articleId });
       }
     }
 
@@ -424,6 +426,6 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
       );
     });
     const batchResult = await env.DB.batch(batch);
-    logDebug(`D1 batch update result for job:`, { batchResult });
+    this.logger.debug(`D1 batch update result for job:`, { batchResult });
   }
 }

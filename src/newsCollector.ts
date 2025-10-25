@@ -1,5 +1,5 @@
 import { NEWS_RSS_URLS, RSS_FETCH_CHUNK_SIZE } from './config';
-import { initLogger } from './logger';
+import { Logger } from './logger';
 import { XMLParser } from 'fast-xml-parser';
 import { cleanArticleText, generateContentHash } from './utils/textProcessor';
 import { decodeHtmlEntities } from './utils/htmlDecoder';
@@ -39,7 +39,7 @@ export interface NewsArticle {
 }
 
 async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
-    const { logError, logWarning } = initLogger(env);
+    const logger = new Logger(env);
     const MAX_RETRIES = 1;
     const BASE_DELAY_MS = 1000; // 1 second
 
@@ -54,25 +54,25 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
                 },
             });
             if (!response.ok) {
-                logWarning(`Failed to fetch RSS feed from ${url}: Status ${response.status} ${response.statusText}. Attempt ${i + 1}/${MAX_RETRIES}.`, { url, status: response.status, statusText: response.statusText, attempt: i + 1 });
+                logger.warn(`Failed to fetch RSS feed from ${url}: Status ${response.status} ${response.statusText}. Attempt ${i + 1}/${MAX_RETRIES}.`, { url, status: response.status, statusText: response.statusText, attempt: i + 1 });
                 if (i < MAX_RETRIES - 1) {
                     const delay = BASE_DELAY_MS * Math.pow(2, i); // Exponential backoff
                     await new Promise(resolve => setTimeout(resolve, delay));
                     continue;
                 }
-                logError(`Failed to fetch RSS feed from ${url} after ${MAX_RETRIES} attempts: ${response.status} ${response.statusText}`, null, { url, status: response.status, statusText: response.statusText });
+                logger.error(`Failed to fetch RSS feed from ${url} after ${MAX_RETRIES} attempts: ${response.status} ${response.statusText}`, null, { url, status: response.status, statusText: response.statusText });
                 return null;
             }
             return await response.text();
         } catch (error: unknown) {
             const err = error instanceof Error ? error : new Error(String(error));
-            logWarning(`Error fetching RSS feed from ${url}: ${err.message}. Attempt ${i + 1}/${MAX_RETRIES}.`, err, { url, attempt: i + 1, errorName: err.name, errorMessage: err.message });
+            logger.warn(`Error fetching RSS feed from ${url}: ${err.message}. Attempt ${i + 1}/${MAX_RETRIES}.`, err, { url, attempt: i + 1, errorName: err.name, errorMessage: err.message });
             if (i < MAX_RETRIES - 1) {
                 const delay = BASE_DELAY_MS * Math.pow(2, i); // Exponential backoff
                 await new Promise(resolve => setTimeout(resolve, delay));
                 continue;
             }
-            logError(`Error fetching RSS feed from ${url} after ${MAX_RETRIES} attempts: ${err.message}`, err, { url, errorName: err.name, errorMessage: err.message });
+            logger.error(`Error fetching RSS feed from ${url} after ${MAX_RETRIES} attempts: ${err.message}`, err, { url, errorName: err.name, errorMessage: err.message });
             return null;
         }
     }
@@ -80,7 +80,7 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
 }
 
 async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const logger = new Logger(env);
     const articles: NewsArticle[] = [];
 
     const options = {
@@ -130,7 +130,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 try {
                     articleLink = new URL(articleLink, url).toString();
                 } catch (e) {
-                    logWarning(`Invalid article link found in RSS feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
+                    logger.warn(`Invalid article link found in RSS feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
                     continue; // 不正なリンクはスキップ
                 }
 
@@ -191,7 +191,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 try {
                     articleLink = new URL(articleLink, url).toString();
                 } catch (e) {
-                    logWarning(`Invalid article link found in Atom feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
+                    logger.warn(`Invalid article link found in Atom feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
                     continue; // 不正なリンクはスキップ
                 }
 
@@ -225,7 +225,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
 
                 // BloombergのHyperdrive記事を完全にスキップ
                 if (url.includes('bloomberg') && (cleanedTitle.includes('Hyperdrive') || articleLink.includes('hyperdrive'))) {
-                    logInfo(`Skipping Bloomberg Hyperdrive article: ${cleanedTitle} - ${articleLink}`, { title: cleanedTitle, articleLink });
+                    logger.info(`Skipping Bloomberg Hyperdrive article: ${cleanedTitle} - ${articleLink}`, { title: cleanedTitle, articleLink });
                     continue;
                 }
 
@@ -233,7 +233,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 try {
                     articleLink = new URL(articleLink, url).toString();
                 } catch (e) {
-                    logWarning(`Invalid article link found in RDF feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
+                    logger.warn(`Invalid article link found in RDF feed, skipping: ${articleLink}`, { feedUrl: url, error: e });
                     continue; // 不正なリンクはスキップ
                 }
 
@@ -264,14 +264,14 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
         }
     }
     else {
-        logError('Unknown feed format or no items/entries found.', null, { url });
+        logger.error('Unknown feed format or no items/entries found.', null, { url });
     }
 
     return articles;
 }
 
 export async function collectNews(env: Env): Promise<NewsArticle[]> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     let allArticles: NewsArticle[] = [];
 
     // チャンクに分割して並列処理
@@ -365,6 +365,6 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
     }
     allArticles = Array.from(uniqueArticlesMap.values());
 
-    logInfo(`Collected ${allArticles.length} unique articles from ${NEWS_RSS_URLS.length} sources.`, { articleCount: allArticles.length, sourceCount: NEWS_RSS_URLS.length });
+    logger.info(`Collected ${allArticles.length} unique articles from ${NEWS_RSS_URLS.length} sources.`, { articleCount: allArticles.length, sourceCount: NEWS_RSS_URLS.length });
     return allArticles;
 }

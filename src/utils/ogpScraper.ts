@@ -1,8 +1,8 @@
-import { initLogger } from '../logger';
+import { Logger } from '../logger';
 import { Env } from '../index';
 
 export async function getOgpImageUrl(articleUrl: string, env: Env): Promise<string | undefined> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     try {
         // URLがHTTPの場合、HTTPSに変換を試みる
         let fetchUrl = articleUrl;
@@ -17,7 +17,7 @@ export async function getOgpImageUrl(articleUrl: string, env: Env): Promise<stri
         });
 
         if (!response.ok) {
-            logError(`Failed to fetch article HTML from ${articleUrl}: ${response.statusText}`, null, { url: articleUrl, status: response.status });
+            logger.error(`Failed to fetch article HTML from ${articleUrl}: ${response.statusText}`, null, { url: articleUrl, status: response.status });
             return undefined;
         }
 
@@ -28,14 +28,14 @@ export async function getOgpImageUrl(articleUrl: string, env: Env): Promise<stri
         const match = html.match(ogImageRegex);
 
         if (match && match[1]) {
-            logInfo(`Found OGP image for ${articleUrl}: ${match[1]}`, { url: articleUrl, imageUrl: match[1] });
+            logger.info(`Found OGP image for ${articleUrl}: ${match[1]}`, { url: articleUrl, imageUrl: match[1] });
             return match[1];
         } else {
-            logInfo(`No OGP image found for ${articleUrl}.`, { url: articleUrl });
+            logger.info(`No OGP image found for ${articleUrl}.`, { url: articleUrl });
             return undefined;
         }
     } catch (error) {
-        logError(`Error fetching or parsing OGP image for ${articleUrl}:`, error, { url: articleUrl });
+        logger.error(`Error fetching or parsing OGP image for ${articleUrl}:`, error, { url: articleUrl });
         return undefined;
     }
 }

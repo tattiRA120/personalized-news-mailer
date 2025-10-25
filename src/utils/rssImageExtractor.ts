@@ -1,13 +1,13 @@
-import { initLogger } from '../logger';
+import { Logger } from '../logger';
 import { XMLParser } from 'fast-xml-parser';
 import { Env } from '../index';
 
 export async function getRssImageUrl(rssFeedUrl: string, articleLink: string, env: Env): Promise<string | undefined> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     try {
         const response = await fetch(rssFeedUrl);
         if (!response.ok) {
-            logError(`Failed to fetch RSS feed from ${rssFeedUrl}: ${response.statusText}`, null, { url: rssFeedUrl, status: response.status });
+            logger.error(`Failed to fetch RSS feed from ${rssFeedUrl}: ${response.statusText}`, null, { url: rssFeedUrl, status: response.status });
             return undefined;
         }
         const xml = await response.text();
@@ -91,19 +91,19 @@ export async function getRssImageUrl(rssFeedUrl: string, articleLink: string, en
             }
         }
         else {
-            logInfo('Unknown feed format or no items/entries found for RSS image extraction.', { rssFeedUrl, articleLink });
+            logger.info('Unknown feed format or no items/entries found for RSS image extraction.', { rssFeedUrl, articleLink });
         }
 
         if (imageUrl) {
-            logInfo(`Found RSS image for ${articleLink} from ${rssFeedUrl}: ${imageUrl}`, { url: articleLink, rssFeedUrl, imageUrl });
+            logger.info(`Found RSS image for ${articleLink} from ${rssFeedUrl}: ${imageUrl}`, { url: articleLink, rssFeedUrl, imageUrl });
         } else {
-            logInfo(`No RSS image found for ${articleLink} from ${rssFeedUrl}.`, { url: articleLink, rssFeedUrl });
+            logger.info(`No RSS image found for ${articleLink} from ${rssFeedUrl}.`, { url: articleLink, rssFeedUrl });
         }
 
         return imageUrl;
 
     } catch (error) {
-        logError(`Error fetching or parsing RSS image for ${articleLink} from ${rssFeedUrl}:`, error, { url: articleLink, rssFeedUrl });
+        logger.error(`Error fetching or parsing RSS image for ${articleLink} from ${rssFeedUrl}:`, error, { url: articleLink, rssFeedUrl });
         return undefined;
     }
 }

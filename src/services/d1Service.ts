@@ -1,5 +1,5 @@
 import { D1Database } from '@cloudflare/workers-types';
-import { initLogger } from '../logger';
+import { Logger } from '../logger';
 import { NewsArticle } from '../newsCollector';
 import { chunkArray } from '../utils/textProcessor';
 import { Env } from '../index';
@@ -23,13 +23,13 @@ interface D1Result {
  * @returns 保存された記事の数
  */
 export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promise<number> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     if (articles.length === 0) {
-        logInfo('No articles to save to D1. Skipping.');
+        logger.info('No articles to save to D1. Skipping.');
         return 0;
     }
 
-    logInfo(`Attempting to save ${articles.length} articles to D1.`, { count: articles.length });
+    logger.info(`Attempting to save ${articles.length} articles to D1.`, { count: articles.length });
     let savedCount = 0;
 
     try {
@@ -56,20 +56,20 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
                 );
             }
 
-            logInfo(`Executing D1 batch insert for ${chunk.length} articles.`, { query, chunkCount: chunk.length });
+            logger.info(`Executing D1 batch insert for ${chunk.length} articles.`, { query, chunkCount: chunk.length });
             const { success, error, meta } = await stmt.bind(...bindParams).run() as D1Result;
 
             if (success) {
                 savedCount += meta?.changes || 0;
-                logInfo(`Successfully inserted/updated ${meta?.changes || 0} articles in D1 batch.`, { changes: meta?.changes || 0 });
+                logger.info(`Successfully inserted/updated ${meta?.changes || 0} articles in D1 batch.`, { changes: meta?.changes || 0 });
             } else {
-                logError(`Failed to save articles to D1 in batch: ${error}`, null, { error });
+                logger.error(`Failed to save articles to D1 in batch: ${error}`, null, { error });
             }
         }
-        logInfo(`Finished saving articles to D1. Total saved: ${savedCount}.`, { totalSaved: savedCount });
+        logger.info(`Finished saving articles to D1. Total saved: ${savedCount}.`, { totalSaved: savedCount });
         return savedCount;
     } catch (error) {
-        logError('Error saving articles to D1:', error, { count: articles.length });
+        logger.error('Error saving articles to D1:', error, { count: articles.length });
         return savedCount;
     }
 }
@@ -84,8 +84,8 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
  * @returns 取得された記事の配列
  */
 export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: number = 0, whereClause: string = '', bindParams: any[] = []): Promise<ArticleWithEmbedding[]> {
-    const { logError, logInfo } = initLogger(env);
-    logInfo(`Fetching articles from D1 with limit ${limit}, offset ${offset}, where: ${whereClause}.`);
+    const logger = new Logger(env);
+    logger.info(`Fetching articles from D1 with limit ${limit}, offset ${offset}, where: ${whereClause}.`);
     try {
         let query = `SELECT article_id, title, url, published_at, content, embedding FROM articles`;
         
@@ -113,10 +113,10 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
             embedding: row.embedding ? JSON.parse(row.embedding) : undefined, // embeddingはD1から取得し、必要に応じて付与
             publishedAt: row.published_at,
         }));
-        logInfo(`Fetched ${articles.length} articles from D1.`, { count: articles.length });
+        logger.info(`Fetched ${articles.length} articles from D1.`, { count: articles.length });
         return articles;
     } catch (error) {
-        logError('Error fetching articles from D1:', error, { errorDetails: error instanceof Error ? error.message : error });
+        logger.error('Error fetching articles from D1:', error, { errorDetails: error instanceof Error ? error.message : error });
         return [];
     }
 }
@@ -128,8 +128,8 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
  * @returns 記事オブジェクト、またはnull
  */
 export async function getArticleByIdFromD1(articleId: string, env: Env): Promise<ArticleWithEmbedding | null> {
-    const { logError, logWarning, logDebug } = initLogger(env);
-    logDebug(`Fetching article by ID from D1: ${articleId}.`);
+    const logger = new Logger(env);
+    logger.debug(`Fetching article by ID from D1: ${articleId}.`);
     try {
         const { results } = await env.DB.prepare("SELECT article_id, title, url, published_at, content, embedding FROM articles WHERE article_id = ?").bind(articleId).all<any>();
         if (results && results.length > 0) {
@@ -144,13 +144,13 @@ export async function getArticleByIdFromD1(articleId: string, env: Env): Promise
                 embedding: row.embedding ? JSON.parse(row.embedding) : undefined, // embeddingはD1から取得し、必要に応じて付与
                 publishedAt: row.published_at,
             };
-            logDebug(`Found article by ID: ${articleId}.`, { articleId });
+            logger.debug(`Found article by ID: ${articleId}.`, { articleId });
             return article;
         }
-        logWarning(`Article with ID ${articleId} not found in D1.`, { articleId });
+        logger.warn(`Article with ID ${articleId} not found in D1.`, { articleId });
         return null;
     } catch (error) {
-        logError(`Error fetching article by ID ${articleId} from D1:`, error, { articleId, errorDetails: error instanceof Error ? error.message : error });
+        logger.error(`Error fetching article by ID ${articleId} from D1:`, error, { articleId, errorDetails: error instanceof Error ? error.message : error });
         return null;
     }
 }
@@ -163,19 +163,19 @@ export async function getArticleByIdFromD1(articleId: string, env: Env): Promise
  * @returns 更新が成功したかどうか
  */
 export async function updateArticleEmbeddingInD1(articleId: string, embedding: number[], env: Env): Promise<boolean> {
-    const { logError, logInfo } = initLogger(env);
-    logInfo(`Updating embedding for article ${articleId} in D1.`);
+    const logger = new Logger(env);
+    logger.info(`Updating embedding for article ${articleId} in D1.`);
     try {
         const { success, error, meta } = await env.DB.prepare("UPDATE articles SET embedding = ? WHERE article_id = ?").bind(JSON.stringify(embedding), articleId).run() as D1Result;
         if (success) {
-            logInfo(`Successfully updated embedding for article ${articleId}. Changes: ${meta?.changes || 0}`, { articleId, changes: meta?.changes || 0 });
+            logger.info(`Successfully updated embedding for article ${articleId}. Changes: ${meta?.changes || 0}`, { articleId, changes: meta?.changes || 0 });
             return true;
         } else {
-            logError(`Failed to update embedding for article ${articleId}: ${error}`, null, { articleId, error });
+            logger.error(`Failed to update embedding for article ${articleId}: ${error}`, null, { articleId, error });
             return false;
         }
     } catch (error) {
-        logError(`Error updating embedding for article ${articleId} in D1:`, error);
+        logger.error(`Error updating embedding for article ${articleId} in D1:`, error);
         return false;
     }
 }
@@ -188,8 +188,8 @@ export async function updateArticleEmbeddingInD1(articleId: string, embedding: n
  * @returns 削除された記事の数
  */
 export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number, embeddingIsNull: boolean = false): Promise<number> {
-    const { logError, logInfo } = initLogger(env);
-    logInfo(`Deleting old articles from D1 older than ${new Date(cutoffTimestamp).toISOString()}. Embedding IS NULL: ${embeddingIsNull}`);
+    const logger = new Logger(env);
+    logger.info(`Deleting old articles from D1 older than ${new Date(cutoffTimestamp).toISOString()}. Embedding IS NULL: ${embeddingIsNull}`);
     try {
         let selectQuery = `SELECT article_id FROM articles WHERE published_at < ?`;
         if (embeddingIsNull) {
@@ -199,11 +199,11 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
         const articleIds = articlesToDelete.map(article => article.article_id);
 
         if (articleIds.length === 0) {
-            logInfo('No old articles found to delete from D1. Skipping cleanup.', { cutoffTimestamp, embeddingIsNull });
+            logger.info('No old articles found to delete from D1. Skipping cleanup.', { cutoffTimestamp, embeddingIsNull });
             return 0;
         }
 
-        logInfo(`Found ${articleIds.length} old articles to delete. Proceeding with cascading deletion.`, { count: articleIds.length });
+        logger.info(`Found ${articleIds.length} old articles to delete. Proceeding with cascading deletion.`, { count: articleIds.length });
 
         const CHUNK_SIZE_SQL_VARIABLES = 50;
         const articleIdChunks = chunkArray(articleIds, CHUNK_SIZE_SQL_VARIABLES);
@@ -217,10 +217,10 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
                 const deleteQuery = `DELETE FROM ${table} WHERE article_id IN (${placeholders})`;
                 const { success, error, meta } = await env.DB.prepare(deleteQuery).bind(...chunk).run() as D1Result;
                 if (success) {
-                    logInfo(`Deleted ${meta?.changes || 0} entries from ${table} for old articles.`, { table, deletedCount: meta?.changes || 0 });
+                    logger.info(`Deleted ${meta?.changes || 0} entries from ${table} for old articles.`, { table, deletedCount: meta?.changes || 0 });
                     totalDeleted += meta?.changes || 0;
                 } else {
-                    logError(`Failed to delete entries from ${table} for old articles:`, error, { table });
+                    logger.error(`Failed to delete entries from ${table} for old articles:`, error, { table });
                 }
             }
         }
@@ -231,17 +231,17 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
             const deleteArticlesQuery = `DELETE FROM articles WHERE article_id IN (${placeholders})`;
             const { success, error, meta } = await env.DB.prepare(deleteArticlesQuery).bind(...chunk).run() as D1Result;
             if (success) {
-                logInfo(`Successfully deleted ${meta?.changes || 0} old articles from 'articles' table.`, { deletedCount: meta?.changes || 0 });
+                logger.info(`Successfully deleted ${meta?.changes || 0} old articles from 'articles' table.`, { deletedCount: meta?.changes || 0 });
                 totalDeleted += meta?.changes || 0;
             } else {
-                logError(`Failed to delete old articles from 'articles' table:`, error, { error });
+                logger.error(`Failed to delete old articles from 'articles' table:`, error, { error });
             }
         }
 
-        logInfo(`Finished deleting old articles from D1. Total deleted records across all tables: ${totalDeleted}.`, { totalDeleted });
+        logger.info(`Finished deleting old articles from D1. Total deleted records across all tables: ${totalDeleted}.`, { totalDeleted });
         return totalDeleted;
     } catch (error) {
-        logError('Error during D1 article cleanup:', error, { errorDetails: error instanceof Error ? error.message : error });
+        logger.error('Error during D1 article cleanup:', error, { errorDetails: error instanceof Error ? error.message : error });
         return 0;
     }
 }
@@ -254,8 +254,8 @@ export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number,
  * @returns 削除されたログエントリの数
  */
 export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimestamp: number): Promise<number> {
-    const { logError, logInfo } = initLogger(env);
-    logInfo(`Cleaning up old logs for user ${userId} in DB older than ${new Date(cutoffTimestamp).toISOString()}.`);
+    const logger = new Logger(env);
+    logger.info(`Cleaning up old logs for user ${userId} in DB older than ${new Date(cutoffTimestamp).toISOString()}.`);
     let totalDeleted = 0;
     try {
         const tables = ['click_logs', 'sent_articles', 'education_logs'];
@@ -263,15 +263,15 @@ export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimesta
             const { success, error, meta } = await env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run() as D1Result; 
             if (success) {
                 totalDeleted += meta?.changes || 0;
-                logInfo(`Deleted ${meta?.changes || 0} old entries from ${table} for user ${userId}.`, { table, userId, deletedCount: meta?.changes || 0 });
+                logger.info(`Deleted ${meta?.changes || 0} old entries from ${table} for user ${userId}.`, { table, userId, deletedCount: meta?.changes || 0 });
             } else {
-                logError(`Failed to delete old entries from ${table} for user ${userId}: ${error}`, null, { table, userId, error });
+                logger.error(`Failed to delete old entries from ${table} for user ${userId}: ${error}`, null, { table, userId, error });
             }
         }
-        logInfo(`Finished cleanup of old logs for user ${userId} in DB. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
+        logger.info(`Finished cleanup of old logs for user ${userId} in DB. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
         return totalDeleted;
     } catch (error) {
-        logError(`Error during cleanup of old user logs for user ${userId}:`, error, { userId, errorDetails: error instanceof Error ? error.message : error });
+        logger.error(`Error during cleanup of old user logs for user ${userId}:`, error, { userId, errorDetails: error instanceof Error ? error.message : error });
         return totalDeleted;
     }
 }
@@ -284,8 +284,8 @@ export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimesta
  * @returns 送信された記事の配列
  */
 export async function getSentArticlesForUser(env: Env, userId: string, sinceTimestamp: number): Promise<{ article_id: string, timestamp: number, embedding: number[] }[]> {
-    const { logError, logInfo } = initLogger(env);
-    logInfo(`Fetching sent articles for user ${userId} from DB since ${new Date(sinceTimestamp).toISOString()}.`);
+    const logger = new Logger(env);
+    logger.info(`Fetching sent articles for user ${userId} from DB since ${new Date(sinceTimestamp).toISOString()}.`);
     try {
         const { results } = await env.DB.prepare(
             `SELECT article_id, timestamp, embedding FROM sent_articles WHERE user_id = ? AND timestamp >= ?`
@@ -297,10 +297,10 @@ export async function getSentArticlesForUser(env: Env, userId: string, sinceTime
             embedding: JSON.parse(row.embedding) as number[],
         }));
 
-        logInfo(`Found ${articles.length} sent articles for user ${userId} since ${new Date(sinceTimestamp).toISOString()}.`, { userId, count: articles.length });
+        logger.info(`Found ${articles.length} sent articles for user ${userId} since ${new Date(sinceTimestamp).toISOString()}.`, { userId, count: articles.length });
         return articles;
     } catch (error) {
-        logError(`Error fetching sent articles for user ${userId} from DB:`, error);
+        logger.error(`Error fetching sent articles for user ${userId} from DB:`, error);
         return [];
     }
 }
@@ -313,8 +313,8 @@ export async function getSentArticlesForUser(env: Env, userId: string, sinceTime
  * @returns 未クリックの送信済み記事の配列
  */
 export async function getUnclickedSentArticles(env: Env, userId: string, sinceTimestamp: number): Promise<{ article_id: string, timestamp: number, embedding: number[] }[]> {
-    const { logError, logInfo } = initLogger(env);
-    logInfo(`Fetching unclicked sent articles for user ${userId} from DB since ${new Date(sinceTimestamp).toISOString()}.`);
+    const logger = new Logger(env);
+    logger.info(`Fetching unclicked sent articles for user ${userId} from DB since ${new Date(sinceTimestamp).toISOString()}.`);
     try {
         const { results } = await env.DB.prepare(
             `SELECT sa.article_id, sa.timestamp, sa.embedding
@@ -329,10 +329,10 @@ export async function getUnclickedSentArticles(env: Env, userId: string, sinceTi
             embedding: JSON.parse(row.embedding) as number[],
         }));
 
-        logInfo(`Found ${articles.length} unclicked sent articles for user ${userId} since ${new Date(sinceTimestamp).toISOString()}.`, { userId, count: articles.length });
+        logger.info(`Found ${articles.length} unclicked sent articles for user ${userId} since ${new Date(sinceTimestamp).toISOString()}.`, { userId, count: articles.length });
         return articles;
     } catch (error) {
-        logError(`Error fetching unclicked sent articles for user ${userId} from DB:`, error);
+        logger.error(`Error fetching unclicked sent articles for user ${userId} from DB:`, error);
         return [];
     }
 }
@@ -344,16 +344,16 @@ export async function getUnclickedSentArticles(env: Env, userId: string, sinceTi
  * @returns 未処理のクリックログの配列
  */
 export async function getClickLogsForUser(env: Env, userId: string): Promise<{ article_id: string, timestamp: number }[]> {
-    const { logError, logInfo } = initLogger(env);
-    logInfo(`Fetching click logs for user ${userId} from DB.`);
+    const logger = new Logger(env);
+    logger.info(`Fetching click logs for user ${userId} from DB.`);
     try {
         const { results } = await env.DB.prepare( 
             `SELECT article_id, timestamp FROM click_logs WHERE user_id = ?`
         ).bind(userId).all<{ article_id: string, timestamp: number }>();
-        logInfo(`Found ${results.length} click logs for user ${userId}.`, { userId, count: results.length });
+        logger.info(`Found ${results.length} click logs for user ${userId}.`, { userId, count: results.length });
         return results;
     } catch (error) {
-        logError(`Error fetching click logs for user ${userId} from DB:`, error);
+        logger.error(`Error fetching click logs for user ${userId} from DB:`, error);
         return [];
     }
 }
@@ -366,12 +366,12 @@ export async function getClickLogsForUser(env: Env, userId: string): Promise<{ a
  * @returns 削除されたログエントリの数
  */
 export async function deleteProcessedClickLogs(env: Env, userId: string, articleIdsToDelete: string[]): Promise<number> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     if (articleIdsToDelete.length === 0) {
-        logInfo('No click logs to delete. Skipping.');
+        logger.info('No click logs to delete. Skipping.');
         return 0;
     }
-    logInfo(`Deleting ${articleIdsToDelete.length} processed click logs for user ${userId} from DB.`);
+    logger.info(`Deleting ${articleIdsToDelete.length} processed click logs for user ${userId} from DB.`);
     let totalDeleted = 0;
     try {
         const CHUNK_SIZE_SQL_VARIABLES = 50;
@@ -385,15 +385,15 @@ export async function deleteProcessedClickLogs(env: Env, userId: string, article
 
             if (success) {
                 totalDeleted += meta?.changes || 0;
-                logInfo(`Deleted ${meta?.changes || 0} click logs in batch for user ${userId}.`, { userId, deletedCount: meta?.changes || 0 });
+                logger.info(`Deleted ${meta?.changes || 0} click logs in batch for user ${userId}.`, { userId, deletedCount: meta?.changes || 0 });
             } else {
-                logError(`Failed to delete click logs in batch for user ${userId}: ${error}`, null, { userId, error });
+                logger.error(`Failed to delete click logs in batch for user ${userId}: ${error}`, null, { userId, error });
             }
         }
-        logInfo(`Finished deleting processed click logs for user ${userId}. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
+        logger.info(`Finished deleting processed click logs for user ${userId}. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
         return totalDeleted;
     } catch (error) {
-        logError(`Error deleting processed click logs for user ${userId} from DB:`, error);
+        logger.error(`Error deleting processed click logs for user ${userId} from DB:`, error);
         return totalDeleted;
     }
 }
@@ -406,7 +406,7 @@ export async function deleteProcessedClickLogs(env: Env, userId: string, article
  * @returns ユーザーのCTR（0から1の間の数値）
  */
 export async function getUserCTR(env: Env, userId: string, days: number = 30): Promise<number> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     try {
         const sinceTimestamp = Date.now() - days * 24 * 60 * 60 * 1000;
 
@@ -427,11 +427,11 @@ export async function getUserCTR(env: Env, userId: string, days: number = 30): P
         }
 
         const ctr = clickCount / sentCount;
-        logInfo(`Calculated CTR for user ${userId}: ${ctr.toFixed(4)} (${clickCount}/${sentCount})`, { userId, ctr, clickCount, sentCount });
+        logger.info(`Calculated CTR for user ${userId}: ${ctr.toFixed(4)} (${clickCount}/${sentCount})`, { userId, ctr, clickCount, sentCount });
         return ctr;
 
     } catch (error) {
-        logError(`Error calculating CTR for user ${userId}:`, error, { userId });
+        logger.error(`Error calculating CTR for user ${userId}:`, error, { userId });
         return 0.5; // エラー時もデフォルト値0.5を返す
     }
 }

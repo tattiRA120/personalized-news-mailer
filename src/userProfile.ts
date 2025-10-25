@@ -1,6 +1,6 @@
 // src/userProfile.ts
 
-import { initLogger } from './logger';
+import { Logger } from './logger';
 import { Env } from './index';
 
 export interface UserProfile {
@@ -10,7 +10,7 @@ export interface UserProfile {
 }
 
 export async function getUserProfile(userId: string, env: Env): Promise<UserProfile | null> {
-    const { logError, logInfo, logWarning } = initLogger(env);
+    const logger = new Logger(env);
     try {
         const { results } = await env.DB.prepare(
             `SELECT user_id, email, embedding FROM users WHERE user_id = ?`
@@ -23,34 +23,34 @@ export async function getUserProfile(userId: string, env: Env): Promise<UserProf
                 email: rawProfile.email,
                 embedding: rawProfile.embedding ? JSON.parse(rawProfile.embedding) : undefined,
             };
-            logInfo(`Retrieved user profile for ${userId}.`, { userId });
+            logger.info(`Retrieved user profile for ${userId}.`, { userId });
             return userProfile;
         } else {
-            logInfo(`User profile not found for ${userId}.`, { userId });
+            logger.info(`User profile not found for ${userId}.`, { userId });
             return null;
         }
     } catch (error) {
-        logError(`Error getting user profile for ${userId}:`, error, { userId });
+        logger.error(`Error getting user profile for ${userId}:`, error, { userId });
         return null;
     }
 }
 
 export async function updateUserProfile(profile: UserProfile, env: Env): Promise<void> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     try {
         // embeddingを文字列として保存
         const embeddingString = profile.embedding ? JSON.stringify(profile.embedding) : null;
         await env.DB.prepare(
             `UPDATE users SET email = ?, embedding = ? WHERE user_id = ?`
         ).bind(profile.email, embeddingString, profile.userId).run();
-        logInfo(`Updated user profile for ${profile.userId}.`, { userId: profile.userId });
+        logger.info(`Updated user profile for ${profile.userId}.`, { userId: profile.userId });
     } catch (error) {
-        logError(`Error updating user profile for ${profile.userId}:`, error, { userId: profile.userId });
+        logger.error(`Error updating user profile for ${profile.userId}:`, error, { userId: profile.userId });
     }
 }
 
 export async function createUserProfile(userId: string, email: string, env: Env): Promise<UserProfile> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     const newUserProfile: UserProfile = {
         userId: userId,
         email: email,
@@ -61,16 +61,16 @@ export async function createUserProfile(userId: string, email: string, env: Env)
         await env.DB.prepare(
             `INSERT INTO users (user_id, email, embedding) VALUES (?, ?, ?)`
         ).bind(newUserProfile.userId, newUserProfile.email, null).run();
-        logInfo(`Created new user profile for ${userId} with email ${email}`, { userId, email });
+        logger.info(`Created new user profile for ${userId} with email ${email}`, { userId, email });
         return newUserProfile;
     } catch (error) {
-        logError(`Error creating user profile for ${userId}:`, error, { userId, email });
+        logger.error(`Error creating user profile for ${userId}:`, error, { userId, email });
         throw error; // Re-throw to indicate failure
     }
 }
 
 export async function getUserIdByEmail(email: string, env: Env): Promise<string | null> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     try {
         const { results } = await env.DB.prepare(
             `SELECT user_id FROM users WHERE email = ?`
@@ -78,30 +78,30 @@ export async function getUserIdByEmail(email: string, env: Env): Promise<string 
 
         if (results && results.length > 0) {
             const userId = results[0].user_id;
-            logInfo(`Retrieved user ID for email ${email}: ${userId}`, { email, userId });
+            logger.info(`Retrieved user ID for email ${email}: ${userId}`, { email, userId });
             return userId;
         } else {
-            logInfo(`User ID not found for email ${email}.`, { email });
+            logger.info(`User ID not found for email ${email}.`, { email });
             return null;
         }
     } catch (error) {
-        logError(`Error getting user ID for email ${email}:`, error, { email });
+        logger.error(`Error getting user ID for email ${email}:`, error, { email });
         return null;
     }
 }
 
 export async function getAllUserIds(env: Env): Promise<string[]> {
-    const { logError, logInfo } = initLogger(env);
+    const logger = new Logger(env);
     try {
         const { results } = await env.DB.prepare(
             `SELECT user_id FROM users`
         ).all<{ user_id: string }>();
 
         const userIds = results ? results.map(row => row.user_id) : [];
-        logInfo(`Retrieved ${userIds.length} user IDs.`, { userCount: userIds.length });
+        logger.info(`Retrieved ${userIds.length} user IDs.`, { userCount: userIds.length });
         return userIds;
     } catch (error) {
-        logError('Error getting all user IDs:', error);
+        logger.error('Error getting all user IDs:', error);
         return [];
     }
 }
