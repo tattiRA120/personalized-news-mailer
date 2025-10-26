@@ -816,74 +816,87 @@ export default {
                 if (feedbackLogs.results && feedbackLogs.results.length > 0) {
                     // 詳細なフィードバック分析
                     const interestedCount = feedbackLogs.results.filter(log => log.action === 'interested').length;
+                    const notInterestedCount = feedbackLogs.results.filter(log => log.action === 'not_interested').length;
                     const totalCount = feedbackLogs.results.length;
                     const interestRatio = interestedCount / totalCount;
+                    const notInterestRatio = notInterestedCount / totalCount;
 
                     // 最近の傾向分析（最近10件）
                     const recentLogs = feedbackLogs.results.slice(0, 10);
                     const recentInterestedCount = recentLogs.filter(log => log.action === 'interested').length;
+                    const recentNotInterestedCount = recentLogs.filter(log => log.action === 'not_interested').length;
                     const recentTotalCount = recentLogs.length;
                     const recentInterestRatio = recentTotalCount > 0 ? recentInterestedCount / recentTotalCount : 0;
+                    const recentNotInterestRatio = recentTotalCount > 0 ? recentNotInterestedCount / recentTotalCount : 0;
 
-                    logger.debug(`Feedback analysis for user ${userId}: ${interestedCount}/${totalCount} interested (${(interestRatio * 100).toFixed(1)}%), recent: ${recentInterestedCount}/${recentTotalCount} (${(recentInterestRatio * 100).toFixed(1)}%)`, {
+                    logger.debug(`Feedback analysis for user ${userId}: ${interestedCount}/${totalCount} interested (${(interestRatio * 100).toFixed(1)}%), ${notInterestedCount}/${totalCount} not interested (${(notInterestRatio * 100).toFixed(1)}%)`, {
                         userId,
                         interestedCount,
+                        notInterestedCount,
                         totalCount,
                         interestRatio,
+                        notInterestRatio,
                         recentInterestedCount,
-                        recentTotalCount,
-                        recentInterestRatio
+                        recentNotInterestedCount,
+                        recentInterestRatio,
+                        recentNotInterestRatio
                     });
 
-                    // 連続的なlambda計算アルゴリズム
-                    let baseLambda = 0.5;
+                    // 興味なし記事削減のためのlambda計算アルゴリズム
+                    let baseLambda = 0.6; // 初期値を0.6に上げて類似性を重視
 
-                    // CTRの影響（0.1-0.9の範囲にマッピング）
-                    const ctrInfluence = (userCTR - 0.5) * 0.2; // CTRが0.5を中心に±0.1の影響
+                    // CTRの影響（高いCTRは類似性を高く）
+                    const ctrInfluence = userCTR * 0.2; // CTRが高いほど類似性を高く
                     baseLambda += ctrInfluence;
 
-                    // 興味比率の影響（線形的にマッピング）
-                    const interestInfluence = (interestRatio - 0.5) * 0.3; // 興味比率が0.5を中心に±0.15の影響
-                    baseLambda -= interestInfluence; // 興味が高いほど探索性を高く（lambdaを低く）
+                    // 興味なしの割合が高い場合にlambdaを高くする（類似性を重視）
+                    if (notInterestRatio > 0.5) {
+                        baseLambda += 0.2; // 興味なしが多い場合は強く類似性を高く
+                    } else if (notInterestRatio > 0.3) {
+                        baseLambda += 0.1; // 興味なしが少し多い場合は少し類似性を高く
+                    }
 
-                    // 最近の傾向の影響
-                    const recentInfluence = (recentInterestRatio - 0.5) * 0.15; // 最近の傾向も考慮
-                    baseLambda -= recentInfluence;
+                    // 興味ありの割合が高い場合でも適度に探索性を保つ
+                    if (interestRatio > 0.8) {
+                        baseLambda -= 0.1; // 興味ありが多い場合は少し探索性を高く
+                    }
+
+                    // 最近の興味なし傾向を考慮
+                    if (recentNotInterestRatio > 0.4) {
+                        baseLambda += 0.15; // 最近興味なしが多い場合は類似性を高く
+                    }
 
                     // フィードバック数の影響
                     if (totalCount < 5) {
-                        baseLambda -= 0.1; // 少ない場合は探索性を高く
+                        baseLambda += 0.1; // 少ない場合は類似性を高くして安全に
                     } else if (totalCount > 15) {
                         baseLambda += 0.05; // 十分なデータがある場合は少し類似性を高く
                     }
 
-                    // フィードバックの多様性による調整
-                    const uniqueActions = new Set(feedbackLogs.results.map(log => log.action)).size;
-                    if (uniqueActions === 1) {
-                        baseLambda += 0.05; // 同じ選択ばかりの場合は類似性を高く
-                    } else if (uniqueActions === 2) {
-                        baseLambda -= 0.05; // 多様な選択の場合は探索性を高く
+                    // 興味なしの多様性による調整（興味なしの割合が高い場合）
+                    if (notInterestRatio > interestRatio) {
+                        baseLambda += 0.1; // 興味なしが多い場合は類似性を高く
                     }
 
-                    lambda = Math.max(0.1, Math.min(0.9, baseLambda)); // 0.1-0.9の範囲に制限
+                    lambda = Math.max(0.3, Math.min(0.9, baseLambda)); // 0.3-0.9の範囲に制限
 
                     // 最適化されたlambdaを保存
                     await updateMMRLambda(userId, lambda, env);
 
-                    logger.debug(`Optimized MMR lambda for user ${userId}: ${lambda.toFixed(3)}`, {
+                    logger.debug(`Optimized MMR lambda for user ${userId} (not interested reduction): ${lambda.toFixed(3)}`, {
                         userId,
                         lambda,
                         userCTR,
                         interestRatio,
-                        recentInterestRatio,
+                        notInterestRatio,
+                        recentNotInterestRatio,
                         totalCount,
-                        uniqueActions,
                         baseLambda: baseLambda.toFixed(3)
                     });
 
                 } else {
-                    // フィードバックがない場合はCTRに基づいて調整
-                    lambda = 0.4 + (userCTR * 0.2); // CTRに応じて0.4-0.6の範囲
+                    // フィードバックがない場合はCTRに基づいて調整（少し類似性を高めに）
+                    lambda = 0.5 + (userCTR * 0.2); // CTRに応じて0.5-0.7の範囲
 
                     // 初期lambdaも保存
                     await updateMMRLambda(userId, lambda, env);

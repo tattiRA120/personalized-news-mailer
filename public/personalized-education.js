@@ -328,12 +328,22 @@ document.addEventListener('DOMContentLoaded', () => {
         lambdaTextElement.textContent = `λ: ${clampedLambda.toFixed(2)}`;
 
         // lambdaに応じて色を変更
-        if (clampedLambda <= 0.3) {
+        if (clampedLambda <= 0.4) {
             lambdaTextElement.style.color = '#007bff'; // 青 (探索重視)
-        } else if (clampedLambda <= 0.7) {
+        } else if (clampedLambda <= 0.6) {
             lambdaTextElement.style.color = '#28a745'; // 緑 (バランス)
         } else {
             lambdaTextElement.style.color = '#ffc107'; // 黄色 (類似性重視)
+        }
+
+        // 説明テキストを更新
+        const descriptionElement = mmrSettingsDiv.querySelector('p');
+        if (clampedLambda <= 0.4) {
+            descriptionElement.textContent = '新しい記事の発見を重視しています。興味なしの記事が表示されやすくなりますが、新しい発見が増えます。';
+        } else if (clampedLambda <= 0.6) {
+            descriptionElement.textContent = '新しい発見と興味のある記事のバランスを取っています。';
+        } else {
+            descriptionElement.textContent = '興味のある記事の推薦を重視しています。興味なしの記事が減少し、好みに合った記事が増えます。';
         }
     }
 
