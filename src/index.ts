@@ -658,6 +658,47 @@ export default {
             }
         }
 
+        // --- Get Preference Score Handler ---
+        if (request.method === 'POST' && path === '/api/preference-score') {
+            logger.debug('Request received for preference score calculation');
+            try {
+                const { userId, selectedArticleIds } = await request.json() as { userId: string, selectedArticleIds: string[] };
+
+                if (!userId || !Array.isArray(selectedArticleIds) || selectedArticleIds.length === 0) {
+                    logger.warn('Preference score calculation failed: Missing userId or selectedArticleIds.');
+                    return new Response('Missing userId or selectedArticleIds', { status: 400 });
+                }
+
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+                const scoreResponse = await clickLogger.fetch(
+                    new Request(`${env.WORKER_BASE_URL}/calculate-preference-score`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId, selectedArticleIds }),
+                    })
+                );
+
+                if (!scoreResponse.ok) {
+                    const errorText = await scoreResponse.text();
+                    logger.error(`Failed to get preference score from ClickLogger: ${scoreResponse.statusText}`, null, { userId, status: scoreResponse.status, statusText: scoreResponse.statusText, errorText });
+                    return new Response(`Failed to calculate preference score: ${scoreResponse.statusText}`, { status: scoreResponse.status });
+                }
+
+                const { score } = await scoreResponse.json() as { score: number };
+                logger.debug(`Preference score calculated for user ${userId}: ${score}`, { userId, score });
+
+                return new Response(JSON.stringify({ score }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                logger.error('Error calculating preference score:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
 
 		// Handle other requests or return a default response
 		return new Response('Not Found', { status: 404 });

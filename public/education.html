@@ -19,6 +19,20 @@
             <div class="spinner"></div>
         </button>
         <p id="message"></p>
+
+        <!-- 好みスコア表示エリア -->
+        <div id="preference-score" style="display: none; margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6;">
+            <h3 style="margin: 0 0 10px 0; color: #495057;">現在の好みスコア</h3>
+            <div style="display: flex; align-items: center; gap: 15px;">
+                <div style="flex: 1;">
+                    <div class="progress-bar" style="width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden;">
+                        <div class="progress-fill" style="height: 100%; background: linear-gradient(90deg, #28a745 0%, #ffc107 50%, #dc3545 100%); border-radius: 10px; transition: width 0.3s ease;"></div>
+                    </div>
+                </div>
+                <div class="score-text" style="font-size: 24px; font-weight: bold; color: #495057; min-width: 60px; text-align: center;">0%</div>
+            </div>
+            <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">選択した記事とあなたの現在の好みがどれだけ近いかを示しています。繰り返し選択することで、スコアが向上します。</p>
+        </div>
     </div>
     <script src="education.js"></script>
 </body>

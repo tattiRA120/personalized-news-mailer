@@ -144,6 +144,40 @@ document.addEventListener('DOMContentLoaded', () => {
             if (allOk) {
                 messageElement.textContent = '選択結果が送信されました。';
                 messageElement.className = '';
+
+                // 選択された記事IDを取得してスコア計算APIを呼び出す
+                const selectedArticleIds = [];
+                articlesListDiv.querySelectorAll('.article-item').forEach(articleItem => {
+                    const articleId = articleItem.querySelector('input[type="radio"]').name.split('-')[1];
+                    const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
+                    if (selectedInterest) {
+                        selectedArticleIds.push(articleId);
+                    }
+                });
+
+                if (selectedArticleIds.length > 0) {
+                    try {
+                        const scoreResponse = await fetch('/api/preference-score', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                userId: userId,
+                                selectedArticleIds: selectedArticleIds
+                            })
+                        });
+
+                        if (scoreResponse.ok) {
+                            const { score } = await scoreResponse.json();
+                            displayPreferenceScore(score);
+                        } else {
+                            console.warn('Failed to calculate preference score:', scoreResponse.statusText);
+                        }
+                    } catch (scoreError) {
+                        console.error('Error calculating preference score:', scoreError);
+                    }
+                }
             } else {
                 const failedResponses = responses.filter(res => !res.ok);
                 const errorMessages = await Promise.all(failedResponses.map(res => res.text()));
@@ -164,6 +198,34 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     submitButton.addEventListener('click', submitInterestResponses);
+
+    // 好みスコアを表示する関数
+    function displayPreferenceScore(score) {
+        const scoreElement = document.getElementById('preference-score');
+        const progressFill = scoreElement.querySelector('.progress-fill');
+        const scoreText = scoreElement.querySelector('.score-text');
+
+        // スコアを0-100の範囲に制限
+        const clampedScore = Math.max(0, Math.min(100, score));
+
+        // プログレスバーの幅を更新
+        progressFill.style.width = `${clampedScore}%`;
+
+        // スコアテキストを更新
+        scoreText.textContent = `${clampedScore.toFixed(1)}%`;
+
+        // スコア表示エリアを表示
+        scoreElement.style.display = 'block';
+
+        // スコアに応じて色を変更（オプション）
+        if (clampedScore >= 70) {
+            scoreText.style.color = '#28a745'; // 緑
+        } else if (clampedScore >= 40) {
+            scoreText.style.color = '#ffc107'; // 黄色
+        } else {
+            scoreText.style.color = '#dc3545'; // 赤
+        }
+    }
 
     fetchDissimilarArticles();
 });

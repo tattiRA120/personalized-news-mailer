@@ -190,3 +190,33 @@ pub fn update_bandit_model(
 
     Ok(serde_wasm_bindgen::to_value(&model).map_err(|e| JsValue::from_str(&e.to_string()))?)
 }
+
+#[wasm_bindgen]
+pub fn cosine_similarity(
+    vec1_js: JsValue,
+    vec2_js: JsValue,
+) -> Result<f64, JsValue> {
+    utils::set_panic_hook();
+
+    let vec1: Vec<f64> = serde_wasm_bindgen::from_value(vec1_js)
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize vec1: {}", e)))?;
+    let vec2: Vec<f64> = serde_wasm_bindgen::from_value(vec2_js)
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize vec2: {}", e)))?;
+
+    if vec1.len() != vec2.len() {
+        return Err(JsValue::from_str("Vector dimensions mismatch."));
+    }
+    if vec1.is_empty() {
+        return Err(JsValue::from_str("Vectors cannot be empty."));
+    }
+
+    let dot_product: f64 = vec1.iter().zip(vec2.iter()).map(|(&a, &b)| a * b).sum();
+    let magnitude1: f64 = vec1.iter().map(|&a| a * a).sum::<f64>().sqrt();
+    let magnitude2: f64 = vec2.iter().map(|&b| b * b).sum::<f64>().sqrt();
+
+    if magnitude1 == 0.0 || magnitude2 == 0.0 {
+        return Ok(0.0); // Avoid division by zero, return 0 similarity for zero vectors
+    }
+
+    Ok(dot_product / (magnitude1 * magnitude2))
+}

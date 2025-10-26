@@ -4,10 +4,11 @@ import { Logger } from './logger';
 import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
-import init, { get_ucb_values_bulk, update_bandit_model } from '../linalg-wasm/pkg/linalg_wasm';
+import init, { get_ucb_values_bulk, update_bandit_model, cosine_similarity } from '../linalg-wasm/pkg/linalg_wasm';
 import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 import { updateUserProfile } from './userProfile';
 import { OPENAI_EMBEDDING_DIMENSION } from './config';
+import { getArticlesFromD1 } from './services/d1Service';
 
 // 記事の鮮度情報を1次元追加するため、最終的な埋め込みベクトルの次元は OPENAI_EMBEDDING_DIMENSION + 1 となる
 export const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1; // orchestratorから参照するためexport
@@ -570,6 +571,87 @@ export class ClickLogger extends DurableObject {
             } catch (error) {
                 this.logger.error('Error deleting all bandit models:', error, { requestUrl: request.url });
                 return new Response('Error deleting all models', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/calculate-preference-score') {
+            try {
+                const { userId, selectedArticleIds } = await request.json() as { userId: string, selectedArticleIds: string[] };
+
+                if (!userId || !Array.isArray(selectedArticleIds) || selectedArticleIds.length === 0) {
+                    this.logger.warn('Calculate preference score failed: Missing userId or selectedArticleIds.');
+                    return new Response('Missing parameters', { status: 400 });
+                }
+
+                let banditModel = this.inMemoryModels.get(userId);
+                if (!banditModel) {
+                    this.logger.warn(`No model found for user ${userId} for preference score calculation. Initializing a new one.`);
+                    banditModel = this.initializeNewBanditModel(userId);
+                }
+
+                // ユーザーの好みベクトル (bベクトル) を取得
+                const userPreferenceVector = Array.from(banditModel.b);
+
+                // 選択された記事の埋め込みベクトルを取得し、平均ベクトルを計算
+                const articlesWithEmbeddings = await getArticlesFromD1(this.env, selectedArticleIds.length, 0, `article_id IN (${selectedArticleIds.map(() => '?').join(',')}) AND embedding IS NOT NULL`, selectedArticleIds);
+
+                if (articlesWithEmbeddings.length === 0) {
+                    this.logger.warn(`No articles with embeddings found for selectedArticleIds for user ${userId}.`, { userId, selectedArticleIds });
+                    return new Response('No articles with embeddings found', { status: 404 });
+                }
+
+                const articleEmbeddings: number[][] = [];
+                for (const article of articlesWithEmbeddings) {
+                    if (article.embedding && article.publishedAt) {
+                        try {
+                            const originalEmbedding = article.embedding;
+                            const now = Date.now();
+                            const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
+                            const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            const extendedEmbedding = [...originalEmbedding, normalizedAge];
+                            
+                            if (extendedEmbedding.length === banditModel.dimension) {
+                                articleEmbeddings.push(extendedEmbedding);
+                            } else {
+                                this.logger.warn(`Article ${article.articleId} has embedding dimension mismatch after extension. Expected ${banditModel.dimension}, got ${extendedEmbedding.length}. Skipping.`, { userId, articleId: article.articleId, extendedEmbeddingLength: extendedEmbedding.length, modelDimension: banditModel.dimension });
+                            }
+                        } catch (parseError) {
+                            this.logger.error(`Error parsing embedding JSON for article ${article.articleId}:`, parseError, { userId, articleId: article.articleId, embeddingRaw: article.embedding });
+                        }
+                    }
+                }
+
+                if (articleEmbeddings.length === 0) {
+                    this.logger.warn(`No valid article embeddings found for selected articles for user ${userId}. Cannot calculate preference score.`, { userId, selectedArticleIds });
+                    return new Response('No valid article embeddings found', { status: 404 });
+                }
+
+                // 選択された記事の平均ベクトルを計算
+                const averageArticleVector = new Array(banditModel.dimension).fill(0);
+                for (let i = 0; i < banditModel.dimension; i++) {
+                    for (const embedding of articleEmbeddings) {
+                        averageArticleVector[i] += embedding[i];
+                    }
+                    averageArticleVector[i] /= articleEmbeddings.length;
+                }
+
+                // コサイン類似度を計算
+                const similarity = cosine_similarity(
+                    userPreferenceVector,
+                    averageArticleVector,
+                );
+                
+                // スコアを0-100のパーセンテージに変換 (類似度は-1から1の範囲なので、0から1に正規化してから100倍)
+                const preferenceScore = ((similarity + 1) / 2) * 100;
+
+                this.logger.debug(`Calculated preference score for user ${userId}: ${preferenceScore.toFixed(2)}%`, { userId, score: preferenceScore });
+
+                return new Response(JSON.stringify({ score: preferenceScore }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                this.logger.error('Error calculating preference score in ClickLogger:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
             }
         }
 
