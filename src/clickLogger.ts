@@ -653,6 +653,47 @@ export class ClickLogger extends DurableObject {
                 this.logger.error('Error calculating preference score in ClickLogger:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error', { status: 500 });
             }
+        } else if (request.method === 'GET' && path === '/get-preference-score') {
+            try {
+                const url = new URL(request.url);
+                const userId = url.searchParams.get('userId');
+
+                if (!userId) {
+                    this.logger.warn('Get preference score failed: Missing userId.');
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                let banditModel = this.inMemoryModels.get(userId);
+                if (!banditModel) {
+                    // モデルが存在しない場合、スコアは0%
+                    this.logger.debug(`No model found for user ${userId}. Returning 0% score.`, { userId });
+                    return new Response(JSON.stringify({ score: 0 }), {
+                        headers: { 'Content-Type': 'application/json' },
+                        status: 200,
+                    });
+                }
+
+                // ユーザーの好みベクトル (bベクトル) のL2ノルムを計算
+                const bVector = Array.from(banditModel.b);
+                const norm = Math.sqrt(bVector.reduce((sum, val) => sum + val * val, 0));
+
+                // ノルムを0-1に正規化し、スコアに変換 (例: ノルムが大きいほどスコアが高い)
+                // 閾値として、例えば10を基準に正規化（調整可能）
+                const threshold = 10;
+                const normalizedScore = Math.min(1, norm / threshold);
+                const preferenceScore = normalizedScore * 100;
+
+                this.logger.debug(`Calculated current preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (norm: ${norm.toFixed(2)})`, { userId, score: preferenceScore, norm });
+
+                return new Response(JSON.stringify({ score: preferenceScore }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                this.logger.error('Error getting preference score in ClickLogger:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
         }
 
 

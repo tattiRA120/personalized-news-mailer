@@ -659,7 +659,44 @@ export default {
         }
 
         // --- Get Preference Score Handler ---
-        if (request.method === 'POST' && path === '/api/preference-score') {
+        if (request.method === 'GET' && path === '/api/preference-score') {
+            logger.debug('Request received for current preference score');
+            try {
+                const userId = url.searchParams.get('userId');
+
+                if (!userId) {
+                    logger.warn('Get preference score failed: Missing userId.');
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+                const scoreResponse = await clickLogger.fetch(
+                    new Request(`${env.WORKER_BASE_URL}/get-preference-score?userId=${encodeURIComponent(userId)}`, {
+                        method: 'GET',
+                    })
+                );
+
+                if (!scoreResponse.ok) {
+                    const errorText = await scoreResponse.text();
+                    logger.error(`Failed to get preference score from ClickLogger: ${scoreResponse.statusText}`, null, { userId, status: scoreResponse.status, statusText: scoreResponse.statusText, errorText });
+                    return new Response(`Failed to get preference score: ${scoreResponse.statusText}`, { status: scoreResponse.status });
+                }
+
+                const { score } = await scoreResponse.json() as { score: number };
+                logger.debug(`Current preference score retrieved for user ${userId}: ${score}`, { userId, score });
+
+                return new Response(JSON.stringify({ score }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                logger.error('Error getting preference score:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/api/preference-score') {
             logger.debug('Request received for preference score calculation');
             try {
                 const { userId, selectedArticleIds } = await request.json() as { userId: string, selectedArticleIds: string[] };

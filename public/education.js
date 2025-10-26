@@ -13,6 +13,22 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
+    // 現在の好みスコアを取得する関数
+    async function fetchCurrentPreferenceScore() {
+        try {
+            const response = await fetch(`/api/preference-score?userId=${encodeURIComponent(userId)}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const { score } = await response.json();
+            displayPreferenceScore(score);
+        } catch (error) {
+            console.error('Error fetching current preference score:', error);
+            // エラーの場合は0%を表示
+            displayPreferenceScore(0);
+        }
+    }
+
     // 記事リストを取得する関数
     async function fetchDissimilarArticles() {
         try {
@@ -178,6 +194,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         console.error('Error calculating preference score:', scoreError);
                     }
                 }
+
+                // ページをリロードして更新されたスコアを表示
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000); // 1秒後にリロード
             } else {
                 const failedResponses = responses.filter(res => !res.ok);
                 const errorMessages = await Promise.all(failedResponses.map(res => res.text()));
@@ -228,4 +249,5 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     fetchDissimilarArticles();
+    fetchCurrentPreferenceScore();
 });
