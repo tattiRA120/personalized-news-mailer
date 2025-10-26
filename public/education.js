@@ -15,17 +15,44 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 現在の好みスコアを取得する関数
     async function fetchCurrentPreferenceScore() {
+        // localStorageからスコアを取得
+        const storedData = localStorage.getItem(`preferenceScore_${userId}`);
+        let localScore = null;
+        let localTimestamp = 0;
+        if (storedData) {
+            try {
+                const data = JSON.parse(storedData);
+                localScore = data.score;
+                localTimestamp = data.timestamp;
+            } catch (e) {
+                console.error('Error parsing stored preference score:', e);
+            }
+        }
+
         try {
             const response = await fetch(`/api/preference-score?userId=${encodeURIComponent(userId)}`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }
             const { score } = await response.json();
-            displayPreferenceScore(score);
+            const serverTimestamp = Date.now();
+
+            // localStorageとサーバーのスコアを比較し、新しい方を表示
+            if (localScore !== null && localTimestamp > serverTimestamp - 5000) { // 5秒以内のlocalStorageを優先
+                displayPreferenceScore(localScore);
+            } else {
+                displayPreferenceScore(score);
+                // サーバーのスコアをlocalStorageに保存
+                localStorage.setItem(`preferenceScore_${userId}`, JSON.stringify({ score, timestamp: serverTimestamp }));
+            }
         } catch (error) {
             console.error('Error fetching current preference score:', error);
-            // エラーの場合は0%を表示
-            displayPreferenceScore(0);
+            // エラーの場合はlocalStorageのスコアを使うか、0%を表示
+            if (localScore !== null) {
+                displayPreferenceScore(localScore);
+            } else {
+                displayPreferenceScore(0);
+            }
         }
     }
 
@@ -187,6 +214,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (scoreResponse.ok) {
                             const { score } = await scoreResponse.json();
                             displayPreferenceScore(score);
+                            // POSTの結果をlocalStorageに保存
+                            localStorage.setItem(`preferenceScore_${userId}`, JSON.stringify({ score, timestamp: Date.now() }));
                         } else {
                             console.warn('Failed to calculate preference score:', scoreResponse.statusText);
                         }

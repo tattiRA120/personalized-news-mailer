@@ -673,17 +673,17 @@ export class ClickLogger extends DurableObject {
                     });
                 }
 
-                // ユーザーの好みベクトル (bベクトル) のL2ノルムを計算
+                // ユーザーの好みベクトル (bベクトル) の最大絶対値を計算
                 const bVector = Array.from(banditModel.b);
-                const norm = Math.sqrt(bVector.reduce((sum, val) => sum + val * val, 0));
+                const maxAbs = Math.max(...bVector.map(Math.abs));
 
-                // ノルムを0-1に正規化し、スコアに変換 (例: ノルムが大きいほどスコアが高い)
-                // 閾値として、例えば10を基準に正規化（調整可能）
-                const threshold = 10;
-                const normalizedScore = Math.min(1, norm / threshold);
+                // 最大絶対値を0-1に正規化し、スコアに変換 (例: 最大値が大きいほどスコアが高い)
+                // 閾値として、5を基準に正規化（報酬2.0で1回で40%）
+                const threshold = 5;
+                const normalizedScore = Math.min(1, maxAbs / threshold);
                 const preferenceScore = normalizedScore * 100;
 
-                this.logger.debug(`Calculated current preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (norm: ${norm.toFixed(2)})`, { userId, score: preferenceScore, norm });
+                this.logger.debug(`Calculated current preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (maxAbs: ${maxAbs.toFixed(2)})`, { userId, score: preferenceScore, maxAbs });
 
                 return new Response(JSON.stringify({ score: preferenceScore }), {
                     headers: { 'Content-Type': 'application/json' },
