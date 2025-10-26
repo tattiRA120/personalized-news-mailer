@@ -60,7 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchDissimilarArticles() {
         try {
             // Workerの新しいエンドポイントから記事リストを取得
-            const response = await fetch('/get-dissimilar-articles');
+            const response = await fetch(`/get-dissimilar-articles?userId=${encodeURIComponent(userId)}`);
             if (!response.ok) {
                 throw new Error(`HTTP error! status: ${response.status}`);
             }

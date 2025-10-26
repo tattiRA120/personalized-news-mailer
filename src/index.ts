@@ -630,9 +630,16 @@ export default {
         } else if (request.method === 'GET' && path === '/get-dissimilar-articles') {
             logger.debug('Request received for dissimilar articles for education program');
             try {
-                // D1からembeddingを持つすべての記事を取得
-                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, 'embedding IS NOT NULL');
-                logger.debug(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1.`, { count: allArticlesWithEmbeddings.length });
+                const userId = url.searchParams.get('userId');
+                if (!userId) {
+                    logger.warn('Get dissimilar articles failed: Missing userId.');
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事を除外
+                const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?)`;
+                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId]);
+                logger.debug(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 (excluding feedbacked articles for user ${userId}).`, { count: allArticlesWithEmbeddings.length, userId });
 
                 // 類似度の低い記事を20件選択
                 const dissimilarArticles = await selectDissimilarArticles(allArticlesWithEmbeddings, 20, env);
