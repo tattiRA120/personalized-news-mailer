@@ -4,11 +4,11 @@ import { BatchQueueDO } from './batchQueueDO';
 import { Logger } from './logger';
 import { collectNews, NewsArticle } from './newsCollector';
 import { generateAndSaveEmbeddings } from './services/embeddingService';
-import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding } from './services/d1Service';
+import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding, getUserCTR } from './services/d1Service';
 import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
 import { decodeHtmlEntities } from './utils/htmlDecoder';
-import { selectDissimilarArticles } from './articleSelector';
+import { selectDissimilarArticles, selectPersonalizedArticles } from './articleSelector';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	DB: D1Database;
@@ -662,6 +662,180 @@ export default {
             } catch (error) {
                 logger.error('Error fetching dissimilar articles:', error, { requestUrl: request.url });
                 return new Response('Error fetching dissimilar articles', { status: 500 });
+            }
+        } else if (request.method === 'GET' && path === '/get-personalized-articles') {
+            logger.debug('Request received for personalized articles');
+            try {
+                const userId = url.searchParams.get('userId');
+                const lambdaParam = url.searchParams.get('lambda');
+
+                if (!userId) {
+                    logger.warn('Get personalized articles failed: Missing userId.');
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                let lambda = lambdaParam ? parseFloat(lambdaParam) : 0.5;
+                if (isNaN(lambda) || lambda < 0 || lambda > 1) {
+                    logger.warn(`Invalid lambda value: ${lambdaParam}. Using default 0.5.`);
+                    lambda = 0.5;
+                }
+
+                // ユーザープロファイルを取得
+                const userProfile = await getUserProfile(userId, env);
+                if (!userProfile) {
+                    logger.warn(`User profile not found for ${userId}. Falling back to dissimilar articles.`, { userId });
+                    // プロファイルがない場合はdissimilar articlesを返す
+                    const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?)`;
+                    const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId]);
+                    const dissimilarArticles = await selectDissimilarArticles(allArticlesWithEmbeddings, 20, env);
+                    const articlesForResponse = dissimilarArticles.map((article: NewsArticle) => ({
+                        articleId: article.articleId,
+                        title: article.title,
+                        summary: article.summary,
+                        link: article.link,
+                        sourceName: article.sourceName,
+                    }));
+                    return new Response(JSON.stringify(articlesForResponse), {
+                        headers: { 'Content-Type': 'application/json' },
+                        status: 200,
+                    });
+                }
+
+                // D1からembeddingを持つ記事を取得
+                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, 'embedding IS NOT NULL');
+                logger.debug(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 for user ${userId}.`, { count: allArticlesWithEmbeddings.length, userId });
+
+                if (allArticlesWithEmbeddings.length === 0) {
+                    logger.warn('No articles with embeddings found. Returning empty list.', { userId });
+                    return new Response(JSON.stringify([]), {
+                        headers: { 'Content-Type': 'application/json' },
+                        status: 200,
+                    });
+                }
+
+                // ユーザーのCTRを取得
+                const userCTR = await getUserCTR(env, userId);
+
+                // ClickLogger Durable Objectを取得
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+                // ユーザープロファイルのembeddingを準備
+                let userProfileEmbeddingForSelection: number[];
+                if (userProfile.embedding && userProfile.embedding.length === 256) {
+                    userProfileEmbeddingForSelection = [...userProfile.embedding, 0]; // 鮮度情報を追加
+                } else if (userProfile.embedding && userProfile.embedding.length === 257) {
+                    userProfileEmbeddingForSelection = userProfile.embedding;
+                } else {
+                    logger.warn(`User ${userId} has invalid embedding dimension ${userProfile.embedding?.length}. Using zero vector.`, { userId, embeddingLength: userProfile.embedding?.length });
+                    userProfileEmbeddingForSelection = new Array(257).fill(0);
+                }
+
+                // 記事のembeddingに鮮度情報を追加
+                const now = Date.now();
+                const articlesWithExtendedEmbeddings = allArticlesWithEmbeddings
+                    .filter(article => article.embedding && article.embedding.length === 256)
+                    .map((article) => {
+                        let normalizedAge = 0;
+                        if (article.publishedAt) {
+                            const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
+                            normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                        }
+                        return {
+                            ...article,
+                            embedding: [...article.embedding!, normalizedAge],
+                        };
+                    });
+
+                // selectPersonalizedArticlesを呼び出し
+                const selectedArticles = await selectPersonalizedArticles(
+                    articlesWithExtendedEmbeddings,
+                    userProfileEmbeddingForSelection,
+                    clickLogger,
+                    userId,
+                    20, // 20件選択
+                    userCTR,
+                    lambda,
+                    env
+                );
+
+                logger.debug(`Selected ${selectedArticles.length} personalized articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
+
+                // フロントエンドに返すために必要な情報のみを抽出
+                const articlesForResponse = selectedArticles.map((article: NewsArticle) => ({
+                    articleId: article.articleId,
+                    title: article.title,
+                    summary: article.summary,
+                    link: article.link,
+                    sourceName: article.sourceName,
+                }));
+
+                return new Response(JSON.stringify(articlesForResponse), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                logger.error('Error fetching personalized articles:', error, { requestUrl: request.url });
+                return new Response('Error fetching personalized articles', { status: 500 });
+            }
+        }
+
+        // --- Get MMR Settings Handler ---
+        if (request.method === 'GET' && path === '/api/mmr-settings') {
+            logger.debug('Request received for MMR settings');
+            try {
+                const userId = url.searchParams.get('userId');
+
+                if (!userId) {
+                    logger.warn('Get MMR settings failed: Missing userId.');
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                // ユーザーのCTRを取得
+                const userCTR = await getUserCTR(env, userId);
+
+                // フィードバック履歴を取得してlambdaを計算
+                const feedbackLogs = await env.DB.prepare(
+                    `SELECT action FROM education_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10`
+                ).bind(userId).all<{ action: string }>();
+
+                let lambda = 0.5; // デフォルト値
+
+                if (feedbackLogs.results && feedbackLogs.results.length > 0) {
+                    // 最近のフィードバックに基づいてlambdaを調整
+                    const interestedCount = feedbackLogs.results.filter(log => log.action === 'interested').length;
+                    const totalCount = feedbackLogs.results.length;
+                    const interestRatio = interestedCount / totalCount;
+
+                    // CTRと興味比率に基づいてlambdaを調整
+                    // CTRが低い場合や興味比率が高い場合は探索性を高く（lambdaを低く）
+                    if (userCTR < 0.3 || interestRatio > 0.7) {
+                        lambda = 0.3; // 探索重視
+                    } else if (userCTR > 0.7 || interestRatio < 0.3) {
+                        lambda = 0.7; // 類似性重視
+                    } else {
+                        lambda = 0.5; // バランス
+                    }
+                } else {
+                    // フィードバックがない場合はCTRに基づいて調整
+                    if (userCTR < 0.3) {
+                        lambda = 0.3;
+                    } else if (userCTR > 0.7) {
+                        lambda = 0.7;
+                    }
+                }
+
+                logger.debug(`MMR settings calculated for user ${userId}: lambda=${lambda}`, { userId, lambda, userCTR, feedbackCount: feedbackLogs.results?.length });
+
+                return new Response(JSON.stringify({ lambda }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                logger.error('Error getting MMR settings:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
             }
         }
 
