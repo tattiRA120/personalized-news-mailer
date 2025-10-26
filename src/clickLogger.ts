@@ -175,8 +175,143 @@ export class ClickLogger extends DurableObject {
         }
     }
 
+    // MMR lambda を計算するプライベートメソッド
+    private async calculateMMRLambda(userId: string): Promise<number> {
+        // ユーザーのCTRを取得
+        const userCTR = await this.getUserCTR(userId);
+
+        // フィードバック履歴を取得してlambdaを計算
+        const feedbackLogs = await this.env.DB.prepare(
+            `SELECT action FROM education_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20`
+        ).bind(userId).all<{ action: string }>();
+
+        let lambda = 0.5; // デフォルト値
+
+        if (feedbackLogs.results && feedbackLogs.results.length > 0) {
+            // 詳細なフィードバック分析
+            const interestedCount = feedbackLogs.results.filter(log => log.action === 'interested').length;
+            const notInterestedCount = feedbackLogs.results.filter(log => log.action === 'not_interested').length;
+            const totalCount = feedbackLogs.results.length;
+            const interestRatio = interestedCount / totalCount;
+            const notInterestRatio = notInterestedCount / totalCount;
+
+            // 最近の傾向分析（最近10件）
+            const recentLogs = feedbackLogs.results.slice(0, 10);
+            const recentInterestedCount = recentLogs.filter(log => log.action === 'interested').length;
+            const recentNotInterestedCount = recentLogs.filter(log => log.action === 'not_interested').length;
+            const recentTotalCount = recentLogs.length;
+            const recentInterestRatio = recentTotalCount > 0 ? recentInterestedCount / recentTotalCount : 0;
+            const recentNotInterestRatio = recentTotalCount > 0 ? recentNotInterestedCount / recentTotalCount : 0;
+
+            this.logger.debug(`Feedback analysis for user ${userId}: ${interestedCount}/${totalCount} interested (${(interestRatio * 100).toFixed(1)}%), ${notInterestedCount}/${totalCount} not interested (${(notInterestRatio * 100).toFixed(1)}%)`, {
+                userId,
+                interestedCount,
+                notInterestedCount,
+                totalCount,
+                interestRatio,
+                notInterestRatio,
+                recentInterestedCount,
+                recentNotInterestedCount,
+                recentInterestRatio,
+                recentNotInterestRatio
+            });
+
+            // 興味なし記事削減のためのlambda計算アルゴリズム
+            let baseLambda = 0.6; // 初期値を0.6に上げて類似性を重視
+
+            // CTRの影響（高いCTRは類似性を高く）
+            const ctrInfluence = userCTR * 0.2; // CTRが高いほど類似性を高く
+            baseLambda += ctrInfluence;
+
+            // 興味なしの割合が高い場合にlambdaを高くする（類似性を重視）
+            if (notInterestRatio > 0.5) {
+                baseLambda += 0.2; // 興味なしが多い場合は強く類似性を高く
+            } else if (notInterestRatio > 0.3) {
+                baseLambda += 0.1; // 興味なしが少し多い場合は少し類似性を高く
+            }
+
+            // 興味ありの割合が高い場合でも適度に探索性を保つ
+            if (interestRatio > 0.8) {
+                baseLambda -= 0.1; // 興味ありが多い場合は少し探索性を高く
+            }
+
+            // 最近の興味なし傾向を考慮
+            if (recentNotInterestRatio > 0.4) {
+                baseLambda += 0.15; // 最近興味なしが多い場合は類似性を高く
+            }
+
+            // フィードバック数の影響
+            if (totalCount < 5) {
+                baseLambda += 0.1; // 少ない場合は類似性を高くして安全に
+            } else if (totalCount > 15) {
+                baseLambda += 0.05; // 十分なデータがある場合は少し類似性を高く
+            }
+
+            // 興味なしの多様性による調整（興味なしの割合が高い場合）
+            if (notInterestRatio > interestRatio) {
+                baseLambda += 0.1; // 興味なしが多い場合は類似性を高く
+            }
+
+            lambda = Math.max(0.3, Math.min(0.9, baseLambda)); // 0.3-0.9の範囲に制限
+
+            this.logger.debug(`Optimized MMR lambda for user ${userId} (not interested reduction): ${lambda.toFixed(3)}`, {
+                userId,
+                lambda,
+                userCTR,
+                interestRatio,
+                notInterestRatio,
+                recentNotInterestRatio,
+                totalCount,
+                baseLambda: baseLambda.toFixed(3)
+            });
+
+        } else {
+            // フィードバックがない場合はCTRに基づいて調整（少し類似性を高めに）
+            lambda = 0.5 + (userCTR * 0.2); // CTRに応じて0.5-0.7の範囲
+
+            this.logger.debug(`Initial MMR lambda for user ${userId}: ${lambda.toFixed(3)} (based on CTR: ${userCTR})`, {
+                userId,
+                lambda,
+                userCTR
+            });
+        }
+
+        return lambda;
+    }
+
+    // ユーザーのCTRを取得するプライベートメソッド
+    private async getUserCTR(userId: string): Promise<number> {
+        try {
+            const sinceTimestamp = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30日間
+
+            // 配信された記事数を取得
+            const sentCountResult = await this.env.DB.prepare(
+                `SELECT COUNT(DISTINCT article_id) as count FROM sent_articles WHERE user_id = ? AND timestamp >= ?`
+            ).bind(userId, sinceTimestamp).first<{ count: number }>();
+            const sentCount = sentCountResult?.count ?? 0;
+
+            // クリックされた記事数を取得
+            const clickCountResult = await this.env.DB.prepare(
+                `SELECT COUNT(DISTINCT article_id) as count FROM click_logs WHERE user_id = ? AND timestamp >= ?`
+            ).bind(userId, sinceTimestamp).first<{ count: number }>();
+            const clickCount = clickCountResult?.count ?? 0;
+
+            if (sentCount === 0) {
+                return 0.5; // 配信履歴がない場合はデフォルト値0.5を返す
+            }
+
+            const ctr = clickCount / sentCount;
+            this.logger.debug(`Calculated CTR for user ${userId}: ${ctr.toFixed(4)} (${clickCount}/${sentCount})`, { userId, ctr, clickCount, sentCount });
+            return ctr;
+
+        } catch (error) {
+            this.logger.error(`Error calculating CTR for user ${userId}:`, error, { userId });
+            return 0.5; // エラー時もデフォルト値0.5を返す
+        }
+    }
+
     async alarm() {
-        // This alarm is triggered periodically to save dirty models to R2 and process unclicked articles.
+        // This alarm is triggered periodically to save dirty models to R2, process unclicked articles, and update models from feedback.
         if (this.dirty) {
             this.logger.info('Alarm triggered. Saving dirty models to R2.');
             await this.saveModelsToR2();
@@ -186,6 +321,9 @@ export class ClickLogger extends DurableObject {
 
         // Process unclicked articles
         await this.processUnclickedArticles();
+
+        // Process pending feedback and update models
+        await this.processPendingFeedback();
     }
 
     // Helper to ensure an alarm is set.
@@ -244,6 +382,7 @@ export class ClickLogger extends DurableObject {
             articleId: string;
             feedback: 'interested' | 'not_interested';
             timestamp: number;
+            immediateUpdate?: boolean; // 即時更新フラグ
         }
 
         // /learn-from-education エンドポイントのリクエストボディの型定義
@@ -280,7 +419,7 @@ export class ClickLogger extends DurableObject {
             }
         } else if (request.method === 'POST' && path === '/log-feedback') {
             try {
-                const { userId, articleId, feedback, timestamp } = await request.json() as LogFeedbackRequestBody;
+                const { userId, articleId, feedback, timestamp, immediateUpdate } = await request.json() as LogFeedbackRequestBody;
 
                 if (!userId || !articleId || !feedback || !timestamp) {
                     this.logger.warn('Log feedback failed: Missing parameters.');
@@ -336,35 +475,39 @@ export class ClickLogger extends DurableObject {
                     }
                 }
 
-                // 3. Update the bandit model
-                let banditModel = this.inMemoryModels.get(userId);
-                if (!banditModel) {
-                    this.logger.warn(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
-                    banditModel = this.initializeNewBanditModel(userId);
+                // 3. Update the bandit model if immediate update is requested
+                if (immediateUpdate) {
+                    let banditModel = this.inMemoryModels.get(userId);
+                    if (!banditModel) {
+                        this.logger.warn(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
+                        banditModel = this.initializeNewBanditModel(userId);
+                    }
+
+                    // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理 (既に上記で処理済みだが念のため)
+                    if (embedding.length !== banditModel.dimension) {
+                        this.logger.error(`Final embedding dimension mismatch for article ${articleId}. Expected ${banditModel.dimension}, got ${embedding.length}. Cannot update bandit model.`, null, {
+                            userId,
+                            articleId,
+                            embeddingLength: embedding.length,
+                            modelDimension: banditModel.dimension
+                        });
+                        return new Response('Embedding dimension mismatch', { status: 500 });
+                    }
+
+                    await this.updateBanditModel(banditModel, embedding, reward, userId);
+                    this.dirty = true;
+                    this.logger.info(`Successfully updated bandit model from feedback for article ${articleId} for user ${userId}`, { userId, articleId, feedback, reward });
+                } else {
+                    this.logger.debug(`Immediate update not requested for feedback from user ${userId}, article ${articleId}. Model update will be handled periodically.`, { userId, articleId, feedback });
                 }
 
-                // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理 (既に上記で処理済みだが念のため)
-                if (embedding.length !== banditModel.dimension) {
-                    this.logger.error(`Final embedding dimension mismatch for article ${articleId}. Expected ${banditModel.dimension}, got ${embedding.length}. Cannot update bandit model.`, null, {
-                        userId,
-                        articleId,
-                        embeddingLength: embedding.length,
-                        modelDimension: banditModel.dimension
-                    });
-                    return new Response('Embedding dimension mismatch', { status: 500 });
-                }
-
-                await this.updateBanditModel(banditModel, embedding, reward, userId);
-                this.dirty = true;
-                this.logger.info(`Successfully updated bandit model from feedback for article ${articleId} for user ${userId}`, { userId, articleId, feedback, reward });
-                
                 // 4. Log the feedback to education_logs table
                 await this.env.DB.prepare(
                     `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
                 ).bind(userId, articleId, timestamp, feedback).run();
                 this.logger.info(`Logged feedback to education_logs for user ${userId}, article ${articleId}, feedback: ${feedback}`);
 
-                return new Response('Feedback logged and model updated', { status: 200 });
+                return new Response('Feedback logged', { status: 200 });
 
             } catch (error) {
                 this.logger.error('Error logging feedback:', error, { requestUrl: request.url });
@@ -694,6 +837,62 @@ export class ClickLogger extends DurableObject {
                 this.logger.error('Error getting preference score in ClickLogger:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error', { status: 500 });
             }
+        } else if (request.method === 'GET' && path === '/get-mmr-lambda') {
+            try {
+                const url = new URL(request.url);
+                const userId = url.searchParams.get('userId');
+
+                if (!userId) {
+                    this.logger.warn('Get MMR lambda failed: Missing userId.');
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                // ユーザーの保存されたlambdaを取得
+                const userProfile = await this.env.DB.prepare(
+                    `SELECT mmr_lambda FROM users WHERE user_id = ?`
+                ).bind(userId).first<{ mmr_lambda: number | null }>();
+
+                const lambda = userProfile?.mmr_lambda ?? 0.5;
+
+                this.logger.debug(`Retrieved MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
+
+                return new Response(JSON.stringify({ lambda }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                this.logger.error('Error getting MMR lambda in ClickLogger:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/calculate-mmr-lambda') {
+            try {
+                const { userId, immediate } = await request.json() as { userId: string, immediate?: boolean };
+
+                if (!userId) {
+                    this.logger.warn('Calculate MMR lambda failed: Missing userId.');
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                const lambda = await this.calculateMMRLambda(userId);
+
+                if (immediate) {
+                    // 即時更新の場合、lambdaを保存
+                    await this.env.DB.prepare(
+                        `UPDATE users SET mmr_lambda = ? WHERE user_id = ?`
+                    ).bind(lambda, userId).run();
+                    this.logger.debug(`Immediately updated MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
+                }
+
+                return new Response(JSON.stringify({ lambda }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                this.logger.error('Error calculating MMR lambda in ClickLogger:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
         }
 
 
@@ -745,6 +944,86 @@ export class ClickLogger extends DurableObject {
             this.logger.debug('Finished processing unclicked articles.');
         } catch (error) {
             this.logger.error('Error processing unclicked articles:', error);
+        }
+    }
+
+    // Process pending feedback and update bandit models and lambda
+    private async processPendingFeedback(): Promise<void> {
+        this.logger.debug('Starting to process pending feedback.');
+        try {
+            // Get all user IDs that have feedback logs
+            const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM education_logs`).all<{ user_id: string }>();
+            const userIds = results.map(row => row.user_id);
+            this.logger.debug(`Found ${userIds.length} users with feedback logs to process.`, { userCount: userIds.length });
+
+            for (const userId of userIds) {
+                this.logger.debug(`Processing pending feedback for user: ${userId}`, { userId });
+
+                // Get recent feedback logs for the user
+                const feedbackLogs = await this.env.DB.prepare(
+                    `SELECT article_id, action, timestamp FROM education_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50`
+                ).bind(userId).all<{ article_id: string, action: string, timestamp: number }>();
+
+                if (feedbackLogs.results && feedbackLogs.results.length > 0) {
+                    let banditModel = this.inMemoryModels.get(userId);
+                    if (!banditModel) {
+                        this.logger.warn(`No bandit model found for user ${userId} during feedback processing. Initializing a new one.`);
+                        banditModel = this.initializeNewBanditModel(userId);
+                    }
+
+                    let updatedCount = 0;
+                    for (const log of feedbackLogs.results) {
+                        // Get the article's embedding
+                        let embedding: number[] | undefined;
+                        let source = 'unknown';
+
+                        const sentArticleResult = await this.env.DB.prepare(
+                            `SELECT embedding FROM sent_articles WHERE user_id = ? AND article_id = ? ORDER BY timestamp DESC LIMIT 1`
+                        ).bind(userId, log.article_id).first<{ embedding: string }>();
+
+                        if (sentArticleResult && sentArticleResult.embedding) {
+                            embedding = JSON.parse(sentArticleResult.embedding) as number[];
+                            source = 'sent_articles';
+                        } else {
+                            const originalArticle = await this.env.DB.prepare(
+                                `SELECT embedding, published_at FROM articles WHERE article_id = ?`
+                            ).bind(log.article_id).first<{ embedding: string | null, published_at: string | null }>();
+
+                            if (originalArticle && originalArticle.embedding && originalArticle.published_at) {
+                                const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
+                                const now = Date.now();
+                                const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
+                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                                embedding = [...originalEmbedding, normalizedAge];
+                                source = 'articles';
+                            }
+                        }
+
+                        if (embedding && embedding.length === banditModel.dimension) {
+                            const reward = log.action === 'interested' ? 2.0 : -1.0;
+                            await this.updateBanditModel(banditModel, embedding, reward, userId);
+                            this.dirty = true;
+                            updatedCount++;
+                        } else {
+                            this.logger.warn(`Skipping feedback for article ${log.article_id} due to missing or mismatched embedding.`, { userId, articleId: log.article_id, source });
+                        }
+                    }
+
+                    this.logger.debug(`Updated bandit model for user ${userId} with ${updatedCount} feedback entries.`, { userId, updatedCount });
+
+                    // Calculate and update MMR lambda
+                    const lambda = await this.calculateMMRLambda(userId);
+                    await this.env.DB.prepare(
+                        `UPDATE users SET mmr_lambda = ? WHERE user_id = ?`
+                    ).bind(lambda, userId).run();
+                    this.logger.debug(`Updated MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
+                } else {
+                    this.logger.debug(`No feedback logs found for user ${userId}.`, { userId });
+                }
+            }
+            this.logger.debug('Finished processing pending feedback.');
+        } catch (error) {
+            this.logger.error('Error processing pending feedback:', error);
         }
     }
 

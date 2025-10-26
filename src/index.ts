@@ -204,7 +204,7 @@ export default {
 					new Request(`${env.WORKER_BASE_URL}/log-feedback`, {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ userId, articleId, feedback, timestamp: Date.now() }),
+						body: JSON.stringify({ userId, articleId, feedback, timestamp: Date.now(), immediateUpdate: false }),
 					})
 				);
 
@@ -793,120 +793,24 @@ export default {
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                // ユーザーの保存されたlambdaを取得（既に最適化されている場合）
-                const userProfile = await getUserProfile(userId, env);
-                if (userProfile && userProfile.mmrLambda !== undefined) {
-                    logger.debug(`Using saved MMR lambda for user ${userId}: ${userProfile.mmrLambda}`, { userId, lambda: userProfile.mmrLambda });
-                    return new Response(JSON.stringify({ lambda: userProfile.mmrLambda }), {
-                        headers: { 'Content-Type': 'application/json' },
-                        status: 200,
-                    });
+                // ClickLogger から lambda を取得
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+                const lambdaResponse = await clickLogger.fetch(
+                    new Request(`${env.WORKER_BASE_URL}/get-mmr-lambda?userId=${encodeURIComponent(userId)}`, {
+                        method: 'GET',
+                    })
+                );
+
+                if (!lambdaResponse.ok) {
+                    const errorText = await lambdaResponse.text();
+                    logger.error(`Failed to get MMR lambda from ClickLogger: ${lambdaResponse.statusText}`, null, { userId, status: lambdaResponse.status, statusText: lambdaResponse.statusText, errorText });
+                    return new Response(`Failed to get MMR lambda: ${lambdaResponse.statusText}`, { status: lambdaResponse.status });
                 }
 
-                // ユーザーのCTRを取得
-                const userCTR = await getUserCTR(env, userId);
-
-                // フィードバック履歴を取得してlambdaを計算
-                const feedbackLogs = await env.DB.prepare(
-                    `SELECT action FROM education_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20`
-                ).bind(userId).all<{ action: string }>();
-
-                let lambda = 0.5; // デフォルト値
-
-                if (feedbackLogs.results && feedbackLogs.results.length > 0) {
-                    // 詳細なフィードバック分析
-                    const interestedCount = feedbackLogs.results.filter(log => log.action === 'interested').length;
-                    const notInterestedCount = feedbackLogs.results.filter(log => log.action === 'not_interested').length;
-                    const totalCount = feedbackLogs.results.length;
-                    const interestRatio = interestedCount / totalCount;
-                    const notInterestRatio = notInterestedCount / totalCount;
-
-                    // 最近の傾向分析（最近10件）
-                    const recentLogs = feedbackLogs.results.slice(0, 10);
-                    const recentInterestedCount = recentLogs.filter(log => log.action === 'interested').length;
-                    const recentNotInterestedCount = recentLogs.filter(log => log.action === 'not_interested').length;
-                    const recentTotalCount = recentLogs.length;
-                    const recentInterestRatio = recentTotalCount > 0 ? recentInterestedCount / recentTotalCount : 0;
-                    const recentNotInterestRatio = recentTotalCount > 0 ? recentNotInterestedCount / recentTotalCount : 0;
-
-                    logger.debug(`Feedback analysis for user ${userId}: ${interestedCount}/${totalCount} interested (${(interestRatio * 100).toFixed(1)}%), ${notInterestedCount}/${totalCount} not interested (${(notInterestRatio * 100).toFixed(1)}%)`, {
-                        userId,
-                        interestedCount,
-                        notInterestedCount,
-                        totalCount,
-                        interestRatio,
-                        notInterestRatio,
-                        recentInterestedCount,
-                        recentNotInterestedCount,
-                        recentInterestRatio,
-                        recentNotInterestRatio
-                    });
-
-                    // 興味なし記事削減のためのlambda計算アルゴリズム
-                    let baseLambda = 0.6; // 初期値を0.6に上げて類似性を重視
-
-                    // CTRの影響（高いCTRは類似性を高く）
-                    const ctrInfluence = userCTR * 0.2; // CTRが高いほど類似性を高く
-                    baseLambda += ctrInfluence;
-
-                    // 興味なしの割合が高い場合にlambdaを高くする（類似性を重視）
-                    if (notInterestRatio > 0.5) {
-                        baseLambda += 0.2; // 興味なしが多い場合は強く類似性を高く
-                    } else if (notInterestRatio > 0.3) {
-                        baseLambda += 0.1; // 興味なしが少し多い場合は少し類似性を高く
-                    }
-
-                    // 興味ありの割合が高い場合でも適度に探索性を保つ
-                    if (interestRatio > 0.8) {
-                        baseLambda -= 0.1; // 興味ありが多い場合は少し探索性を高く
-                    }
-
-                    // 最近の興味なし傾向を考慮
-                    if (recentNotInterestRatio > 0.4) {
-                        baseLambda += 0.15; // 最近興味なしが多い場合は類似性を高く
-                    }
-
-                    // フィードバック数の影響
-                    if (totalCount < 5) {
-                        baseLambda += 0.1; // 少ない場合は類似性を高くして安全に
-                    } else if (totalCount > 15) {
-                        baseLambda += 0.05; // 十分なデータがある場合は少し類似性を高く
-                    }
-
-                    // 興味なしの多様性による調整（興味なしの割合が高い場合）
-                    if (notInterestRatio > interestRatio) {
-                        baseLambda += 0.1; // 興味なしが多い場合は類似性を高く
-                    }
-
-                    lambda = Math.max(0.3, Math.min(0.9, baseLambda)); // 0.3-0.9の範囲に制限
-
-                    // 最適化されたlambdaを保存
-                    await updateMMRLambda(userId, lambda, env);
-
-                    logger.debug(`Optimized MMR lambda for user ${userId} (not interested reduction): ${lambda.toFixed(3)}`, {
-                        userId,
-                        lambda,
-                        userCTR,
-                        interestRatio,
-                        notInterestRatio,
-                        recentNotInterestRatio,
-                        totalCount,
-                        baseLambda: baseLambda.toFixed(3)
-                    });
-
-                } else {
-                    // フィードバックがない場合はCTRに基づいて調整（少し類似性を高めに）
-                    lambda = 0.5 + (userCTR * 0.2); // CTRに応じて0.5-0.7の範囲
-
-                    // 初期lambdaも保存
-                    await updateMMRLambda(userId, lambda, env);
-
-                    logger.debug(`Initial MMR lambda for user ${userId}: ${lambda.toFixed(3)} (based on CTR: ${userCTR})`, {
-                        userId,
-                        lambda,
-                        userCTR
-                    });
-                }
+                const { lambda } = await lambdaResponse.json() as { lambda: number };
+                logger.debug(`Retrieved MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
 
                 return new Response(JSON.stringify({ lambda }), {
                     headers: { 'Content-Type': 'application/json' },

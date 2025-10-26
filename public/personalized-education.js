@@ -192,7 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const articleId = articleItem.querySelector('input[type="radio"]').name.split('-')[1];
             const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
             if (selectedInterest) {
-                const feedbackUrl = `/track-feedback?userId=${userId}&articleId=${encodeURIComponent(articleId)}&feedback=${selectedInterest.value}`;
+                const feedbackUrl = `/track-feedback?userId=${userId}&articleId=${encodeURIComponent(articleId)}&feedback=${selectedInterest.value}&immediateUpdate=true`;
                 feedbackPromises.push(fetch(feedbackUrl, { method: 'GET' }));
             }
         });
