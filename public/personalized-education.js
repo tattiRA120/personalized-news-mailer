@@ -249,10 +249,21 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
 
-                // ページをリロードして更新されたスコアを表示
-                setTimeout(() => {
+                // 即座にMMR設定とスコアを更新してからページをリロード
+                setTimeout(async () => {
+                    try {
+                        // バックグラウンドで最新の設定を取得
+                        await Promise.all([
+                            fetchMMRSettings(),
+                            fetchCurrentPreferenceScore()
+                        ]);
+                    } catch (error) {
+                        console.error('Error updating settings after submission:', error);
+                    }
+
+                    // ページをリロードして上部に戻る
                     window.location.reload();
-                }, 1000); // 1秒後にリロード
+                }, 500); // 0.5秒後にリロード
             } else {
                 const failedResponses = responses.filter(res => !res.ok);
                 const errorMessages = await Promise.all(failedResponses.map(res => res.text()));

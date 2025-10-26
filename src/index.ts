@@ -814,112 +814,85 @@ export default {
                 let lambda = 0.5; // デフォルト値
 
                 if (feedbackLogs.results && feedbackLogs.results.length > 0) {
-                    // より詳細なフィードバック分析
+                    // 詳細なフィードバック分析
                     const interestedCount = feedbackLogs.results.filter(log => log.action === 'interested').length;
                     const totalCount = feedbackLogs.results.length;
                     const interestRatio = interestedCount / totalCount;
 
-                    // 選択パターンの分析
-                    const recentLogs = feedbackLogs.results.slice(0, 10); // 最近10件
+                    // 最近の傾向分析（最近10件）
+                    const recentLogs = feedbackLogs.results.slice(0, 10);
                     const recentInterestedCount = recentLogs.filter(log => log.action === 'interested').length;
                     const recentTotalCount = recentLogs.length;
                     const recentInterestRatio = recentTotalCount > 0 ? recentInterestedCount / recentTotalCount : 0;
 
-                    // 連続した選択パターンの分析
-                    let consistencyScore = 0;
-                    if (recentLogs.length >= 3) {
-                        let consistentCount = 0;
-                        for (let i = 1; i < recentLogs.length; i++) {
-                            if (recentLogs[i].action === recentLogs[i-1].action) {
-                                consistentCount++;
-                            }
-                        }
-                        consistencyScore = consistentCount / (recentLogs.length - 1);
-                    }
+                    logger.debug(`Feedback analysis for user ${userId}: ${interestedCount}/${totalCount} interested (${(interestRatio * 100).toFixed(1)}%), recent: ${recentInterestedCount}/${recentTotalCount} (${(recentInterestRatio * 100).toFixed(1)}%)`, {
+                        userId,
+                        interestedCount,
+                        totalCount,
+                        interestRatio,
+                        recentInterestedCount,
+                        recentTotalCount,
+                        recentInterestRatio
+                    });
 
-                    // 多様性の分析（興味あり・なしが交互になっているか）
-                    let diversityScore = 0;
-                    if (recentLogs.length >= 2) {
-                        let changes = 0;
-                        for (let i = 1; i < recentLogs.length; i++) {
-                            if (recentLogs[i].action !== recentLogs[i-1].action) {
-                                changes++;
-                            }
-                        }
-                        diversityScore = changes / (recentLogs.length - 1);
-                    }
+                    // 連続的なlambda計算アルゴリズム
+                    let baseLambda = 0.5;
 
-                    // 詳細なlambda計算アルゴリズム
-                    let adjustedLambda = 0.5;
+                    // CTRの影響（0.1-0.9の範囲にマッピング）
+                    const ctrInfluence = (userCTR - 0.5) * 0.2; // CTRが0.5を中心に±0.1の影響
+                    baseLambda += ctrInfluence;
 
-                    // CTRに基づく調整
-                    if (userCTR < 0.2) {
-                        adjustedLambda -= 0.2; // 探索性を高く
-                    } else if (userCTR > 0.8) {
-                        adjustedLambda += 0.2; // 類似性を高く
-                    }
+                    // 興味比率の影響（線形的にマッピング）
+                    const interestInfluence = (interestRatio - 0.5) * 0.3; // 興味比率が0.5を中心に±0.15の影響
+                    baseLambda -= interestInfluence; // 興味が高いほど探索性を高く（lambdaを低く）
 
-                    // 興味比率に基づく調整
-                    if (interestRatio > 0.8) {
-                        adjustedLambda -= 0.15; // 探索性を高く（新しい発見を促す）
-                    } else if (interestRatio < 0.2) {
-                        adjustedLambda += 0.15; // 類似性を高く（好みに集中）
-                    }
+                    // 最近の傾向の影響
+                    const recentInfluence = (recentInterestRatio - 0.5) * 0.15; // 最近の傾向も考慮
+                    baseLambda -= recentInfluence;
 
-                    // 最近の傾向に基づく調整
-                    if (recentInterestRatio > 0.7) {
-                        adjustedLambda -= 0.1; // 最近興味が多い場合は探索性を高く
-                    } else if (recentInterestRatio < 0.3) {
-                        adjustedLambda += 0.1; // 最近興味が少ない場合は類似性を高く
-                    }
-
-                    // 選択の多様性に基づく調整
-                    if (diversityScore > 0.7) {
-                        adjustedLambda -= 0.1; // 多様性が高い場合は探索性を高く
-                    } else if (diversityScore < 0.3) {
-                        adjustedLambda += 0.1; // 多様性が低い場合は類似性を高く
-                    }
-
-                    // 連続性に基づく調整
-                    if (consistencyScore > 0.8) {
-                        adjustedLambda += 0.05; // 連続性が高い場合は類似性を少し高く
-                    } else if (consistencyScore < 0.2) {
-                        adjustedLambda -= 0.05; // 連続性が低い場合は探索性を少し高く
-                    }
-
-                    // フィードバック数に基づく調整（少ない場合は探索性を高く）
+                    // フィードバック数の影響
                     if (totalCount < 5) {
-                        adjustedLambda -= 0.1;
+                        baseLambda -= 0.1; // 少ない場合は探索性を高く
                     } else if (totalCount > 15) {
-                        adjustedLambda += 0.05; // 十分なデータがある場合は類似性を少し高く
+                        baseLambda += 0.05; // 十分なデータがある場合は少し類似性を高く
                     }
 
-                    lambda = Math.max(0.1, Math.min(0.9, adjustedLambda)); // 0.1-0.9の範囲に制限
+                    // フィードバックの多様性による調整
+                    const uniqueActions = new Set(feedbackLogs.results.map(log => log.action)).size;
+                    if (uniqueActions === 1) {
+                        baseLambda += 0.05; // 同じ選択ばかりの場合は類似性を高く
+                    } else if (uniqueActions === 2) {
+                        baseLambda -= 0.05; // 多様な選択の場合は探索性を高く
+                    }
+
+                    lambda = Math.max(0.1, Math.min(0.9, baseLambda)); // 0.1-0.9の範囲に制限
 
                     // 最適化されたlambdaを保存
                     await updateMMRLambda(userId, lambda, env);
 
-                    logger.debug(`Optimized MMR lambda for user ${userId}: ${lambda}`, {
+                    logger.debug(`Optimized MMR lambda for user ${userId}: ${lambda.toFixed(3)}`, {
                         userId,
                         lambda,
                         userCTR,
                         interestRatio,
                         recentInterestRatio,
-                        consistencyScore,
-                        diversityScore,
-                        totalCount
+                        totalCount,
+                        uniqueActions,
+                        baseLambda: baseLambda.toFixed(3)
                     });
 
                 } else {
                     // フィードバックがない場合はCTRに基づいて調整
-                    if (userCTR < 0.3) {
-                        lambda = 0.3;
-                    } else if (userCTR > 0.7) {
-                        lambda = 0.7;
-                    }
+                    lambda = 0.4 + (userCTR * 0.2); // CTRに応じて0.4-0.6の範囲
 
                     // 初期lambdaも保存
                     await updateMMRLambda(userId, lambda, env);
+
+                    logger.debug(`Initial MMR lambda for user ${userId}: ${lambda.toFixed(3)} (based on CTR: ${userCTR})`, {
+                        userId,
+                        lambda,
+                        userCTR
+                    });
                 }
 
                 return new Response(JSON.stringify({ lambda }), {
