@@ -2,7 +2,7 @@ import { Env } from '../index';
 import { collectNews, NewsArticle } from '../newsCollector';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs, getUserCTR } from '../services/d1Service';
-import { getAllUserIds, getUserProfile } from '../userProfile';
+import { getAllUserIds, getUserProfile, getMMRLambda } from '../userProfile';
 import { selectPersonalizedArticles, cosineSimilarity } from '../articleSelector';
 import { generateNewsEmail, sendNewsEmail } from '../emailGenerator';
 import { ClickLogger } from '../clickLogger';
@@ -218,8 +218,12 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         articlesForSelection = articlesWithFeatures.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
                     }
 
+                    // ユーザーの保存されたMMR lambdaを取得
+                    const userMMRLambda = await getMMRLambda(userId, env);
+                    logger.debug(`Using saved MMR lambda for user ${userId}: ${userMMRLambda}`, { userId, lambda: userMMRLambda });
+
                     logger.debug(`Selecting personalized articles for user ${userId} from ${articlesForSelection.length} candidates.`, { userId, candidateCount: articlesForSelection.length });
-                    const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfileEmbeddingForSelection, clickLogger, userId, numberOfArticlesToSend, userCTR, 0.5, env) as NewsArticleWithEmbedding[];
+                    const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfileEmbeddingForSelection, clickLogger, userId, numberOfArticlesToSend, userCTR, userMMRLambda, env) as NewsArticleWithEmbedding[];
                     logger.debug(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
 
                     if (selectedArticles.length === 0) {

@@ -1,4 +1,4 @@
-import { getUserProfile, createUserProfile } from './userProfile';
+import { getUserProfile, createUserProfile, updateMMRLambda } from './userProfile';
 import { ClickLogger } from './clickLogger';
 import { BatchQueueDO } from './batchQueueDO';
 import { Logger } from './logger';
@@ -701,9 +701,10 @@ export default {
                     });
                 }
 
-                // D1からembeddingを持つ記事を取得
-                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, 'embedding IS NOT NULL');
-                logger.debug(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 for user ${userId}.`, { count: allArticlesWithEmbeddings.length, userId });
+                // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事を除外
+                const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?)`;
+                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId]);
+                logger.debug(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 (excluding feedbacked articles for user ${userId}).`, { count: allArticlesWithEmbeddings.length, userId });
 
                 if (allArticlesWithEmbeddings.length === 0) {
                     logger.warn('No articles with embeddings found. Returning empty list.', { userId });
@@ -792,31 +793,123 @@ export default {
                     return new Response('Missing userId', { status: 400 });
                 }
 
+                // ユーザーの保存されたlambdaを取得（既に最適化されている場合）
+                const userProfile = await getUserProfile(userId, env);
+                if (userProfile && userProfile.mmrLambda !== undefined) {
+                    logger.debug(`Using saved MMR lambda for user ${userId}: ${userProfile.mmrLambda}`, { userId, lambda: userProfile.mmrLambda });
+                    return new Response(JSON.stringify({ lambda: userProfile.mmrLambda }), {
+                        headers: { 'Content-Type': 'application/json' },
+                        status: 200,
+                    });
+                }
+
                 // ユーザーのCTRを取得
                 const userCTR = await getUserCTR(env, userId);
 
                 // フィードバック履歴を取得してlambdaを計算
                 const feedbackLogs = await env.DB.prepare(
-                    `SELECT action FROM education_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 10`
+                    `SELECT action FROM education_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20`
                 ).bind(userId).all<{ action: string }>();
 
                 let lambda = 0.5; // デフォルト値
 
                 if (feedbackLogs.results && feedbackLogs.results.length > 0) {
-                    // 最近のフィードバックに基づいてlambdaを調整
+                    // より詳細なフィードバック分析
                     const interestedCount = feedbackLogs.results.filter(log => log.action === 'interested').length;
                     const totalCount = feedbackLogs.results.length;
                     const interestRatio = interestedCount / totalCount;
 
-                    // CTRと興味比率に基づいてlambdaを調整
-                    // CTRが低い場合や興味比率が高い場合は探索性を高く（lambdaを低く）
-                    if (userCTR < 0.3 || interestRatio > 0.7) {
-                        lambda = 0.3; // 探索重視
-                    } else if (userCTR > 0.7 || interestRatio < 0.3) {
-                        lambda = 0.7; // 類似性重視
-                    } else {
-                        lambda = 0.5; // バランス
+                    // 選択パターンの分析
+                    const recentLogs = feedbackLogs.results.slice(0, 10); // 最近10件
+                    const recentInterestedCount = recentLogs.filter(log => log.action === 'interested').length;
+                    const recentTotalCount = recentLogs.length;
+                    const recentInterestRatio = recentTotalCount > 0 ? recentInterestedCount / recentTotalCount : 0;
+
+                    // 連続した選択パターンの分析
+                    let consistencyScore = 0;
+                    if (recentLogs.length >= 3) {
+                        let consistentCount = 0;
+                        for (let i = 1; i < recentLogs.length; i++) {
+                            if (recentLogs[i].action === recentLogs[i-1].action) {
+                                consistentCount++;
+                            }
+                        }
+                        consistencyScore = consistentCount / (recentLogs.length - 1);
                     }
+
+                    // 多様性の分析（興味あり・なしが交互になっているか）
+                    let diversityScore = 0;
+                    if (recentLogs.length >= 2) {
+                        let changes = 0;
+                        for (let i = 1; i < recentLogs.length; i++) {
+                            if (recentLogs[i].action !== recentLogs[i-1].action) {
+                                changes++;
+                            }
+                        }
+                        diversityScore = changes / (recentLogs.length - 1);
+                    }
+
+                    // 詳細なlambda計算アルゴリズム
+                    let adjustedLambda = 0.5;
+
+                    // CTRに基づく調整
+                    if (userCTR < 0.2) {
+                        adjustedLambda -= 0.2; // 探索性を高く
+                    } else if (userCTR > 0.8) {
+                        adjustedLambda += 0.2; // 類似性を高く
+                    }
+
+                    // 興味比率に基づく調整
+                    if (interestRatio > 0.8) {
+                        adjustedLambda -= 0.15; // 探索性を高く（新しい発見を促す）
+                    } else if (interestRatio < 0.2) {
+                        adjustedLambda += 0.15; // 類似性を高く（好みに集中）
+                    }
+
+                    // 最近の傾向に基づく調整
+                    if (recentInterestRatio > 0.7) {
+                        adjustedLambda -= 0.1; // 最近興味が多い場合は探索性を高く
+                    } else if (recentInterestRatio < 0.3) {
+                        adjustedLambda += 0.1; // 最近興味が少ない場合は類似性を高く
+                    }
+
+                    // 選択の多様性に基づく調整
+                    if (diversityScore > 0.7) {
+                        adjustedLambda -= 0.1; // 多様性が高い場合は探索性を高く
+                    } else if (diversityScore < 0.3) {
+                        adjustedLambda += 0.1; // 多様性が低い場合は類似性を高く
+                    }
+
+                    // 連続性に基づく調整
+                    if (consistencyScore > 0.8) {
+                        adjustedLambda += 0.05; // 連続性が高い場合は類似性を少し高く
+                    } else if (consistencyScore < 0.2) {
+                        adjustedLambda -= 0.05; // 連続性が低い場合は探索性を少し高く
+                    }
+
+                    // フィードバック数に基づく調整（少ない場合は探索性を高く）
+                    if (totalCount < 5) {
+                        adjustedLambda -= 0.1;
+                    } else if (totalCount > 15) {
+                        adjustedLambda += 0.05; // 十分なデータがある場合は類似性を少し高く
+                    }
+
+                    lambda = Math.max(0.1, Math.min(0.9, adjustedLambda)); // 0.1-0.9の範囲に制限
+
+                    // 最適化されたlambdaを保存
+                    await updateMMRLambda(userId, lambda, env);
+
+                    logger.debug(`Optimized MMR lambda for user ${userId}: ${lambda}`, {
+                        userId,
+                        lambda,
+                        userCTR,
+                        interestRatio,
+                        recentInterestRatio,
+                        consistencyScore,
+                        diversityScore,
+                        totalCount
+                    });
+
                 } else {
                     // フィードバックがない場合はCTRに基づいて調整
                     if (userCTR < 0.3) {
@@ -824,9 +917,10 @@ export default {
                     } else if (userCTR > 0.7) {
                         lambda = 0.7;
                     }
-                }
 
-                logger.debug(`MMR settings calculated for user ${userId}: lambda=${lambda}`, { userId, lambda, userCTR, feedbackCount: feedbackLogs.results?.length });
+                    // 初期lambdaも保存
+                    await updateMMRLambda(userId, lambda, env);
+                }
 
                 return new Response(JSON.stringify({ lambda }), {
                     headers: { 'Content-Type': 'application/json' },
