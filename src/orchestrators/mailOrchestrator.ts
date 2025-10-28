@@ -137,42 +137,35 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     // ユーザープロファイルの埋め込みベクトルを準備
                     let userProfileEmbeddingForSelection: number[];
-                    if (userProfile.embedding && userProfile.embedding.length === OPENAI_EMBEDDING_DIMENSION) {
-                        // ユーザープロファイルに鮮度情報がない場合は0を追加して次元を揃える
-                        userProfileEmbeddingForSelection = [...userProfile.embedding, 0];
-                    } else if (userProfile.embedding && userProfile.embedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                    if (userProfile.embedding && userProfile.embedding.length === EXTENDED_EMBEDDING_DIMENSION) {
                         userProfileEmbeddingForSelection = userProfile.embedding;
                     } else {
                         logger.warn(`User ${userId} has an embedding of unexpected dimension ${userProfile.embedding?.length}. Initializing with zero vector for selection.`, { userId, embeddingLength: userProfile.embedding?.length });
                         userProfileEmbeddingForSelection = new Array(EXTENDED_EMBEDDING_DIMENSION).fill(0);
                     }
 
-                    // 記事の埋め込みベクトルに鮮度情報を追加
+                    // 記事の埋め込みベクトルに鮮度情報を更新
                     const now = Date.now();
-                    const articlesWithExtendedEmbeddings = articlesWithEmbeddings
-                        .filter(article => article.embedding && article.embedding.length === OPENAI_EMBEDDING_DIMENSION)
+                    const articlesWithUpdatedFreshness = articlesWithEmbeddings
+                        .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
                         .map((article) => {
                             let normalizedAge = 0; // デフォルト値
 
-                            if (article.publishedAt) { // 既存のarticleオブジェクトからpublishedAtを取得
+                            if (article.publishedAt) {
                                 const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
                                 normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
                             } else {
                                 logger.warn(`Could not find publishedAt for article ${article.articleId}. Using default freshness.`, { articleId: article.articleId });
                             }
 
+                            // 既存の257次元embeddingの最後の要素（鮮度情報）を更新
+                            const updatedEmbedding = [...article.embedding!];
+                            updatedEmbedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+
                             return {
                                 ...article,
-                                embedding: [...article.embedding!, normalizedAge], // 鮮度情報を追加
+                                embedding: updatedEmbedding,
                             };
-                        });
-
-                    // embeddingが存在し、かつ次元がEXTENDED_EMBEDDING_DIMENSIONである記事のみを対象とする
-                    const articlesWithFeatures = articlesWithExtendedEmbeddings
-                        .filter(article => article.embedding !== undefined && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
-                        .map(article => {
-                            // ここでは既に鮮度情報が追加されているため、そのまま返す
-                            return { ...article };
                         });
 
                     // UCB計算の負荷を軽減しつつ、より多くの記事を対象とするため、記事候補を戦略的にサンプリング
@@ -186,7 +179,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     if (userProfileEmbeddingForSelection.length === EXTENDED_EMBEDDING_DIMENSION && userProfileEmbeddingForSelection.some(val => val !== 0)) {
                         // NOTE: 類似度計算には鮮度情報を含まない元の埋め込みベクトルを使用
                         const userProfileOriginalEmbedding = userProfileEmbeddingForSelection.slice(0, OPENAI_EMBEDDING_DIMENSION);
-                        const articlesWithSimilarity = articlesWithExtendedEmbeddings
+                        const articlesWithSimilarity = articlesWithUpdatedFreshness
                             .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
                             .map(article => ({
                                 ...article,
@@ -198,7 +191,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         const exploitationArticleIds = new Set(exploitationArticles.map(a => a.articleId));
 
                         // Exploration: Get random M articles from the rest
-                        const remainingForExploration = articlesWithFeatures.filter(a => !exploitationArticleIds.has(a.articleId));
+                        const remainingForExploration = articlesWithUpdatedFreshness.filter(a => !exploitationArticleIds.has(a.articleId));
                         const explorationArticles: NewsArticleWithEmbedding[] = [];
                         const explorationIndices = new Set<number>();
                         while (explorationArticles.length < EXPLORATION_COUNT && explorationArticles.length < remainingForExploration.length) {
@@ -215,7 +208,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     } else {
                         // Fallback for users without an embedding profile: use the latest articles
                         logger.warn(`User ${userId} has no embedding profile. Falling back to latest articles for selection.`, { userId });
-                        articlesForSelection = articlesWithFeatures.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
+                        articlesForSelection = articlesWithUpdatedFreshness.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
                     }
 
                     // ユーザーの保存されたMMR lambdaを取得
@@ -257,6 +250,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                             articleId: article.articleId,
                             timestamp: Date.now(),
                             embedding: article.embedding!,
+                            publishedAt: article.publishedAt!,
                         }));
 
                     if (filteredSentArticlesData.length === 0) {
@@ -288,13 +282,18 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                             const articleId = clickLog.article_id;
                             const article = await getArticleByIdFromD1(articleId, env) as NewsArticleWithEmbedding | null; // d1ServiceのgetArticleByIdFromD1を使用
 
-                            if (article && article.embedding) {
+                            if (article && article.embedding && article.publishedAt) {
                                 const reward = 1.0;
+                                const now = Date.now();
+                                const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
+                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                                const extendedEmbedding = [...article.embedding, normalizedAge];
+
                                 const updateResponse = await clickLogger.fetch(
-                                    new Request(`${env.WORKER_BASE_URL}/update-bandit-from-click`, { // 絶対パスに修正
+                                    new Request(`${env.WORKER_BASE_URL}/update-bandit-from-click`, {
                                         method: 'POST',
                                         headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ userId: userId, articleId: articleId, embedding: article.embedding, reward: reward }),
+                                        body: JSON.stringify({ userId: userId, articleId: articleId, embedding: extendedEmbedding, reward: reward }),
                                     })
                                 );
 

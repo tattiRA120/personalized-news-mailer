@@ -8,7 +8,7 @@ import init, { get_ucb_values_bulk, update_bandit_model, cosine_similarity } fro
 import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 import { updateUserProfile } from './userProfile';
 import { OPENAI_EMBEDDING_DIMENSION } from './config';
-import { getArticlesFromD1 } from './services/d1Service';
+import { getArticlesFromD1, updateArticleEmbeddingInD1 } from './services/d1Service';
 
 // 記事の鮮度情報を1次元追加するため、最終的な埋め込みベクトルの次元は OPENAI_EMBEDDING_DIMENSION + 1 となる
 export const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1; // orchestratorから参照するためexport
@@ -358,7 +358,7 @@ export class ClickLogger extends DurableObject {
         // /log-sent-articles エンドポイントのリクエストボディの型定義
         interface LogSentArticlesRequestBody {
             userId: string;
-            sentArticles: { articleId: string, timestamp: number, embedding: number[] }[];
+            sentArticles: { articleId: string, timestamp: number, embedding: number[], publishedAt: string }[];
         }
 
         // /log-click エンドポイントのリクエストボディの型定義
@@ -556,8 +556,8 @@ export class ClickLogger extends DurableObject {
                     if (articleExists.results && articleExists.results.length > 0) {
                         statements.push(
                             this.env.DB.prepare(
-                                `INSERT INTO sent_articles (user_id, article_id, timestamp, embedding) VALUES (?, ?, ?, ?)`
-                            ).bind(userId, article.articleId, article.timestamp, article.embedding ? JSON.stringify(article.embedding) : null)
+                                `INSERT INTO sent_articles (user_id, article_id, timestamp, embedding, published_at) VALUES (?, ?, ?, ?, ?)`
+                            ).bind(userId, article.articleId, article.timestamp, article.embedding ? JSON.stringify(article.embedding) : null, article.publishedAt)
                         );
                     } else {
                         this.logger.warn(`Skipping logging sent article ${article.articleId} for user ${userId} due to missing article in 'articles' table.`, { userId, articleId: article.articleId });
@@ -666,6 +666,8 @@ export class ClickLogger extends DurableObject {
                         // embedding-completed-callback は OpenAI Batch API からのコールバックであり、
                         // ここで受け取るembeddingは256次元であるため、鮮度情報 (0.0) を追加して257次元にする。
                         const embeddingWithFreshness = [...embed.embedding, 0.0];
+                        // D1に保存する前に、記事のembeddingを更新
+                        await updateArticleEmbeddingInD1(embed.articleId, embeddingWithFreshness, this.env);
                         await this.updateBanditModel(banditModel, embeddingWithFreshness, 1.0, userId); // 報酬は1.0
                         this.logger.debug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
@@ -914,11 +916,11 @@ export class ClickLogger extends DurableObject {
             for (const userId of userIds) {
                 this.logger.debug(`Processing unclicked articles for user: ${userId}`, { userId });
                 const unclickedArticles = await this.env.DB.prepare(
-                    `SELECT sa.article_id, sa.embedding
+                    `SELECT sa.article_id, sa.embedding, sa.published_at
                      FROM sent_articles sa
                      LEFT JOIN click_logs cl ON sa.user_id = cl.user_id AND sa.article_id = cl.article_id
                      WHERE sa.user_id = ? AND sa.timestamp >= ? AND cl.id IS NULL`
-                ).bind(userId, twentyFourHoursAgo).all<{ article_id: string, embedding: string }>();
+                ).bind(userId, twentyFourHoursAgo).all<{ article_id: string, embedding: string, published_at: string }>();
 
                 if (unclickedArticles.results && unclickedArticles.results.length > 0) {
                     let banditModel = this.inMemoryModels.get(userId);
@@ -928,12 +930,30 @@ export class ClickLogger extends DurableObject {
                     }
 
                     let updatedCount = 0;
+                    const now = Date.now();
                     for (const article of unclickedArticles.results) {
-                        if (article.embedding) {
+                        if (article.embedding && article.published_at) {
+                            const originalEmbedding = JSON.parse(article.embedding) as number[];
+                            let embeddingToUse = originalEmbedding;
+
+                            // D1に保存されているembeddingが既に257次元であることを前提とする
+                            if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                                // sent_articlesに保存されているpublished_atを使用して鮮度情報を計算
+                                const ageInHours = (now - new Date(article.published_at).getTime()) / (1000 * 60 * 60);
+                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                                embeddingToUse = [...originalEmbedding];
+                                embeddingToUse[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                            } else {
+                                this.logger.warn(`Article ${article.article_id} from sent_articles has unexpected embedding dimension ${originalEmbedding.length}. Expected ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: article.article_id, embeddingLength: originalEmbedding.length });
+                                continue;
+                            }
+
                             // クリックされなかった記事には負の報酬を与える (例: -0.1)
-                            await this.updateBanditModel(banditModel, JSON.parse(article.embedding) as number[], -0.1, userId);
+                            await this.updateBanditModel(banditModel, embeddingToUse, -0.1, userId);
                             this.dirty = true;
                             updatedCount++;
+                        } else {
+                            this.logger.warn(`Article ${article.article_id} from sent_articles missing embedding or published_at. Skipping update.`, { userId, articleId: article.article_id, hasEmbedding: !!article.embedding, hasPublishedAt: !!article.published_at });
                         }
                     }
                     this.logger.debug(`Updated bandit model for user ${userId} with -0.1 reward for ${updatedCount} unclicked articles.`, { userId, updatedCount });
@@ -978,11 +998,23 @@ export class ClickLogger extends DurableObject {
                         let source = 'unknown';
 
                         const sentArticleResult = await this.env.DB.prepare(
-                            `SELECT embedding FROM sent_articles WHERE user_id = ? AND article_id = ? ORDER BY timestamp DESC LIMIT 1`
-                        ).bind(userId, log.article_id).first<{ embedding: string }>();
+                            `SELECT embedding, published_at FROM sent_articles WHERE user_id = ? AND article_id = ? ORDER BY timestamp DESC LIMIT 1`
+                        ).bind(userId, log.article_id).first<{ embedding: string, published_at: string }>();
 
-                        if (sentArticleResult && sentArticleResult.embedding) {
-                            embedding = JSON.parse(sentArticleResult.embedding) as number[];
+                        if (sentArticleResult && sentArticleResult.embedding && sentArticleResult.published_at) {
+                            const originalEmbedding = JSON.parse(sentArticleResult.embedding) as number[];
+                            // D1に保存されているembeddingが既に257次元であることを前提とする
+                            if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                                // sent_articlesに保存されているpublished_atを使用して鮮度情報を計算
+                                const now = Date.now();
+                                const ageInHours = (now - new Date(sentArticleResult.published_at).getTime()) / (1000 * 60 * 60);
+                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                                embedding = [...originalEmbedding];
+                                embedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                            } else {
+                                this.logger.warn(`Article ${log.article_id} from sent_articles has unexpected embedding dimension ${originalEmbedding.length}. Expected ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: log.article_id, embeddingLength: originalEmbedding.length });
+                                continue;
+                            }
                             source = 'sent_articles';
                         } else {
                             const originalArticle = await this.env.DB.prepare(
@@ -994,7 +1026,14 @@ export class ClickLogger extends DurableObject {
                                 const now = Date.now();
                                 const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
                                 const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                                embedding = [...originalEmbedding, normalizedAge];
+                                // D1に保存されているembeddingが既に257次元であることを前提とする
+                                if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                                    embedding = [...originalEmbedding];
+                                    embedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                                } else {
+                                    this.logger.warn(`Article ${log.article_id} from articles table has unexpected embedding dimension ${originalEmbedding.length}. Expected ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: log.article_id, embeddingLength: originalEmbedding.length });
+                                    continue;
+                                }
                                 source = 'articles';
                             }
                         }
