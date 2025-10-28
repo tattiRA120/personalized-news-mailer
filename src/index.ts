@@ -723,9 +723,7 @@ export default {
 
                 // ユーザープロファイルのembeddingを準備
                 let userProfileEmbeddingForSelection: number[];
-                if (userProfile.embedding && userProfile.embedding.length === 256) {
-                    userProfileEmbeddingForSelection = [...userProfile.embedding, 0]; // 鮮度情報を追加
-                } else if (userProfile.embedding && userProfile.embedding.length === 257) {
+                if (userProfile.embedding && userProfile.embedding.length === 257) {
                     userProfileEmbeddingForSelection = userProfile.embedding;
                 } else {
                     logger.warn(`User ${userId} has invalid embedding dimension ${userProfile.embedding?.length}. Using zero vector.`, { userId, embeddingLength: userProfile.embedding?.length });
@@ -735,7 +733,7 @@ export default {
                 // 記事のembeddingに鮮度情報を追加
                 const now = Date.now();
                 const articlesWithExtendedEmbeddings = allArticlesWithEmbeddings
-                    .filter(article => article.embedding && article.embedding.length === 256)
+                    .filter(article => article.embedding && article.embedding.length === 257)
                     .map((article) => {
                         let normalizedAge = 0;
                         if (article.publishedAt) {
