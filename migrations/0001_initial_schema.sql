@@ -13,8 +13,11 @@ CREATE TABLE IF NOT EXISTS users (
     user_id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
     interests TEXT DEFAULT '[]' NOT NULL,
-    embedding TEXT
+    embedding TEXT,
+    mmr_lambda REAL DEFAULT 0.5
 );
+
+CREATE INDEX IF NOT EXISTS idx_users_mmr_lambda ON users (mmr_lambda);
 
 CREATE TABLE IF NOT EXISTS click_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,6 +37,7 @@ CREATE TABLE IF NOT EXISTS sent_articles (
     article_id TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
     embedding TEXT,
+    published_at TEXT,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
     FOREIGN KEY (article_id) REFERENCES articles(article_id)
 );
@@ -53,3 +57,4 @@ CREATE TABLE IF NOT EXISTS education_logs (
 
 CREATE INDEX IF NOT EXISTS idx_education_logs_user_id ON education_logs (user_id);
 CREATE INDEX IF NOT EXISTS idx_education_logs_timestamp ON education_logs (timestamp);
+CREATE INDEX IF NOT EXISTS idx_education_logs_user_article ON education_logs (user_id, article_id);

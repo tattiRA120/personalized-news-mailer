@@ -152,10 +152,17 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                             let normalizedAge = 0; // デフォルト値
 
                             if (article.publishedAt) {
-                                const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
-                                normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
+                                const publishedDate = new Date(article.publishedAt);
+                                if (isNaN(publishedDate.getTime())) {
+                                    logger.warn(`Invalid publishedAt date for article ${article.articleId}. Using default freshness (0).`, { articleId: article.articleId, publishedAt: article.publishedAt });
+                                    normalizedAge = 0; // 不正な日付の場合は0にフォールバック
+                                } else {
+                                    const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                    normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
+                                }
                             } else {
-                                logger.warn(`Could not find publishedAt for article ${article.articleId}. Using default freshness.`, { articleId: article.articleId });
+                                logger.warn(`Could not find publishedAt for article ${article.articleId}. Using default freshness (0).`, { articleId: article.articleId });
+                                normalizedAge = 0; // publishedAtがない場合は0にフォールバック
                             }
 
                             // 既存の257次元embeddingの最後の要素（鮮度情報）を更新

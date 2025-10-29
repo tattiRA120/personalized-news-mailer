@@ -453,9 +453,27 @@ export class ClickLogger extends DurableObject {
                         try {
                             const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
                             const now = Date.now();
-                            const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
-                            const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                            embedding = [...originalEmbedding, normalizedAge];
+                            const publishedDate = new Date(originalArticle.published_at);
+                            let normalizedAge = 0;
+
+                            if (isNaN(publishedDate.getTime())) {
+                                this.logger.warn(`Invalid publishedAt date for article ${articleId} from articles table. Using default freshness (0).`, { userId, articleId, publishedAt: originalArticle.published_at });
+                                normalizedAge = 0;
+                            } else {
+                                const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            }
+                            
+                            // embeddingの次元をチェックし、必要に応じて鮮度情報を追加または更新
+                            if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
+                                embedding = [...originalEmbedding, normalizedAge];
+                            } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                                embedding = [...originalEmbedding];
+                                embedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                            } else {
+                                this.logger.warn(`Article ${articleId} from articles table has unexpected embedding dimension ${originalEmbedding.length}. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping.`, { userId, articleId, embeddingLength: originalEmbedding.length });
+                                return new Response('Embedding dimension mismatch', { status: 500 });
+                            }
                             source = 'articles';
                             this.logger.debug(`Successfully fetched and extended embedding from articles table for article ${articleId}. New dimension: ${embedding.length}`, { userId, articleId, newEmbeddingLength: embedding.length });
                         } catch (parseError) {
@@ -614,13 +632,31 @@ export class ClickLogger extends DurableObject {
                             if (originalArticle && originalArticle.embedding && originalArticle.published_at !== null) {
                                 const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
                                 const now = Date.now();
-                                const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
-                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                                embeddingToUse = [...originalEmbedding, normalizedAge]; // 鮮度情報を付加して拡張
+                                const publishedDate = new Date(originalArticle.published_at);
+                                let normalizedAge = 0;
+
+                                if (isNaN(publishedDate.getTime())) {
+                                    this.logger.warn(`Invalid publishedAt date for article ${article.articleId} from articles table during learn-from-education. Using default freshness (0).`, { userId, articleId: article.articleId, publishedAt: originalArticle.published_at });
+                                    normalizedAge = 0;
+                                } else {
+                                    const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                    normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                                }
+
+                                // embeddingの次元をチェックし、必要に応じて鮮度情報を追加または更新
+                                if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
+                                    embeddingToUse = [...originalEmbedding, normalizedAge];
+                                } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                                    embeddingToUse = [...originalEmbedding];
+                                    embeddingToUse[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                                } else {
+                                    this.logger.warn(`Article ${article.articleId} from articles table has unexpected embedding dimension ${originalEmbedding.length} during learn-from-education. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping.`, { userId, articleId: article.articleId, embeddingLength: originalEmbedding.length });
+                                    continue;
+                                }
 
                                 this.logger.debug(`Successfully re-fetched and extended embedding for article ${article.articleId}. New dimension: ${embeddingToUse.length}`, { userId, articleId: article.articleId, newEmbeddingLength: embeddingToUse.length });
                             } else {
-                                this.logger.error(`Failed to re-fetch original embedding for article ${article.articleId} from articles table. Cannot update bandit model.`, null, { userId, articleId: article.articleId });
+                                this.logger.error(`Failed to re-fetch original embedding for article ${article.articleId} from articles table during learn-from-education. Cannot update bandit model.`, null, { userId, articleId: article.articleId });
                                 // エラーが発生した場合でも、この記事の学習はスキップし、次の記事に進む
                                 continue;
                             }
@@ -749,9 +785,27 @@ export class ClickLogger extends DurableObject {
                         try {
                             const originalEmbedding = article.embedding;
                             const now = Date.now();
-                            const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
-                            const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                            const extendedEmbedding = [...originalEmbedding, normalizedAge];
+                            const publishedDate = new Date(article.publishedAt);
+                            let normalizedAge = 0;
+
+                            if (isNaN(publishedDate.getTime())) {
+                                this.logger.warn(`Invalid publishedAt date for article ${article.articleId} during preference score calculation. Using default freshness (0).`, { userId, articleId: article.articleId, publishedAt: article.publishedAt });
+                                normalizedAge = 0;
+                            } else {
+                                const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            }
+
+                            let extendedEmbedding: number[];
+                            if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
+                                extendedEmbedding = [...originalEmbedding, normalizedAge];
+                            } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                                extendedEmbedding = [...originalEmbedding];
+                                extendedEmbedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                            } else {
+                                this.logger.warn(`Article ${article.articleId} has unexpected embedding dimension ${originalEmbedding.length} during preference score calculation. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping.`, { userId, articleId: article.articleId, embeddingLength: originalEmbedding.length });
+                                continue;
+                            }
                             
                             if (extendedEmbedding.length === banditModel.dimension) {
                                 articleEmbeddings.push(extendedEmbedding);
@@ -935,16 +989,25 @@ export class ClickLogger extends DurableObject {
                         if (article.embedding && article.published_at) {
                             const originalEmbedding = JSON.parse(article.embedding) as number[];
                             let embeddingToUse = originalEmbedding;
+                            const publishedDate = new Date(article.published_at);
+                            let normalizedAge = 0;
 
-                            // D1に保存されているembeddingが既に257次元であることを前提とする
-                            if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
-                                // sent_articlesに保存されているpublished_atを使用して鮮度情報を計算
-                                const ageInHours = (now - new Date(article.published_at).getTime()) / (1000 * 60 * 60);
-                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            if (isNaN(publishedDate.getTime())) {
+                                this.logger.warn(`Invalid publishedAt date for article ${article.article_id} from sent_articles during unclicked article processing. Using default freshness (0).`, { userId, articleId: article.article_id, publishedAt: article.published_at });
+                                normalizedAge = 0;
+                            } else {
+                                const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            }
+
+                            // embeddingの次元をチェックし、必要に応じて鮮度情報を追加または更新
+                            if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
+                                embeddingToUse = [...originalEmbedding, normalizedAge];
+                            } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
                                 embeddingToUse = [...originalEmbedding];
                                 embeddingToUse[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
                             } else {
-                                this.logger.warn(`Article ${article.article_id} from sent_articles has unexpected embedding dimension ${originalEmbedding.length}. Expected ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: article.article_id, embeddingLength: originalEmbedding.length });
+                                this.logger.warn(`Article ${article.article_id} from sent_articles has unexpected embedding dimension ${originalEmbedding.length} during unclicked article processing. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: article.article_id, embeddingLength: originalEmbedding.length });
                                 continue;
                             }
 
@@ -1004,15 +1067,27 @@ export class ClickLogger extends DurableObject {
                         if (sentArticleResult && sentArticleResult.embedding && sentArticleResult.published_at) {
                             const originalEmbedding = JSON.parse(sentArticleResult.embedding) as number[];
                             // D1に保存されているembeddingが既に257次元であることを前提とする
-                            if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
-                                // sent_articlesに保存されているpublished_atを使用して鮮度情報を計算
+                            if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION || originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
                                 const now = Date.now();
-                                const ageInHours = (now - new Date(sentArticleResult.published_at).getTime()) / (1000 * 60 * 60);
-                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                                embedding = [...originalEmbedding];
-                                embedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                                const publishedDate = new Date(sentArticleResult.published_at);
+                                let normalizedAge = 0;
+
+                                if (isNaN(publishedDate.getTime())) {
+                                    this.logger.warn(`Invalid publishedAt date for article ${log.article_id} from sent_articles during feedback processing. Using default freshness (0).`, { userId, articleId: log.article_id, publishedAt: sentArticleResult.published_at });
+                                    normalizedAge = 0;
+                                } else {
+                                    const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                    normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                                }
+
+                                if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
+                                    embedding = [...originalEmbedding, normalizedAge];
+                                } else { // EXTENDED_EMBEDDING_DIMENSION
+                                    embedding = [...originalEmbedding];
+                                    embedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                                }
                             } else {
-                                this.logger.warn(`Article ${log.article_id} from sent_articles has unexpected embedding dimension ${originalEmbedding.length}. Expected ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: log.article_id, embeddingLength: originalEmbedding.length });
+                                this.logger.warn(`Article ${log.article_id} from sent_articles has unexpected embedding dimension ${originalEmbedding.length} during feedback processing. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: log.article_id, embeddingLength: originalEmbedding.length });
                                 continue;
                             }
                             source = 'sent_articles';
@@ -1024,14 +1099,24 @@ export class ClickLogger extends DurableObject {
                             if (originalArticle && originalArticle.embedding && originalArticle.published_at) {
                                 const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
                                 const now = Date.now();
-                                const ageInHours = (now - new Date(originalArticle.published_at).getTime()) / (1000 * 60 * 60);
-                                const normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
-                                // D1に保存されているembeddingが既に257次元であることを前提とする
-                                if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                                const publishedDate = new Date(originalArticle.published_at);
+                                let normalizedAge = 0;
+
+                                if (isNaN(publishedDate.getTime())) {
+                                    this.logger.warn(`Invalid publishedAt date for article ${log.article_id} from articles table during feedback processing. Using default freshness (0).`, { userId, articleId: log.article_id, publishedAt: originalArticle.published_at });
+                                    normalizedAge = 0;
+                                } else {
+                                    const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                    normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                                }
+
+                                if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
+                                    embedding = [...originalEmbedding, normalizedAge];
+                                } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
                                     embedding = [...originalEmbedding];
                                     embedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
                                 } else {
-                                    this.logger.warn(`Article ${log.article_id} from articles table has unexpected embedding dimension ${originalEmbedding.length}. Expected ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: log.article_id, embeddingLength: originalEmbedding.length });
+                                    this.logger.warn(`Article ${log.article_id} from articles table has unexpected embedding dimension ${originalEmbedding.length} during feedback processing. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: log.article_id, embeddingLength: originalEmbedding.length });
                                     continue;
                                 }
                                 source = 'articles';
@@ -1153,10 +1238,13 @@ export class ClickLogger extends DurableObject {
             return;
         }
         if (!embedding.every(e => typeof e === 'number' && isFinite(e))) {
-            this.logger.warn("Cannot update bandit model: embedding contains non-finite numbers (NaN/Infinity).", {
+            const nanIndex = embedding.findIndex(e => !isFinite(e));
+            this.logger.warn(`Cannot update bandit model: embedding contains non-finite numbers (NaN/Infinity). First non-finite value at index ${nanIndex}.`, {
                 userId,
-                embeddingSample: embedding.slice(0, 5), // 最初の5要素をログに記録
+                embeddingSample: embedding.slice(Math.max(0, nanIndex - 2), nanIndex + 3), // 問題の箇所の前後をログに記録
                 embeddingLength: embedding.length,
+                nonFiniteIndex: nanIndex,
+                nonFiniteValue: embedding[nanIndex],
             });
             return;
         }
