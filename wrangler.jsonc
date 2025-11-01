@@ -55,7 +55,7 @@
 		{
 			"binding": "DB",
 			"database_name": "mail-news-articles-db",
-			"database_id": "c2173563-da63-4abe-ab50-d70b8e389102",
+			"database_id": "55891f0d-0b1b-4f32-b033-4880a5a82f18",
 			"migrations_dir": "./migrations"
 		}
 	],
@@ -64,16 +64,6 @@
 		{
 			"binding": "BANDIT_MODELS",
 			"bucket_name": "mail-news-bandit-models"
-		}
-	],
-
-	"rules": [
-		{
-			"type": "CompiledWasm",
-			"globs": [
-				"**/*.wasm",
-				"**/*.wasm?module"
-			]
 		}
 	],
 

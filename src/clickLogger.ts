@@ -700,11 +700,9 @@ export class ClickLogger extends DurableObject {
 
                     for (const embed of embeddings) {
                         // embedding-completed-callback は OpenAI Batch API からのコールバックであり、
-                        // ここで受け取るembeddingは256次元であるため、鮮度情報 (0.0) を追加して257次元にする。
-                        const embeddingWithFreshness = [...embed.embedding, 0.0];
-                        // D1に保存する前に、記事のembeddingを更新
-                        await updateArticleEmbeddingInD1(embed.articleId, embeddingWithFreshness, this.env);
-                        await this.updateBanditModel(banditModel, embeddingWithFreshness, 1.0, userId); // 報酬は1.0
+                        // BatchQueueDOで既に257次元に拡張されたembeddingを受け取り、D1にも保存済みであるため、
+                        // ここではバンディットモデルの更新のみを行う。
+                        await this.updateBanditModel(banditModel, embed.embedding, 1.0, userId); // 報酬は1.0
                         this.logger.debug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
                     this.dirty = true; // モデルが変更されたことをマーク
