@@ -90,11 +90,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 summary: summaryElement ? summaryElement.textContent : '',
                 link: articleLink, // リンクも送信データに含める
             });
-
-            // 選択された記事を新しいタブで開く
-            if (articleLink) {
-                window.open(articleLink, '_blank');
-            }
         });
 
         if (selectedArticlesData.length === 0) {
@@ -104,6 +99,12 @@ document.addEventListener('DOMContentLoaded', () => {
             submitButton.classList.remove('loading'); // ローディングを停止
             return;
         }
+
+        // 選択した記事をローカルストレージに保存
+        localStorage.setItem('selectedArticles', JSON.stringify(selectedArticlesData));
+
+        // 一時的なページを開く
+        window.open('selected-articles.html', '_blank');
 
         try {
             // Workerの新しいエンドポイントに選択結果を送信
