@@ -8,29 +8,35 @@ import { NewsArticle } from './newsCollector';
 import { getArticleByIdFromD1 } from './services/d1Service'; // D1ServiceからgetArticleByIdFromD1をインポート
 import { Env } from './index';
 
-// コサイン類似度を計算するヘルパー関数
-export function cosineSimilarity(vec1: number[], vec2: number[], logger: Logger): number {
+// コサイン類似度を計算するヘルパー関数 (Durable Object経由)
+export async function cosineSimilarity(vec1: number[], vec2: number[], logger: Logger, env: Env): Promise<number> {
     if (vec1.length !== vec2.length || vec1.length === 0) {
         logger.warn("Vector dimensions mismatch or zero length for cosine similarity.", { vec1Length: vec1.length, vec2Length: vec2.length });
         return 0; // ベクトルのサイズが異なるかゼロの場合は類似度なし
     }
 
-    let dotProduct = 0;
-    let norm1 = 0;
-    let norm2 = 0;
+    try {
+        const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
+        const wasmDOStub = env.WASM_DO.get(wasmDOId);
 
-    for (let i = 0; i < vec1.length; i++) {
-        dotProduct += vec1[i] * vec2[i];
-        norm1 += vec1[i] * vec1[i];
-        norm2 += vec2[i] * vec2[i];
+        const url = new URL(`${env.WORKER_BASE_URL}/wasm-do`);
+        url.searchParams.set("vec1", JSON.stringify(vec1));
+        url.searchParams.set("vec2", JSON.stringify(vec2));
+
+        const response = await wasmDOStub.fetch(new Request(url.toString(), { method: 'GET' }));
+
+        if (response.ok) {
+            const data = await response.json() as { result: number };
+            logger.debug(`Cosine similarity calculated via WASM DO: ${data.result}`, { vec1Length: vec1.length, vec2Length: vec2.length });
+            return data.result;
+        } else {
+            logger.error(`Failed to calculate cosine similarity via WASM DO: ${response.statusText}`, null, { status: response.status, statusText: response.statusText });
+            return 0; // エラー時は0を返す
+        }
+    } catch (error) {
+        logger.error("Exception when calculating cosine similarity via WASM DO:", error);
+        return 0; // エラー時は0を返す
     }
-
-    if (norm1 === 0 || norm2 === 0) {
-        logger.warn("Zero vector encountered for cosine similarity.", { norm1, norm2 });
-        return 0; // ゼロベクトルとの類似度なし
-    }
-
-    return dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
 }
 
 // MMR (Maximal Marginal Relevance) と Contextual Bandit を組み合わせて記事を選択する関数
@@ -92,14 +98,14 @@ export async function selectPersonalizedArticles(
     // ユーザーの興味関心データ（userProfileEmbeddingForSelection）を取得
     const userInterestEmbedding = userProfileEmbeddingForSelection;
 
-    const articlesWithFinalScore = articles.map(article => {
+    const articlesWithFinalScorePromises = articles.map(async article => {
         const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.articleId); // articleId で検索
         const ucb = ucbInfo ? ucbInfo.ucb : 0; // UCB値がない場合は0とする
 
         // ユーザーの興味関心との関連度を計算 (コサイン類似度を使用)
         let interestRelevance = 0;
         if (userInterestEmbedding && article.embedding) {
-            interestRelevance = cosineSimilarity(userInterestEmbedding, article.embedding, logger); // loggerを渡す
+            interestRelevance = await cosineSimilarity(userInterestEmbedding, article.embedding, logger, env); // loggerとenvを渡す
         }
 
         // Dynamically adjust ucbWeight based on user CTR
@@ -126,6 +132,7 @@ export async function selectPersonalizedArticles(
             finalScore: finalScore, // 最終スコアを保持
         };
     });
+    const articlesWithFinalScore = await Promise.all(articlesWithFinalScorePromises);
 
     // 最終スコアで降順にソート
     const sortedArticles = [...articlesWithFinalScore].sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
@@ -154,7 +161,7 @@ export async function selectPersonalizedArticles(
             if (currentArticle.embedding) {
                 for (const selectedArticle of selected) {
                     if (selectedArticle.embedding) {
-                        const similarity = cosineSimilarity(currentArticle.embedding, selectedArticle.embedding, logger); // loggerを渡す
+                        const similarity = await cosineSimilarity(currentArticle.embedding, selectedArticle.embedding, logger, env);
                         maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarity);
                     }
                 }
@@ -238,7 +245,7 @@ export async function selectDissimilarArticles(
 
             for (const selectedArticle of selected) {
                 // embeddingが存在することはフィルタリング済み
-                const similarity = cosineSimilarity(currentArticle.embedding!, selectedArticle.embedding!, logger); // loggerを渡す
+                const similarity = await cosineSimilarity(currentArticle.embedding!, selectedArticle.embedding!, logger, env);
                 maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarity);
             }
 

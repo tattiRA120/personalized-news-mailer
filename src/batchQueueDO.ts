@@ -4,6 +4,7 @@ import { NewsArticle } from "./newsCollector";
 import { Env } from "./index";
 import { DurableObject } from 'cloudflare:workers';
 import { ClickLogger } from "./clickLogger";
+import { OPENAI_EMBEDDING_DIMENSION } from "./config";
 
 interface BatchChunk {
   chunkIndex: number;
@@ -226,7 +227,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                         this.logger.warn(`Batch result item missing embedding or articleId after parsing. Skipping.`, { custom_id: r.custom_id, embeddingExists: embedding !== undefined, articleIdExists: articleId !== undefined });
                         return null;
                     }
-                    // OpenAIから受け取った256次元のembeddingに鮮度情報のプレースホルダー(0.0)を追加して257次元にする
+                    // OpenAIから受け取った2048次元のembeddingに鮮度情報のプレースホルダー(0.0)を追加して2049次元にする
                     const extendedEmbedding = [...embedding, 0.0];
                     return {
                         articleId: articleId,
@@ -236,7 +237,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
                 if (embeddingsToUpdate.length > 0) {
                     await this.updateArticleEmbeddingsInD1(embeddingsToUpdate, this.env);
-                    this.logger.debug(`Updated D1 with 257-dimensional embeddings for batch job ${jobInfo.batchId}.`);
+                    this.logger.debug(`Updated D1 with 2049-dimensional embeddings for batch job ${jobInfo.batchId}.`);
 
                     // ClickLoggerにコールバックを送信
                     const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");

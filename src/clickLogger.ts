@@ -544,7 +544,6 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                // articlesWithEmbeddings は既に鮮度情報が付与された257次元のembeddingを持つことを想定
                 const ucbValues = await this.getUCBValues(userId, banditModel, articlesWithEmbeddings, userCTR);
                 // Limit logging to the first 10 UCB values for performance
                 const limitedUcbValues = ucbValues.slice(0, 10).map(u => ({ articleId: u.articleId, ucb: u.ucb.toFixed(4) }));

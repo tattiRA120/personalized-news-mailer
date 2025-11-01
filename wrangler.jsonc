@@ -38,6 +38,10 @@
 			{
 				"name": "BATCH_QUEUE_DO", // Binding name for Batch Queue Durable Object
 				"class_name": "BatchQueueDO"
+			},
+			{
+				"name": "WASM_DO", // Binding name for WASM Durable Object
+				"class_name": "WasmDO"
 			}
 		]
 	},
@@ -46,7 +50,8 @@
 			"tag": "v1",
 			"new_sqlite_classes": [
 				"ClickLogger",
-				"BatchQueueDO"
+				"BatchQueueDO",
+				"WasmDO"
 			]
 		}
 	],
@@ -55,7 +60,7 @@
 		{
 			"binding": "DB",
 			"database_name": "mail-news-articles-db",
-			"database_id": "55891f0d-0b1b-4f32-b033-4880a5a82f18",
+			"database_id": "e27bfda7-000c-4d9d-9a3e-b147cbe1b2dc",
 			"migrations_dir": "./migrations"
 		}
 	],

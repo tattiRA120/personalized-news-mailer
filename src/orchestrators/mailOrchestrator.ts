@@ -166,7 +166,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                                 normalizedAge = 0; // publishedAtがない場合は0にフォールバック
                             }
 
-                            // 既存の257次元embeddingの最後の要素（鮮度情報）を更新
+                            // 既存の2049次元embeddingの最後の要素（鮮度情報）を更新
                             const updatedEmbedding = [...article.embedding!]; // 参照渡しを防ぐためにコピー
                             updatedEmbedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
 
@@ -187,12 +187,12 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     if (userProfileEmbeddingForSelection.length === EXTENDED_EMBEDDING_DIMENSION && userProfileEmbeddingForSelection.some(val => val !== 0)) {
                         // NOTE: 類似度計算には鮮度情報を含まない元の埋め込みベクトルを使用
                         const userProfileOriginalEmbedding = userProfileEmbeddingForSelection.slice(0, OPENAI_EMBEDDING_DIMENSION);
-                        const articlesWithSimilarity = articlesWithUpdatedFreshness
+                        const articlesWithSimilarity = (await Promise.all(articlesWithUpdatedFreshness
                             .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
-                            .map(article => ({
+                            .map(async article => ({
                                 ...article,
-                                similarity: cosineSimilarity(userProfileOriginalEmbedding, article.embedding!.slice(0, OPENAI_EMBEDDING_DIMENSION), logger),
-                            })).sort((a, b) => b.similarity - a.similarity);
+                                similarity: await cosineSimilarity(userProfileOriginalEmbedding, article.embedding!.slice(0, OPENAI_EMBEDDING_DIMENSION), logger, env),
+                            })))).sort((a, b) => b.similarity - a.similarity);
 
                         // Exploitation: 類似度に基づいて上位N件の記事を取得
                         const exploitationArticles = articlesWithSimilarity.slice(0, EXPLOITATION_COUNT);
@@ -251,9 +251,9 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     // --- 5. Log Sent Articles to Durable Object ---
                     logger.debug(`Logging sent articles to ClickLogger for user ${userId}...`, { userId });
-                    // embeddingが存在し、かつ次元が257である記事のみをフィルタリングして保存
+                    // embeddingが存在し、かつ次元が2049である記事のみをフィルタリングして保存
                     const filteredSentArticlesData = selectedArticles
-                        .filter(article => article.embedding && article.embedding.length === 257)
+                        .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
                         .map(article => ({
                             articleId: article.articleId,
                             timestamp: Date.now(),
@@ -262,7 +262,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         }));
 
                     if (filteredSentArticlesData.length === 0) {
-                        logger.warn(`No valid articles with 257-dimension embedding to log for user ${userId}. Skipping logging sent articles.`, { userId, selectedArticlesCount: selectedArticles.length });
+                        logger.warn(`No valid articles with 2049-dimension embedding to log for user ${userId}. Skipping logging sent articles.`, { userId, selectedArticlesCount: selectedArticles.length });
                     } else {
                         const logSentResponse = await clickLogger.fetch(
                             new Request(`${env.WORKER_BASE_URL}/log-sent-articles`, {

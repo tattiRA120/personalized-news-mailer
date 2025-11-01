@@ -1,6 +1,7 @@
 import { getUserProfile, createUserProfile, updateMMRLambda } from './userProfile';
 import { ClickLogger } from './clickLogger';
 import { BatchQueueDO } from './batchQueueDO';
+import { WasmDO } from './wasmDO';
 import { Logger } from './logger';
 import { collectNews, NewsArticle } from './newsCollector';
 import { generateAndSaveEmbeddings } from './services/embeddingService';
@@ -9,11 +10,13 @@ import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
 import { decodeHtmlEntities } from './utils/htmlDecoder';
 import { selectDissimilarArticles, selectPersonalizedArticles } from './articleSelector';
+import { OPENAI_EMBEDDING_DIMENSION } from './config';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
 	DB: D1Database;
 	CLICK_LOGGER: DurableObjectNamespace<ClickLogger>;
     BATCH_QUEUE_DO: DurableObjectNamespace<BatchQueueDO>;
+    WASM_DO: DurableObjectNamespace<WasmDO>;
 	OPENAI_API_KEY?: string;
 	GOOGLE_CLIENT_ID: string;
 	GOOGLE_CLIENT_SECRET: string;
@@ -722,7 +725,7 @@ export default {
                 const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
                 // ユーザープロファイルの埋め込みベクトルを準備
-                const EXTENDED_EMBEDDING_DIMENSION = 257; // config.tsからインポートすべきだが、ここでは直接定義
+                const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1;
                 let userProfileEmbeddingForSelection: number[];
                 if (userProfile.embedding && userProfile.embedding.length === EXTENDED_EMBEDDING_DIMENSION) {
                     userProfileEmbeddingForSelection = [...userProfile.embedding]; // 参照渡しを防ぐためにコピー
@@ -917,6 +920,23 @@ export default {
             }
         }
 
+        // --- WASM Durable Object Handler ---
+        if (request.method === 'GET' && path === '/wasm-do') {
+            logger.debug('WASM Durable Object request received');
+            try {
+                const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
+                const wasmDOStub = env.WASM_DO.get(wasmDOId);
+
+                const doResponse = await wasmDOStub.fetch(request); // リクエストをDOに転送
+
+                return doResponse;
+
+            } catch (error) {
+                logger.error('Error during WASM Durable Object invocation:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error during WASM Durable Object invocation', { status: 500 });
+            }
+        }
+
 		// Handle other requests or return a default response
 		return new Response('Not Found', { status: 404 });
 	},
@@ -925,3 +945,4 @@ export default {
 // Durable Object class definition (must be exported)
 export { ClickLogger } from './clickLogger';
 export { BatchQueueDO } from './batchQueueDO';
+export { WasmDO } from './wasmDO';
