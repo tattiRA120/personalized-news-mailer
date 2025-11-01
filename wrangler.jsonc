@@ -55,7 +55,7 @@
 		{
 			"binding": "DB",
 			"database_name": "mail-news-articles-db",
-			"database_id": "f2aafced-f144-45e7-831e-48f89fbd1acf",
+			"database_id": "c2173563-da63-4abe-ab50-d70b8e389102",
 			"migrations_dir": "./migrations"
 		}
 	],

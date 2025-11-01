@@ -721,34 +721,51 @@ export default {
                 const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
                 const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-                // ユーザープロファイルのembeddingを準備
+                // ユーザープロファイルの埋め込みベクトルを準備
+                const EXTENDED_EMBEDDING_DIMENSION = 257; // config.tsからインポートすべきだが、ここでは直接定義
                 let userProfileEmbeddingForSelection: number[];
-                if (userProfile.embedding && userProfile.embedding.length === 257) {
-                    userProfileEmbeddingForSelection = userProfile.embedding;
+                if (userProfile.embedding && userProfile.embedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                    userProfileEmbeddingForSelection = [...userProfile.embedding]; // 参照渡しを防ぐためにコピー
                 } else {
-                    logger.warn(`User ${userId} has invalid embedding dimension ${userProfile.embedding?.length}. Using zero vector.`, { userId, embeddingLength: userProfile.embedding?.length });
-                    userProfileEmbeddingForSelection = new Array(257).fill(0);
+                    logger.warn(`User ${userId} has an embedding of unexpected dimension ${userProfile.embedding?.length}. Initializing with zero vector for selection.`, { userId, embeddingLength: userProfile.embedding?.length });
+                    userProfileEmbeddingForSelection = new Array(EXTENDED_EMBEDDING_DIMENSION).fill(0);
                 }
+                // ユーザープロファイルの鮮度情報は常に0.0で上書き
+                userProfileEmbeddingForSelection[EXTENDED_EMBEDDING_DIMENSION - 1] = 0.0; // 最後の要素を上書き
 
-                // 記事のembeddingに鮮度情報を追加
+                // 記事の埋め込みベクトルに鮮度情報を更新
                 const now = Date.now();
-                const articlesWithExtendedEmbeddings = allArticlesWithEmbeddings
-                    .filter(article => article.embedding && article.embedding.length === 257)
+                const articlesWithUpdatedFreshness = allArticlesWithEmbeddings
                     .map((article) => {
-                        let normalizedAge = 0;
+                        let normalizedAge = 0; // デフォルト値
+
                         if (article.publishedAt) {
-                            const ageInHours = (now - new Date(article.publishedAt).getTime()) / (1000 * 60 * 60);
-                            normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            const publishedDate = new Date(article.publishedAt);
+                            if (isNaN(publishedDate.getTime())) {
+                                logger.warn(`Invalid publishedAt date for article ${article.articleId}. Using default freshness (0).`, { articleId: article.articleId, publishedAt: article.publishedAt });
+                                normalizedAge = 0; // 不正な日付の場合は0にフォールバック
+                            } else {
+                                const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                normalizedAge = Math.min(ageInHours / (24 * 7), 1.0); // 1週間で正規化
+                            }
+                        } else {
+                            logger.warn(`Could not find publishedAt for article ${article.articleId}. Using default freshness (0).`, { articleId: article.articleId });
+                            normalizedAge = 0; // publishedAtがない場合は0にフォールバック
                         }
+
+                        // 既存の257次元embeddingの最後の要素（鮮度情報）を更新
+                        const updatedEmbedding = [...article.embedding!]; // 参照渡しを防ぐためにコピー
+                        updatedEmbedding[EXTENDED_EMBEDDING_DIMENSION - 1] = normalizedAge;
+
                         return {
                             ...article,
-                            embedding: [...article.embedding!, normalizedAge],
+                            embedding: updatedEmbedding,
                         };
                     });
 
                 // selectPersonalizedArticlesを呼び出し
                 const selectedArticles = await selectPersonalizedArticles(
-                    articlesWithExtendedEmbeddings,
+                    articlesWithUpdatedFreshness,
                     userProfileEmbeddingForSelection,
                     clickLogger,
                     userId,

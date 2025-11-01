@@ -138,16 +138,17 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     // ユーザープロファイルの埋め込みベクトルを準備
                     let userProfileEmbeddingForSelection: number[];
                     if (userProfile.embedding && userProfile.embedding.length === EXTENDED_EMBEDDING_DIMENSION) {
-                        userProfileEmbeddingForSelection = userProfile.embedding;
+                        userProfileEmbeddingForSelection = [...userProfile.embedding];
                     } else {
                         logger.warn(`User ${userId} has an embedding of unexpected dimension ${userProfile.embedding?.length}. Initializing with zero vector for selection.`, { userId, embeddingLength: userProfile.embedding?.length });
                         userProfileEmbeddingForSelection = new Array(EXTENDED_EMBEDDING_DIMENSION).fill(0);
                     }
+                    // ユーザープロファイルの鮮度情報は常に0.0で上書き
+                    userProfileEmbeddingForSelection[OPENAI_EMBEDDING_DIMENSION] = 0.0;
 
                     // 記事の埋め込みベクトルに鮮度情報を更新
                     const now = Date.now();
                     const articlesWithUpdatedFreshness = articlesWithEmbeddings
-                        .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
                         .map((article) => {
                             let normalizedAge = 0; // デフォルト値
 
@@ -166,7 +167,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                             }
 
                             // 既存の257次元embeddingの最後の要素（鮮度情報）を更新
-                            const updatedEmbedding = [...article.embedding!];
+                            const updatedEmbedding = [...article.embedding!]; // 参照渡しを防ぐためにコピー
                             updatedEmbedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
 
                             return {
