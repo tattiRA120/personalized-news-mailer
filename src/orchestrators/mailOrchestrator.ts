@@ -166,7 +166,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                                 normalizedAge = 0; // publishedAtがない場合は0にフォールバック
                             }
 
-                            // 既存の2049次元embeddingの最後の要素（鮮度情報）を更新
+                            // 既存の513次元embeddingの最後の要素（鮮度情報）を更新
                             const updatedEmbedding = [...article.embedding!]; // 参照渡しを防ぐためにコピー
                             updatedEmbedding[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
 
@@ -251,7 +251,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     // --- 5. Log Sent Articles to Durable Object ---
                     logger.debug(`Logging sent articles to ClickLogger for user ${userId}...`, { userId });
-                    // embeddingが存在し、かつ次元が2049である記事のみをフィルタリングして保存
+                    // embeddingが存在し、かつ次元が513である記事のみをフィルタリングして保存
                     const filteredSentArticlesData = selectedArticles
                         .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
                         .map(article => ({
@@ -262,7 +262,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         }));
 
                     if (filteredSentArticlesData.length === 0) {
-                        logger.warn(`No valid articles with 2049-dimension embedding to log for user ${userId}. Skipping logging sent articles.`, { userId, selectedArticlesCount: selectedArticles.length });
+                        logger.warn(`No valid articles with 513-dimension embedding to log for user ${userId}. Skipping logging sent articles.`, { userId, selectedArticlesCount: selectedArticles.length });
                     } else {
                         const logSentResponse = await clickLogger.fetch(
                             new Request(`${env.WORKER_BASE_URL}/log-sent-articles`, {
