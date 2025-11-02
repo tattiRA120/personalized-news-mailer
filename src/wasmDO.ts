@@ -32,17 +32,13 @@ export class WasmDO extends DurableObject<Env> {
     }
 
     async fetch(request: Request): Promise<Response> {
-        // デバッグのため、Loggerを介さずに直接console.logで出力
-        console.log(`[WasmDO DEBUG] Received Request URL: ${request.url.toString()}`);
         const url = new URL(request.url);
         let path = url.pathname;
-        console.log(`[WasmDO DEBUG] Original Pathname: ${path}`);
 
         // Durable Object が期待するパスに変換するため、/wasm-do を削除
         if (path.startsWith('/wasm-do')) {
             path = path.replace('/wasm-do', '');
         }
-        console.log(`[WasmDO DEBUG] Processed Pathname: ${path}`);
 
         if (!this.wasmInitialized) {
             return new Response("WASM is not initialized yet. Please try again.", { status: 503 });

@@ -930,7 +930,7 @@ export default {
 				// WasmDO が期待するパスに変換
 				const wasmPath = path.replace('/wasm-do', '');
 				const wasmUrl = new URL(wasmPath, env.WORKER_BASE_URL);
-				logger.error(`Forwarding WASM DO request to: ${wasmUrl.toString()}`, { wasmUrl: wasmUrl.toString() });
+				logger.debug(`Forwarding WASM DO request to: ${wasmUrl.toString()}`, { wasmUrl: wasmUrl.toString() });
 
 				const wasmRequest = new Request(wasmUrl, {
 					method: request.method,
