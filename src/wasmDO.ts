@@ -32,12 +32,15 @@ export class WasmDO extends DurableObject<Env> {
     }
 
     async fetch(request: Request): Promise<Response> {
+        // デバッグのため、Loggerを介さずに直接console.logで出力
+        console.log(`[WasmDO DEBUG] Received Request URL: ${request.url.toString()}`);
+        const url = new URL(request.url);
+        const path = url.pathname;
+        console.log(`[WasmDO DEBUG] Pathname: ${path}`);
+
         if (!this.wasmInitialized) {
             return new Response("WASM is not initialized yet. Please try again.", { status: 503 });
         }
-
-        const url = new URL(request.url);
-        const path = url.pathname;
 
         try {
             if (path === '/bulk-cosine-similarity') {

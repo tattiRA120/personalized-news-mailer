@@ -924,15 +924,12 @@ export default {
 		if (path.startsWith('/wasm-do/')) {
 			logger.debug('WASM Durable Object request received');
 			try {
-				// デバッグのため、Loggerを介さずに直接console.logで出力
-				console.log(`[DEBUG] WASM DO Request URL: ${request.url.toString()}`);
 				const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
 				const wasmDOStub = env.WASM_DO.get(wasmDOId);
 
 				// WasmDO が期待するパスに変換
 				const wasmPath = path.replace('/wasm-do', '');
-				const wasmUrl = new URL(wasmPath, new URL(request.url).origin);
-				console.log(`[DEBUG] Forwarding WASM DO request to: ${wasmUrl.toString()}`, { wasmUrl: wasmUrl.toString() });
+				const wasmUrl = new URL(wasmPath, env.WORKER_BASE_URL);
 				logger.error(`Forwarding WASM DO request to: ${wasmUrl.toString()}`, { wasmUrl: wasmUrl.toString() });
 
 				const wasmRequest = new Request(wasmUrl, {
