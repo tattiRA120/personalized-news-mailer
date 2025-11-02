@@ -920,22 +920,32 @@ export default {
             }
         }
 
-        // --- WASM Durable Object Handler ---
-        if (request.method === 'GET' && path === '/wasm-do') {
-            logger.debug('WASM Durable Object request received');
-            try {
-                const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
-                const wasmDOStub = env.WASM_DO.get(wasmDOId);
+		// --- WASM Durable Object Handler ---
+		if (path.startsWith('/wasm-do/')) {
+			logger.debug('WASM Durable Object request received');
+			try {
+				const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
+				const wasmDOStub = env.WASM_DO.get(wasmDOId);
 
-                const doResponse = await wasmDOStub.fetch(request); // リクエストをDOに転送
+				// WasmDO が期待するパスに変換
+				const wasmPath = path.replace('/wasm-do', '');
+				const wasmUrl = new URL(wasmPath, request.url);
 
-                return doResponse;
+				const wasmRequest = new Request(wasmUrl, {
+					method: request.method,
+					headers: request.headers,
+					body: request.body,
+				});
 
-            } catch (error) {
-                logger.error('Error during WASM Durable Object invocation:', error, { requestUrl: request.url });
-                return new Response('Internal Server Error during WASM Durable Object invocation', { status: 500 });
-            }
-        }
+				const doResponse = await wasmDOStub.fetch(wasmRequest); // リクエストをDOに転送
+
+				return doResponse;
+
+			} catch (error) {
+				logger.error('Error during WASM Durable Object invocation:', error, { requestUrl: request.url });
+				return new Response('Internal Server Error during WASM Durable Object invocation', { status: 500 });
+			}
+		}
 
 		// Handle other requests or return a default response
 		return new Response('Not Found', { status: 404 });
