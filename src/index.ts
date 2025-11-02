@@ -929,7 +929,7 @@ export default {
 
 				// WasmDO が期待するパスに変換
 				const wasmPath = path.replace('/wasm-do', '');
-				const wasmUrl = new URL(wasmPath, request.url);
+				const wasmUrl = new URL(wasmPath, new URL(request.url).origin);
 
 				const wasmRequest = new Request(wasmUrl, {
 					method: request.method,
