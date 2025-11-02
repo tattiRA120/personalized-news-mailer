@@ -220,3 +220,48 @@ pub fn cosine_similarity(
 
     Ok(dot_product / (magnitude1 * magnitude2))
 }
+
+#[wasm_bindgen]
+pub fn cosine_similarity_bulk(
+    vec1s_js: JsValue,
+    vec2s_js: JsValue,
+) -> Result<JsValue, JsValue> {
+    utils::set_panic_hook();
+
+    let vec1s: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(vec1s_js)
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize vec1s: {}", e)))?;
+    let vec2s: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(vec2s_js)
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize vec2s: {}", e)))?;
+
+    if vec1s.len() != vec2s.len() {
+        return Err(JsValue::from_str("Input vector arrays must have the same length."));
+    }
+
+    let mut results = Vec::with_capacity(vec1s.len());
+
+    for i in 0..vec1s.len() {
+        let vec1 = &vec1s[i];
+        let vec2 = &vec2s[i];
+
+        if vec1.len() != vec2.len() {
+            results.push(0.0); // 次元が異なる場合は類似度0
+            continue;
+        }
+        if vec1.is_empty() {
+            results.push(0.0); // 空のベクトルの場合は類似度0
+            continue;
+        }
+
+        let dot_product: f64 = vec1.iter().zip(vec2.iter()).map(|(&a, &b)| a * b).sum();
+        let magnitude1: f64 = vec1.iter().map(|&a| a * a).sum::<f64>().sqrt();
+        let magnitude2: f64 = vec2.iter().map(|&b| b * b).sum::<f64>().sqrt();
+
+        if magnitude1 == 0.0 || magnitude2 == 0.0 {
+            results.push(0.0); // ゼロベクトルの場合は類似度0
+        } else {
+            results.push(dot_product / (magnitude1 * magnitude2));
+        }
+    }
+
+    Ok(serde_wasm_bindgen::to_value(&results)?)
+}

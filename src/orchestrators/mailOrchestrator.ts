@@ -3,7 +3,7 @@ import { collectNews, NewsArticle } from '../newsCollector';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs, getUserCTR } from '../services/d1Service';
 import { getAllUserIds, getUserProfile, getMMRLambda } from '../userProfile';
-import { selectPersonalizedArticles, cosineSimilarity } from '../articleSelector';
+import { selectPersonalizedArticles, cosineSimilarityBulk } from '../articleSelector';
 import { generateNewsEmail, sendNewsEmail } from '../emailGenerator';
 import { ClickLogger } from '../clickLogger';
 import { Logger } from '../logger';
@@ -187,12 +187,24 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     if (userProfileEmbeddingForSelection.length === EXTENDED_EMBEDDING_DIMENSION && userProfileEmbeddingForSelection.some(val => val !== 0)) {
                         // NOTE: 類似度計算には鮮度情報を含まない元の埋め込みベクトルを使用
                         const userProfileOriginalEmbedding = userProfileEmbeddingForSelection.slice(0, OPENAI_EMBEDDING_DIMENSION);
-                        const articlesWithSimilarity = (await Promise.all(articlesWithUpdatedFreshness
-                            .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION)
-                            .map(async article => ({
-                                ...article,
-                                similarity: await cosineSimilarity(userProfileOriginalEmbedding, article.embedding!.slice(0, OPENAI_EMBEDDING_DIMENSION), logger, env),
-                            })))).sort((a, b) => b.similarity - a.similarity);
+                        const articlesToCompare = articlesWithUpdatedFreshness
+                            .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION);
+
+                        const vec1s: number[][] = [];
+                        const vec2s: number[][] = [];
+                        articlesToCompare.forEach(article => {
+                            vec1s.push(userProfileOriginalEmbedding);
+                            vec2s.push(article.embedding!.slice(0, OPENAI_EMBEDDING_DIMENSION));
+                        });
+
+                        const similarities = vec1s.length > 0
+                            ? await cosineSimilarityBulk(vec1s, vec2s, logger, env)
+                            : [];
+
+                        const articlesWithSimilarity = articlesToCompare.map((article, index) => ({
+                            ...article,
+                            similarity: similarities[index] || 0,
+                        })).sort((a, b) => b.similarity - a.similarity);
 
                         // Exploitation: 類似度に基づいて上位N件の記事を取得
                         const exploitationArticles = articlesWithSimilarity.slice(0, EXPLOITATION_COUNT);
