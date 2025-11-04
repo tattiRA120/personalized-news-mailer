@@ -3,7 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 // WASMモジュールをインポート
 import init, { cosine_similarity } from '../linalg-wasm/pkg/linalg_wasm.js';
 import wasmModule from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
-import { cosine_similarity_bulk } from '../linalg-wasm/pkg/linalg_wasm';
+import { cosine_similarity_bulk, calculate_similarity_matrix } from '../linalg-wasm/pkg/linalg_wasm';
 
 // 環境変数の型定義
 interface Env {
@@ -82,8 +82,22 @@ export class WasmDO extends DurableObject<Env> {
                     result: result,
                     message: `WASM cosine_similarity function executed in Durable Object.`
                 }), { headers: { "Content-Type": "application/json" } });
+            } else if (path === '/calculate-similarity-matrix') {
+                const { vectors } = await request.json() as { vectors: number[][] };
+
+                if (!vectors || !Array.isArray(vectors)) {
+                    return new Response("Missing or invalid 'vectors' in request body. Please provide a JSON array of arrays.", { status: 400 });
+                }
+
+                const results = calculate_similarity_matrix(vectors);
+
+                return new Response(JSON.stringify({
+                    results: results,
+                    message: `WASM calculate_similarity_matrix function executed in Durable Object.`
+                }), { headers: { "Content-Type": "application/json" } });
+
             } else {
-                return new Response("Invalid WASM DO endpoint. Use /bulk-cosine-similarity (POST) or /single-cosine-similarity (GET).", { status: 404 });
+                return new Response("Invalid WASM DO endpoint. Use /bulk-cosine-similarity (POST), /single-cosine-similarity (GET), or /calculate-similarity-matrix (POST).", { status: 404 });
             }
 
         } catch (e: any) {

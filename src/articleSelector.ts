@@ -5,7 +5,11 @@ import { UserProfile } from './userProfile';
 import { ClickLogger } from './clickLogger';
 import { Logger } from './logger';
 import { NewsArticle } from './newsCollector';
-import { getArticleByIdFromD1 } from './services/d1Service'; // D1ServiceからgetArticleByIdFromD1をインポート
+import { UserProfile } from './userProfile';
+import { ClickLogger } from './clickLogger';
+import { Logger } from './logger';
+import { NewsArticle } from './newsCollector';
+import { getArticleByIdFromD1 } from './services/d1Service';
 import { Env } from './index';
 
 // コサイン類似度をバッチで計算するヘルパー関数 (Durable Object経由)
@@ -39,6 +43,39 @@ export async function cosineSimilarityBulk(vec1s: number[][], vec2s: number[][],
         return new Array(vec1s.length).fill(0); // エラー時は0の配列を返す
     }
 }
+
+// 全記事間の類似度行列を計算するヘルパー関数 (Durable Object経由)
+export async function calculateSimilarityMatrix(vectors: number[][], logger: Logger, env: Env): Promise<number[][]> {
+    if (vectors.length === 0) {
+        logger.warn("Input vector array is empty for similarity matrix calculation.", { vectorsLength: vectors.length });
+        return [];
+    }
+
+    try {
+        const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
+        const wasmDOStub = env.WASM_DO.get(wasmDOId);
+
+        const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/wasm-do/calculate-similarity-matrix`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ vectors }),
+        }));
+
+        if (response.ok) {
+            const data = await response.json() as { results: number[][] };
+            logger.debug(`Similarity matrix calculated via WASM DO. Returned ${data.results.length}x${data.results[0]?.length || 0} matrix.`, { vectorCount: vectors.length, matrixSize: data.results.length });
+            return data.results;
+        } else {
+            const errorText = await response.text();
+            logger.error(`Failed to calculate similarity matrix via WASM DO: ${response.statusText}. Error: ${errorText}`, null, { status: response.status, statusText: response.statusText });
+            return []; // エラー時は空の配列を返す
+        }
+    } catch (error) {
+        logger.error("Exception when calculating similarity matrix via WASM DO:", error);
+        return []; // エラー時は空の配列を返す
+    }
+}
+
 
 // MMR (Maximal Marginal Relevance) と Contextual Bandit を組み合わせて記事を選択する関数
 // ClickLogger Durable Object を引数として受け取り、バンディットモデルからUCB値を取得する
@@ -163,40 +200,22 @@ export async function selectPersonalizedArticles(
         logger.info(`Selected first article: "${firstArticle.title}" (Final Score: ${firstArticle.finalScore})`, { userId, articleTitle: firstArticle.title, finalScore: firstArticle.finalScore });
     }
 
+    // MMRのための全記事間の類似度行列を事前に計算
+    const allArticleEmbeddings = articles.filter(article => article.embedding !== undefined).map(article => article.embedding!);
+    const similarityMatrix = allArticleEmbeddings.length > 0
+        ? await calculateSimilarityMatrix(allArticleEmbeddings, logger, env)
+        : [];
+
+    // 記事IDとインデックスのマッピングを作成
+    const articleIdToIndexMap = new Map<string, number>();
+    articles.forEach((article, index) => {
+        articleIdToIndexMap.set(article.articleId, index);
+    });
+
     // 残りからMMRに基づいて記事を選択
     while (selected.length < count && remaining.length > 0) {
         let bestMMRScore = -Infinity;
         let bestArticleIndex = -1;
-
-        const vec1sForMmr: number[][] = [];
-        const vec2sForMmr: number[][] = [];
-        const mmrArticleIndices: { currentArticleIndex: number; selectedArticleIndex: number }[] = [];
-
-        for (let i = 0; i < remaining.length; i++) {
-            const currentArticle = remaining[i];
-            if (!currentArticle.embedding) {
-                continue; // 埋め込みがない場合はスキップ
-            }
-            for (let j = 0; j < selected.length; j++) {
-                const selectedArticle = selected[j];
-                if (selectedArticle.embedding) {
-                    vec1sForMmr.push(currentArticle.embedding);
-                    vec2sForMmr.push(selectedArticle.embedding);
-                    mmrArticleIndices.push({ currentArticleIndex: i, selectedArticleIndex: j });
-                }
-            }
-        }
-
-        const mmrSimilarityResults = vec1sForMmr.length > 0
-            ? await cosineSimilarityBulk(vec1sForMmr, vec2sForMmr, logger, env)
-            : [];
-
-        const maxSimilarities: { [key: number]: number } = {}; // currentArticleIndex -> maxSimilarity
-
-        mmrSimilarityResults.forEach((similarity, resultIndex) => {
-            const { currentArticleIndex } = mmrArticleIndices[resultIndex];
-            maxSimilarities[currentArticleIndex] = Math.max(maxSimilarities[currentArticleIndex] || 0, similarity);
-        });
 
         for (let i = 0; i < remaining.length; i++) {
             const currentArticle = remaining[i];
@@ -204,7 +223,17 @@ export async function selectPersonalizedArticles(
                 continue;
             }
 
-            const maxSimilarityWithSelected = maxSimilarities[i] || 0;
+            let maxSimilarityWithSelected = 0;
+            const currentArticleOriginalIndex = articleIdToIndexMap.get(currentArticle.articleId);
+
+            if (currentArticleOriginalIndex !== undefined) {
+                for (const selectedArticle of selected) {
+                    const selectedArticleOriginalIndex = articleIdToIndexMap.get(selectedArticle.articleId);
+                    if (selectedArticleOriginalIndex !== undefined && similarityMatrix[currentArticleOriginalIndex] && similarityMatrix[currentArticleOriginalIndex][selectedArticleOriginalIndex] !== undefined) {
+                        maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarityMatrix[currentArticleOriginalIndex][selectedArticleOriginalIndex]);
+                    }
+                }
+            }
 
             // MMR スコアの計算: lambda * Relevance - (1 - lambda) * Similarity
             // Relevance は finalScore を使用
@@ -275,34 +304,14 @@ export async function selectDissimilarArticles(
         let bestDissimilarityScore = -Infinity;
         let bestArticleIndex = -1;
 
-        const vec1sForDissimilarity: number[][] = [];
-        const vec2sForDissimilarity: number[][] = [];
-        const dissimilarityArticleIndices: { currentArticleIndex: number; selectedArticleIndex: number }[] = [];
-
-        for (let i = 0; i < remaining.length; i++) {
-            const currentArticle = remaining[i];
-            if (!currentArticle.embedding) {
-                continue;
-            }
-            for (let j = 0; j < selected.length; j++) {
-                const selectedArticle = selected[j];
-                if (selectedArticle.embedding) {
-                    vec1sForDissimilarity.push(currentArticle.embedding);
-                    vec2sForDissimilarity.push(selectedArticle.embedding);
-                    dissimilarityArticleIndices.push({ currentArticleIndex: i, selectedArticleIndex: j });
-                }
-            }
-        }
-
-        const dissimilaritySimilarityResults = vec1sForDissimilarity.length > 0
-            ? await cosineSimilarityBulk(vec1sForDissimilarity, vec2sForDissimilarity, logger, env)
+        const allArticleEmbeddings = articles.filter(article => article.embedding !== undefined).map(article => article.embedding!);
+        const similarityMatrix = allArticleEmbeddings.length > 0
+            ? await calculateSimilarityMatrix(allArticleEmbeddings, logger, env)
             : [];
 
-        const maxSimilarities: { [key: number]: number } = {}; // currentArticleIndex -> maxSimilarity
-
-        dissimilaritySimilarityResults.forEach((similarity, resultIndex) => {
-            const { currentArticleIndex } = dissimilarityArticleIndices[resultIndex];
-            maxSimilarities[currentArticleIndex] = Math.max(maxSimilarities[currentArticleIndex] || 0, similarity);
+        const articleIdToIndexMap = new Map<string, number>();
+        articles.forEach((article, index) => {
+            articleIdToIndexMap.set(article.articleId, index);
         });
 
         for (let i = 0; i < remaining.length; i++) {
@@ -311,7 +320,17 @@ export async function selectDissimilarArticles(
                 continue;
             }
 
-            const maxSimilarityWithSelected = maxSimilarities[i] || 0;
+            let maxSimilarityWithSelected = 0;
+            const currentArticleOriginalIndex = articleIdToIndexMap.get(currentArticle.articleId);
+
+            if (currentArticleOriginalIndex !== undefined) {
+                for (const selectedArticle of selected) {
+                    const selectedArticleOriginalIndex = articleIdToIndexMap.get(selectedArticle.articleId);
+                    if (selectedArticleOriginalIndex !== undefined && similarityMatrix[currentArticleOriginalIndex] && similarityMatrix[currentArticleOriginalIndex][selectedArticleOriginalIndex] !== undefined) {
+                        maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarityMatrix[currentArticleOriginalIndex][selectedArticleOriginalIndex]);
+                    }
+                }
+            }
 
             // スコア = 1 - (選択済みリスト内の各記事とのコサイン類似度の最大値)
             // 類似度が低いほどスコアが高くなる

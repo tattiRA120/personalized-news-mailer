@@ -265,3 +265,44 @@ pub fn cosine_similarity_bulk(
 
     Ok(serde_wasm_bindgen::to_value(&results)?)
 }
+
+#[wasm_bindgen]
+pub fn calculate_similarity_matrix(
+    vectors_js: JsValue,
+) -> Result<JsValue, JsValue> {
+    utils::set_panic_hook();
+
+    let vectors: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(vectors_js)
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize vectors: {}", e)))?;
+
+    let n = vectors.len();
+    let mut similarity_matrix = vec![vec![0.0; n]; n];
+
+    for i in 0..n {
+        for j in i..n { // 対称行列なので、半分だけ計算してコピー
+            let vec1 = &vectors[i];
+            let vec2 = &vectors[j];
+
+            if vec1.len() != vec2.len() || vec1.is_empty() {
+                similarity_matrix[i][j] = 0.0;
+                similarity_matrix[j][i] = 0.0;
+                continue;
+            }
+
+            let dot_product: f64 = vec1.iter().zip(vec2.iter()).map(|(&a, &b)| a * b).sum();
+            let magnitude1: f64 = vec1.iter().map(|&a| a * a).sum::<f64>().sqrt();
+            let magnitude2: f64 = vec2.iter().map(|&b| b * b).sum::<f64>().sqrt();
+
+            if magnitude1 == 0.0 || magnitude2 == 0.0 {
+                similarity_matrix[i][j] = 0.0;
+                similarity_matrix[j][i] = 0.0;
+            } else {
+                let similarity = dot_product / (magnitude1 * magnitude2);
+                similarity_matrix[i][j] = similarity;
+                similarity_matrix[j][i] = similarity; // 対称性を利用
+            }
+        }
+    }
+
+    Ok(serde_wasm_bindgen::to_value(&similarity_matrix)?)
+}
