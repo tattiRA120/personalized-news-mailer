@@ -106,9 +106,10 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                 let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
                 const pubDate = item.pubDate || new Date().toUTCString(); // Fallback to current date
                 let title = decodeHtmlEntities(stripHtmlTags((item.title as any).__cdata || item.title));
+                title = cleanArticleText(title);
 
-                let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
-                let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
+                let finalSummary = cleanArticleText(decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim())));
+                let finalContent = cleanArticleText(decodeHtmlEntities(stripHtmlTags(String(rawContent).trim())));
 
                 // summaryとcontentの重複・包含関係を調整
                 if (finalContent === finalSummary) {
@@ -171,9 +172,10 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             const pubDate = entry.updated || entry.published || new Date().toUTCString(); // Fallback to current date
 
             if (title && link) {
-                const cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
-                let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
-                let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
+                let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
+                cleanedTitle = cleanArticleText(cleanedTitle);
+                let finalSummary = cleanArticleText(decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim())));
+                let finalContent = cleanArticleText(decodeHtmlEntities(stripHtmlTags(String(rawContent).trim())));
 
                 // summaryとcontentの重複・包含関係を調整
                 if (finalContent === finalSummary) {
@@ -221,6 +223,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
 
             if (title && link) {
                 let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
+                cleanedTitle = cleanArticleText(cleanedTitle);
                 let articleLink = decodeHtmlEntities(link);
 
                 // BloombergのHyperdrive記事を完全にスキップ
@@ -237,8 +240,8 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     continue; // 不正なリンクはスキップ
                 }
 
-                let finalSummary = decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim()));
-                let finalContent = decodeHtmlEntities(stripHtmlTags(String(rawContent).trim()));
+                let finalSummary = cleanArticleText(decodeHtmlEntities(stripHtmlTags(String(rawSummary).trim())));
+                let finalContent = cleanArticleText(decodeHtmlEntities(stripHtmlTags(String(rawContent).trim())));
 
                 // summaryとcontentの重複・包含関係を調整
                 if (finalContent === finalSummary) {
@@ -349,12 +352,6 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
         allArticles = allArticles.concat(...chunkResults);
     }
 
-    // Apply text cleaning to title and summary for all articles
-    allArticles = allArticles.map(article => ({
-        ...article,
-        title: cleanArticleText(article.title),
-        summary: article.summary ? cleanArticleText(article.summary) : undefined,
-    }));
 
     // Remove duplicate articles based on link
     const uniqueArticlesMap = new Map<string, NewsArticle>();
