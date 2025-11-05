@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS sent_articles (
     article_id TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
     embedding TEXT,
-    published_at TEXT,
+    published_at INTEGER,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
     FOREIGN KEY (article_id) REFERENCES articles(article_id)
 );

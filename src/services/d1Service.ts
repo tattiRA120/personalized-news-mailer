@@ -50,7 +50,7 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
                     article.articleId,
                     article.title,
                     article.link,
-                    article.publishedAt || Date.now(), // publishedAtがundefinedの場合は現在時刻をセット
+                    isNaN(article.publishedAt) ? Date.now() : article.publishedAt, // publishedAtがNaNの場合は現在時刻をセット
                     article.content || '', // contentがundefinedの場合は空文字列
                     null // 新しい記事のembeddingはNULLに設定
                 );
