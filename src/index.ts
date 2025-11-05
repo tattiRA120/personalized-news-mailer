@@ -104,7 +104,7 @@ export default {
 					return new Response('User already exists', { status: 409 });
 				}
 
-				await createUserProfile(userId, email, env);
+				ctx.waitUntil(createUserProfile(userId, email, env));
 				logger.debug(`User registered successfully: ${userId}`, { userId, email });
 
 				if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) {
@@ -279,7 +279,7 @@ export default {
 					logger.warn('No refresh token received. Ensure access_type=offline was requested and this is the first authorization.');
 				}
 
-				await env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken);
+				ctx.waitUntil(env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken));
 				logger.debug(`Successfully stored refresh token for user ${userId}.`, { userId });
 
 				return new Response('Authorization successful. You can close this window.', { status: 200 });
@@ -347,7 +347,7 @@ export default {
 				const existingArticleIdsWithEmbeddingsSet = new Set(existingArticlesWithEmbeddingsInD1.map(article => article.articleId));
 
 				// 2. 新しい記事だけをD1に保存（重複はINSERT OR IGNOREでスキップされる）
-				await saveArticlesToD1(selectedArticles, env);
+				ctx.waitUntil(saveArticlesToD1(selectedArticles, env));
 				logger.debug(`Selected articles saved to D1 for user ${userId}.`, { userId, savedArticleCount: selectedArticles.length });
 
 				// 3. embeddingがないと判明した記事と、新たに追加した記事を対象に、embedding生成処理を開始する
@@ -370,7 +370,7 @@ export default {
 
 				if (articlesNeedingEmbedding.length > 0) {
 					logger.debug(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
-					await generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false);
+					ctx.waitUntil(generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false));
 				} else {
 					logger.debug(`No new embeddings needed for selected articles for user ${userId}.`, { userId });
 				}
