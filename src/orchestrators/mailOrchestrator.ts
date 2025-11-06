@@ -356,8 +356,8 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                 const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
                 await deleteOldArticlesFromD1(env, twentyFourHoursAgo, true); // embeddingがNULLの24時間以上前の記事を削除
 
-                const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
-                await deleteOldArticlesFromD1(env, thirtyDaysAgo, false); // 30日以上前の全ての記事を削除
+                const twoDaysAgo = Date.now() - (2 * 24 * 60 * 60 * 1000);
+                await deleteOldArticlesFromD1(env, twoDaysAgo, false); // 2日以上前の全ての記事を削除
 
             } catch (cleanupError) {
                 logger.error('Error during D1 article cleanup:', cleanupError);

@@ -104,7 +104,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             if (item.title && item.link) {
                 let rawSummary = item.description?.__cdata || item.description || '';
                 let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
-                const pubDate = item.pubDate || new Date().toISOString(); // Fallback to current date
+                const pubDate = new Date().toISOString(); // Always use current date
                 let title = decodeHtmlEntities(stripHtmlTags((item.title as any).__cdata || item.title));
                 title = cleanArticleText(title);
 
@@ -135,7 +135,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     continue; // 不正なリンクはスキップ
                 }
 
-                const parsedDate = Date.parse(pubDate);
+                const parsedTimestamp = new Date(pubDate).getTime();
                 articles.push({
                     articleId: await generateContentHash(title),
                     title: title,
@@ -143,7 +143,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     sourceName: '',
                     summary: finalSummary,
                     content: finalContent,
-                    publishedAt: isNaN(parsedDate) ? Date.now() : parsedDate,
+                    publishedAt: isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
                 });
             }
         }
@@ -170,7 +170,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             }
             let rawSummary = entry.summary?.__cdata || entry.summary || '';
             let rawContent = entry.content?.__cdata || entry.content || rawSummary; // contentを優先、なければsummary
-            const pubDate = entry.updated || entry.published || new Date().toISOString(); // Fallback to current date
+            const pubDate = new Date().toISOString(); // Always use current date
 
             if (title && link) {
                 let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
@@ -198,7 +198,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     continue; // 不正なリンクはスキップ
                 }
 
-                const parsedDate = Date.parse(pubDate);
+                const parsedTimestamp = new Date(pubDate).getTime();
                 articles.push({
                     articleId: await generateContentHash(cleanedTitle),
                     title: cleanedTitle,
@@ -206,7 +206,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     sourceName: '',
                     summary: finalSummary,
                     content: finalContent,
-                    publishedAt: isNaN(parsedDate) ? Date.now() : parsedDate,
+                    publishedAt: isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
                 });
             }
         }
@@ -221,7 +221,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             const link = item['link'] || item['@_rdf:about']; // linkまたはrdf:aboutを使用
             let rawSummary = item.description?.__cdata || item.description || '';
             let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
-            const pubDate = item['dc:date'] || item.date || new Date().toISOString(); // Fallback to current date
+            const pubDate = new Date().toISOString(); // Always use current date
 
             if (title && link) {
                 let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
@@ -256,7 +256,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     finalContent = finalSummary;
                 }
 
-                const parsedDate = Date.parse(pubDate);
+                const parsedTimestamp = new Date(pubDate).getTime();
                 articles.push({
                     articleId: await generateContentHash(cleanedTitle),
                     title: cleanedTitle,
@@ -264,7 +264,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     sourceName: '',
                     summary: finalSummary,
                     content: finalContent,
-                    publishedAt: isNaN(parsedDate) ? Date.now() : parsedDate,
+                    publishedAt: isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
                 });
             }
         }
