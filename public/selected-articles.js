@@ -43,4 +43,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 記事を表示
     displayArticles(selectedArticles);
+
+    // localStorageから選択した記事を削除
+    localStorage.removeItem('selectedArticles');
 });

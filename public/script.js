@@ -103,9 +103,6 @@ document.addEventListener('DOMContentLoaded', () => {
         // 選択した記事をローカルストレージに保存
         localStorage.setItem('selectedArticles', JSON.stringify(selectedArticlesData));
 
-        // 一時的なページを開く
-        window.open('selected-articles.html', '_blank');
-
         try {
             // Workerの新しいエンドポイントに選択結果を送信
             const response = await fetch('/submit-interests', {
@@ -125,6 +122,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 messageElement.textContent = result.message || '選択結果が送信されました。';
                 messageElement.className = ''; // 成功時はエラークラスを削除
                 // submitButton.disabled = true; // 送信後はボタンを無効化 (成功時は再送信不要のため)
+                // サーバーへの送信が成功した後にページを開く
+                window.open('selected-articles.html', '_blank');
             } else {
                 throw new Error(result.message || `HTTP error! status: ${response.status}`);
             }
