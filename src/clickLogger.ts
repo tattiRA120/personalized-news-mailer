@@ -1045,8 +1045,9 @@ export class ClickLogger extends DurableObject {
             // Get all user IDs that have feedback logs
             const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM education_logs`).all<{ user_id: string }>();
             // すべてのユーザーの最近のフィードバックログを一度に取得
+            const BATCH_SIZE = 50; // D1のSQL変数制限を考慮してバッチサイズを調整
             const allFeedbackLogs = await this.env.DB.prepare(
-                `SELECT user_id, article_id, action, timestamp FROM education_logs ORDER BY timestamp DESC LIMIT 500` // 取得数を増やす
+                `SELECT user_id, article_id, action, timestamp FROM education_logs ORDER BY timestamp DESC LIMIT 500`
             ).all<{ user_id: string, article_id: string, action: string, timestamp: number }>();
 
             if (!allFeedbackLogs.results || allFeedbackLogs.results.length === 0) {
@@ -1076,11 +1077,11 @@ export class ClickLogger extends DurableObject {
             
             // sent_articles と articles テーブルから必要な埋め込みを一度に取得
             const sentArticlesEmbeddings = await this.env.DB.prepare(
-                `SELECT article_id, embedding, published_at FROM sent_articles WHERE article_id IN (${articleIdsArray.map(() => '?').join(',')})`
+                `SELECT article_id, embedding, published_at FROM sent_articles WHERE article_id IN (${articleIdsArray.map(() => "?").join(",")})`
             ).bind(...articleIdsArray).all<{ article_id: string, embedding: string, published_at: string }>();
 
             const articlesEmbeddings = await this.env.DB.prepare(
-                `SELECT article_id, embedding, published_at FROM articles WHERE article_id IN (${articleIdsArray.map(() => '?').join(',')})`
+                `SELECT article_id, embedding, published_at FROM articles WHERE article_id IN (${articleIdsArray.map(() => "?").join(",")})`
             ).bind(...articleIdsArray).all<{ article_id: string, embedding: string | null, published_at: string | null }>();
 
             const allEmbeddingsMap = new Map<string, { embedding: number[], published_at: string }>();
@@ -1097,7 +1098,6 @@ export class ClickLogger extends DurableObject {
             }
             this.logger.debug(`Pre-fetched ${allEmbeddingsMap.size} article embeddings for feedback processing.`, { embeddingCount: allEmbeddingsMap.size });
 
-
             for (const [userId, feedbackLogsForUser] of feedbackLogsByUser.entries()) {
                 this.logger.debug(`Processing pending feedback for user: ${userId}`, { userId, feedbackCount: feedbackLogsForUser.length });
 
@@ -1109,6 +1109,8 @@ export class ClickLogger extends DurableObject {
 
                 let updatedCount = 0;
                 const now = Date.now();
+                const logStatements = []; // バッチ処理用のステートメントリスト
+
                 for (const log of feedbackLogsForUser) {
                     const articleEmbeddingData = allEmbeddingsMap.get(log.article_id);
 
@@ -1149,15 +1151,33 @@ export class ClickLogger extends DurableObject {
                     } else {
                         this.logger.warn(`Skipping feedback for article ${log.article_id} due to missing embedding data.`, { userId, articleId: log.article_id });
                     }
+
+                    // education_logs から処理済みのログを削除するためのステートメントを追加
+                    logStatements.push(
+                        this.env.DB.prepare(
+                            `DELETE FROM education_logs WHERE user_id = ? AND article_id = ? AND timestamp = ?`
+                        ).bind(userId, log.article_id, log.timestamp)
+                    );
+
+                    // バッチサイズに達したら実行
+                    if (logStatements.length >= BATCH_SIZE) {
+                        this.state.waitUntil(this.env.DB.batch(logStatements));
+                        logStatements.length = 0; // リストをクリア
+                    }
+                }
+
+                // 残りのステートメントを実行
+                if (logStatements.length > 0) {
+                    this.state.waitUntil(this.env.DB.batch(logStatements));
                 }
 
                 this.logger.debug(`Updated bandit model for user ${userId} with ${updatedCount} feedback entries.`, { userId, updatedCount });
 
                 // Calculate and update MMR lambda
                 const lambda = await this.calculateMMRLambda(userId);
-                await this.env.DB.prepare(
+                this.state.waitUntil(this.env.DB.prepare(
                     `UPDATE users SET mmr_lambda = ? WHERE user_id = ?`
-                ).bind(lambda, userId).run();
+                ).bind(lambda, userId).run());
                 this.logger.debug(`Updated MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
             }
             this.logger.debug('Finished processing pending feedback.');

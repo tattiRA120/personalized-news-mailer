@@ -243,22 +243,25 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                     const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
                     const clickLogger = this.env.CLICK_LOGGER.get(clickLoggerId);
                     
-                    try {
-                        const callbackResponse = await clickLogger.fetch(
-                            new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ embeddings: embeddingsToUpdate, userId: jobInfo.userId }),
-                            })
-                        );
-                        if (callbackResponse.ok) {
-                            this.logger.debug(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
-                        } else {
-                            this.logger.error(`Failed to send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}): ${callbackResponse.statusText}`, null, { jobId: jobInfo.batchId, status: callbackResponse.status, statusText: callbackResponse.statusText });
+                    // ClickLoggerにコールバックを送信 (waitUntilで非同期実行)
+                    this.state.waitUntil( (async () => {
+                        try {
+                            const callbackResponse = await clickLogger.fetch(
+                                new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ embeddings: embeddingsToUpdate, userId: jobInfo.userId }),
+                                })
+                            );
+                            if (callbackResponse.ok) {
+                                this.logger.debug(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
+                            } else {
+                                this.logger.error(`Failed to send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}): ${callbackResponse.statusText}`, null, { jobId: jobInfo.batchId, status: callbackResponse.status, statusText: callbackResponse.statusText });
+                            }
+                        } catch (callbackError) {
+                            this.logger.error(`Error sending embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, callbackError, { jobId: jobInfo.batchId });
                         }
-                    } catch (callbackError) {
-                        this.logger.error(`Error sending embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, callbackError, { jobId: jobInfo.batchId });
-                    }
+                    })());
 
                 } else {
                     this.logger.warn(`Batch job ${jobInfo.batchId} completed but no valid embeddings to update after filtering.`, { jobId: jobInfo.batchId });
