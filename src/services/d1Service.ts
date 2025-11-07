@@ -187,19 +187,28 @@ export async function updateArticleEmbeddingInD1(articleId: string, embedding: n
  * @param embeddingIsNull embeddingがNULLの記事のみを対象とするか
  * @returns 削除された記事の数
  */
-export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number, embeddingIsNull: boolean = false): Promise<number> {
+export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number, embeddingIsNull: boolean = false, deleteInvalidDates: boolean = false): Promise<number> {
     const logger = new Logger(env);
-    logger.info(`Deleting old articles from D1 older than ${new Date(cutoffTimestamp).toISOString()}. Embedding IS NULL: ${embeddingIsNull}`);
+    logger.info(`Deleting old articles from D1 older than ${new Date(cutoffTimestamp).toISOString()}. Embedding IS NULL: ${embeddingIsNull}. Delete invalid dates: ${deleteInvalidDates}`);
     try {
         let selectQuery = `SELECT article_id FROM articles WHERE published_at < ?`;
         if (embeddingIsNull) {
             selectQuery += ` AND embedding IS NULL`;
         }
-        const { results: articlesToDelete } = await env.DB.prepare(selectQuery).bind(cutoffTimestamp).all<{ article_id: string }>();
+        
+        let bindValue = cutoffTimestamp;
+
+        if (deleteInvalidDates) {
+            // published_atが0以下、または現在から1日以上未来の日付を不正とみなす
+            selectQuery = `SELECT article_id FROM articles WHERE published_at <= 0 OR published_at > ?`;
+            bindValue = Date.now() + (24 * 60 * 60 * 1000); // 現在から1日後を上限とする
+        }
+        
+        const { results: articlesToDelete } = await env.DB.prepare(selectQuery).bind(bindValue).all<{ article_id: string }>();
         const articleIds = articlesToDelete.map(article => article.article_id);
 
         if (articleIds.length === 0) {
-            logger.info('No old articles found to delete from D1. Skipping cleanup.', { cutoffTimestamp, embeddingIsNull });
+            logger.info('No old articles found to delete from D1. Skipping cleanup.', { cutoffTimestamp, embeddingIsNull, deleteInvalidDates });
             return 0;
         }
 

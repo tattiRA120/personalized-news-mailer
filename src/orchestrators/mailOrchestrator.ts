@@ -359,6 +359,9 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                 const twoDaysAgo = Date.now() - (2 * 24 * 60 * 60 * 1000);
                 await deleteOldArticlesFromD1(env, twoDaysAgo, false); // 2日以上前の全ての記事を削除
 
+                // 不正な日付の記事を削除 (published_at <= 0 または現在から1日以上未来の日付)
+                await deleteOldArticlesFromD1(env, 0, false, true); 
+
             } catch (cleanupError) {
                 logger.error('Error during D1 article cleanup:', cleanupError);
             }
