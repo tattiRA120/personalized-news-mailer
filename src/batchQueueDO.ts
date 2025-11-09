@@ -243,6 +243,14 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                     const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
                     const clickLogger = this.env.CLICK_LOGGER.get(clickLoggerId);
                     
+                    // WORKER_BASE_URL が設定されているか確認
+                    if (!this.env.WORKER_BASE_URL) {
+                        this.logger.error(`WORKER_BASE_URL is not set in environment variables. Cannot send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId}.`, null, { jobId: jobInfo.batchId });
+                        // このジョブは失敗として扱い、再試行しない
+                        failedJobs.push(jobInfo);
+                        continue;
+                    }
+
                     // ClickLoggerにコールバックを送信 (waitUntilで非同期実行)
                     this.state.waitUntil( (async () => {
                         try {
