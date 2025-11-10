@@ -266,8 +266,14 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                             } else {
                                 this.logger.error(`Failed to send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}): ${callbackResponse.statusText}`, null, { jobId: jobInfo.batchId, status: callbackResponse.status, statusText: callbackResponse.statusText });
                             }
-                        } catch (callbackError) {
-                            this.logger.error(`Error sending embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, callbackError, { jobId: jobInfo.batchId });
+                        } catch (callbackError: unknown) {
+                            const err = callbackError instanceof Error ? callbackError : new Error(String(callbackError));
+                            this.logger.error(`Error sending embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, err, {
+                                jobId: jobInfo.batchId,
+                                errorName: err.name,
+                                errorMessage: err.message,
+                                errorStack: err.stack,
+                            });
                         }
                     })());
 

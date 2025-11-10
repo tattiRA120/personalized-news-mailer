@@ -20,6 +20,10 @@ function getRandomUserAgent(): string {
     return USER_AGENTS[randomIndex];
 }
 
+// エラーが発生したURLを一時的にスキップするためのキャッシュ
+const errorUrlCache = new Map<string, number>(); // URL -> 次にリトライするタイムスタンプ
+const ERROR_SKIP_DURATION_MS = 5 * 60 * 1000; // 5分間スキップ
+
 // HTMLタグを除去するヘルパー関数
 function stripHtmlTags(html: string): string {
     let strippedText = html.replace(/<[^>]*>/g, ''); // すべてのHTMLタグを除去
@@ -43,11 +47,22 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
     const MAX_RETRIES = 3;
     const BASE_DELAY_MS = 1000; // 1 second
 
+    // エラーキャッシュをチェック
+    const nextRetryTime = errorUrlCache.get(url);
+    if (nextRetryTime && Date.now() < nextRetryTime) {
+        logger.warn(`Skipping RSS feed ${url} due to recent error. Will retry after ${new Date(nextRetryTime).toISOString()}.`, { url });
+        return null;
+    }
+
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
             const response = await fetch(url, {
                 headers: {
                     'User-Agent': getRandomUserAgent(), // ランダムなUser-Agentを使用
+                    'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7', // 日本語を優先
+                    'Accept-Encoding': 'gzip, deflate, br', // 圧縮をサポート
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                    'Connection': 'keep-alive',
                 },
                 cf: {
                     cacheTtl: 60, // 60秒間キャッシュ
@@ -61,6 +76,7 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
                     continue;
                 }
                 logger.error(`Failed to fetch RSS feed from ${url} after ${MAX_RETRIES} attempts: ${response.status} ${response.statusText}`, null, { url, status: response.status, statusText: response.statusText });
+                errorUrlCache.set(url, Date.now() + ERROR_SKIP_DURATION_MS); // エラーURLをキャッシュ
                 return null;
             }
             return await response.text();
@@ -73,6 +89,7 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
                 continue;
             }
             logger.error(`Error fetching RSS feed from ${url} after ${MAX_RETRIES} attempts: ${err.message}`, err, { url, errorName: err.name, errorMessage: err.message });
+            errorUrlCache.set(url, Date.now() + ERROR_SKIP_DURATION_MS); // エラーURLをキャッシュ
             return null;
         }
     }

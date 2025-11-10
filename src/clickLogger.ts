@@ -489,12 +489,23 @@ export class ClickLogger extends DurableObject {
                             embeddingExists: !!originalArticle?.embedding,
                             publishedAtExists: !!originalArticle?.published_at
                         });
-                        return new Response('Article embedding not found', { status: 404 });
+                        // embeddingが見つからない場合でも、エラーをログに記録し、200 OKを返すことで、
+                        // クライアント側でフィードバック処理がブロックされるのを防ぎます。
+                        // ただし、バンディットモデルの更新はスキップされます。
+                        this.logger.error(`Failed to find embedding for article ${articleId} for user ${userId}. Cannot update bandit model.`, null, {
+                            userId,
+                            articleId,
+                            sentArticlesExists: !!sentArticleResult,
+                            articlesExists: !!originalArticle,
+                            embeddingExists: !!originalArticle?.embedding,
+                            publishedAtExists: !!originalArticle?.published_at
+                        });
+                        return new Response('Feedback logged (embedding not found, model not updated)', { status: 200 });
                     }
                 }
 
                 // 3. Update the bandit model if immediate update is requested
-                if (immediateUpdate) {
+                if (immediateUpdate && embedding) { // embedding が存在する場合のみモデルを更新
                     let banditModel = this.inMemoryModels.get(userId);
                     if (!banditModel) {
                         this.logger.warn(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
