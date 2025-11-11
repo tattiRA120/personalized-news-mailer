@@ -311,19 +311,28 @@ export class ClickLogger extends DurableObject {
     }
 
     async alarm() {
-        // This alarm is triggered periodically to save dirty models to R2, process unclicked articles, and update models from feedback.
-        if (this.dirty) {
-            this.logger.info('Alarm triggered. Saving dirty models to R2.');
-            await this.saveModelsToR2();
-        } else {
-            this.logger.debug('Alarm triggered, but no changes to save.');
+        try {
+            // This alarm is triggered periodically to save dirty models to R2, process unclicked articles, and update models from feedback.
+            if (this.dirty) {
+                this.logger.info('Alarm triggered. Saving dirty models to R2.');
+                await this.saveModelsToR2();
+            } else {
+                this.logger.debug('Alarm triggered, but no changes to save.');
+            }
+
+            // Process unclicked articles
+            await this.processUnclickedArticles();
+
+            // Process pending feedback and update models
+            await this.processPendingFeedback();
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logger.error('Error in ClickLogger alarm method:', err, {
+                errorName: err.name,
+                errorMessage: err.message,
+                errorStack: err.stack,
+            });
         }
-
-        // Process unclicked articles
-        await this.processUnclickedArticles();
-
-        // Process pending feedback and update models
-        await this.processPendingFeedback();
     }
 
     // Helper to ensure an alarm is set.
@@ -344,6 +353,7 @@ export class ClickLogger extends DurableObject {
         // Ensure an alarm is set to periodically save data.
         // This is crucial for ensuring alarm() is called even if the DO is idle for a long time.
         await this.ensureAlarmIsSet();
+        await this.ensureModelsLoaded(); // 各リクエストの前にモデルがロードされていることを確認
 
         const url = new URL(request.url);
         const path = url.pathname;
@@ -413,8 +423,14 @@ export class ClickLogger extends DurableObject {
                 this.logger.info(`Logged click for user ${userId}, article ${articleId}`);
                 return new Response('Click logged', { status: 200 });
 
-            } catch (error) {
-                this.logger.error('Error logging click:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error logging click:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Error logging click', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/log-feedback') {
@@ -538,8 +554,14 @@ export class ClickLogger extends DurableObject {
 
                 return new Response('Feedback logged', { status: 200 });
 
-            } catch (error) {
-                this.logger.error('Error logging feedback:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error logging feedback:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Error logging feedback', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/get-ucb-values') {
@@ -566,8 +588,14 @@ export class ClickLogger extends DurableObject {
                     headers: { 'Content-Type': 'application/json' },
                 });
 
-            } catch (error) {
-                this.logger.error('Error getting UCB values:', error);
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error getting UCB values:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Error getting UCB values', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/log-sent-articles') {
@@ -600,8 +628,14 @@ export class ClickLogger extends DurableObject {
                 this.logger.debug(`Successfully logged ${sentArticles.length} sent articles for user ${userId}`);
                 return new Response('Sent articles logged', { status: 200 });
 
-            } catch (error) {
-                this.logger.error('Error logging sent articles:', error);
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error logging sent articles:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Error logging sent articles', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/decay-rewards') {
@@ -689,8 +723,14 @@ export class ClickLogger extends DurableObject {
                 }
                 return new Response('Learning from education completed', { status: 200 });
 
-            } catch (error) {
-                this.logger.error('Error learning from education:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error learning from education:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Error learning from education', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/embedding-completed-callback') {
@@ -721,8 +761,14 @@ export class ClickLogger extends DurableObject {
                 }
                 
                 return new Response('Embedding completed callback processed', { status: 200 });
-            } catch (error) {
-                this.logger.error('Error processing embedding completed callback:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error processing embedding completed callback:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Error processing callback', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
@@ -743,8 +789,14 @@ export class ClickLogger extends DurableObject {
                 this.logger.debug(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
                 return new Response('Bandit model updated', { status: 200 });
 
-            } catch (error) {
-                this.logger.error('Error updating bandit model from click:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error updating bandit model from click:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Error updating bandit model from click', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/delete-all-data') {
@@ -757,8 +809,14 @@ export class ClickLogger extends DurableObject {
                 this.dirty = false;
                 this.logger.info(`All bandit models deleted.`);
                 return new Response('All bandit models deleted', { status: 200 });
-            } catch (error) {
-                this.logger.error('Error deleting all bandit models:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error deleting all bandit models:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Error deleting all models', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/calculate-preference-score') {
@@ -856,8 +914,14 @@ export class ClickLogger extends DurableObject {
                     status: 200,
                 });
 
-            } catch (error) {
-                this.logger.error('Error calculating preference score in ClickLogger:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error calculating preference score in ClickLogger:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Internal Server Error', { status: 500 });
             }
         } else if (request.method === 'GET' && path === '/get-preference-score') {
@@ -882,7 +946,7 @@ export class ClickLogger extends DurableObject {
 
                 // ユーザーの好みベクトル (bベクトル) の最大絶対値を計算
                 const bVector = Array.from(banditModel.b);
-                const maxAbs = Math.max(...bVector.map(Math.abs));
+                const maxAbs = bVector.length > 0 ? Math.max(...bVector.map(Math.abs)) : 0; // bVectorが空の場合のハンドリング
 
                 // 最大絶対値を0-1に正規化し、スコアに変換 (例: 最大値が大きいほどスコアが高い)
                 // 閾値として、5を基準に正規化（報酬2.0で1回で40%）
@@ -897,8 +961,14 @@ export class ClickLogger extends DurableObject {
                     status: 200,
                 });
 
-            } catch (error) {
-                this.logger.error('Error getting preference score in ClickLogger:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error getting preference score in ClickLogger:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Internal Server Error', { status: 500 });
             }
         } else if (request.method === 'GET' && path === '/get-mmr-lambda') {
@@ -925,8 +995,14 @@ export class ClickLogger extends DurableObject {
                     status: 200,
                 });
 
-            } catch (error) {
-                this.logger.error('Error getting MMR lambda in ClickLogger:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error getting MMR lambda in ClickLogger:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Internal Server Error', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/calculate-mmr-lambda') {
@@ -953,8 +1029,14 @@ export class ClickLogger extends DurableObject {
                     status: 200,
                 });
 
-            } catch (error) {
-                this.logger.error('Error calculating MMR lambda in ClickLogger:', error, { requestUrl: request.url });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error calculating MMR lambda in ClickLogger:', err, {
+                    requestUrl: request.url,
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
                 return new Response('Internal Server Error', { status: 500 });
             }
         }
@@ -1044,8 +1126,13 @@ export class ClickLogger extends DurableObject {
                 this.logger.debug(`Updated bandit model for user ${userId} with -0.1 reward for ${updatedCount} unclicked articles.`, { userId, updatedCount });
             }
             this.logger.debug('Finished processing unclicked articles.');
-        } catch (error) {
-            this.logger.error('Error processing unclicked articles:', error);
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logger.error('Error processing unclicked articles:', err, {
+                errorName: err.name,
+                errorMessage: err.message,
+                errorStack: err.stack,
+            });
         }
     }
 
@@ -1192,8 +1279,13 @@ export class ClickLogger extends DurableObject {
                 this.logger.debug(`Updated MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
             }
             this.logger.debug('Finished processing pending feedback.');
-        } catch (error) {
-            this.logger.error('Error processing pending feedback:', error);
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logger.error('Error processing pending feedback:', err, {
+                errorName: err.name,
+                errorMessage: err.message,
+                errorStack: err.stack,
+            });
         }
     }
 
@@ -1260,6 +1352,15 @@ export class ClickLogger extends DurableObject {
                 stack: err.stack,
             });
             return articles.map(article => ({ articleId: article.articleId, ucb: 0 }));
+        }
+    }
+
+    // Durable Objectがアイドル状態から復帰した際に、inMemoryModelsが空であればR2からロードを試みる
+    // これはDurable Objectのリセット後に状態が失われる問題への防御的なアプローチ
+    private async ensureModelsLoaded(): Promise<void> {
+        if (this.inMemoryModels.size === 0) {
+            this.logger.warn('inMemoryModels is empty. Attempting to reload models from R2.');
+            await this.loadModelsFromR2();
         }
     }
 

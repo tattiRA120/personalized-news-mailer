@@ -58,11 +58,12 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
         try {
             const response = await fetch(url, {
                 headers: {
-                    'User-Agent': getRandomUserAgent(), // ランダムなUser-Agentを使用
-                    'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7', // 日本語を優先
-                    'Accept-Encoding': 'gzip, deflate, br', // 圧縮をサポート
+                    'User-Agent': getRandomUserAgent(),
+                    'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Accept-Encoding': 'gzip, deflate, br',
                     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                     'Connection': 'keep-alive',
+                    'Referer': new URL(url).origin,
                 },
                 cf: {
                     cacheTtl: 60, // 60秒間キャッシュ
@@ -370,6 +371,11 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
         });
         const chunkResults = await Promise.all(chunkPromises);
         allArticles = allArticles.concat(...chunkResults);
+
+        // 各チャンクの処理後に短い遅延を挟む
+        if (i + RSS_FETCH_CHUNK_SIZE < NEWS_RSS_URLS.length) {
+            await new Promise(resolve => setTimeout(resolve, 2000)); // 2秒待機
+        }
     }
 
 

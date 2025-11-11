@@ -253,27 +253,46 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
                     // ClickLoggerにコールバックを送信 (waitUntilで非同期実行)
                     this.state.waitUntil( (async () => {
-                        try {
-                            const callbackResponse = await clickLogger.fetch(
-                                new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
-                                    method: 'POST',
-                                    headers: { 'Content-Type': 'application/json' },
-                                    body: JSON.stringify({ embeddings: embeddingsToUpdate, userId: jobInfo.userId }),
-                                })
-                            );
-                            if (callbackResponse.ok) {
-                                this.logger.debug(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
-                            } else {
-                                this.logger.error(`Failed to send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}): ${callbackResponse.statusText}`, null, { jobId: jobInfo.batchId, status: callbackResponse.status, statusText: callbackResponse.statusText });
+                        const MAX_CALLBACK_RETRIES = 5;
+                        const INITIAL_RETRY_DELAY_MS = 1000; // 1秒
+
+                        const retryFetch = async (attempt: number = 0): Promise<Response> => {
+                            try {
+                                const response = await clickLogger.fetch(
+                                    new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({ embeddings: embeddingsToUpdate, userId: jobInfo.userId }),
+                                    })
+                                );
+                                if (!response.ok) {
+                                    throw new Error(`Callback failed with status ${response.status}: ${response.statusText}`);
+                                }
+                                return response;
+                            } catch (e) {
+                                if (attempt < MAX_CALLBACK_RETRIES) {
+                                    const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 1000; // 指数バックオフ + ジッター
+                                    this.logger.warn(`Retrying embedding completion callback for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}), attempt ${attempt + 1}/${MAX_CALLBACK_RETRIES}. Delaying for ${delay}ms.`, e, { jobId: jobInfo.batchId });
+                                    await new Promise(resolve => setTimeout(resolve, delay));
+                                    return retryFetch(attempt + 1);
+                                }
+                                throw e; // 最大リトライ回数を超えたらエラーを再スロー
                             }
+                        };
+
+                        try {
+                            await retryFetch();
+                            this.logger.debug(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
                         } catch (callbackError: unknown) {
                             const err = callbackError instanceof Error ? callbackError : new Error(String(callbackError));
-                            this.logger.error(`Error sending embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, err, {
+                            this.logger.error(`Failed to send embedding completion callback to ClickLogger after ${MAX_CALLBACK_RETRIES} retries for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, err, {
                                 jobId: jobInfo.batchId,
                                 errorName: err.name,
                                 errorMessage: err.message,
                                 errorStack: err.stack,
                             });
+                            // リトライ後も失敗した場合は、このジョブは失敗として扱い、再試行しない
+                            failedJobs.push(jobInfo);
                         }
                     })());
 
