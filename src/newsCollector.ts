@@ -161,7 +161,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     sourceName: '',
                     summary: finalSummary,
                     content: finalContent,
-                    publishedAt: isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
+                    publishedAt: isNaN(parsedTimestamp) ? 0 : parsedTimestamp,
                 });
             }
         }
@@ -186,7 +186,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     link = (entry.link as any)['@_href'];
                 }
             }
-            let rawSummary = entry.summary?.__cdata || entry.summary || '';
+                let rawSummary = entry.summary?.__cdata || entry.summary || '';
             let rawContent = entry.content?.__cdata || entry.content || rawSummary; // contentを優先、なければsummary
             const pubDate = new Date().toISOString(); // Always use current date
 
@@ -224,7 +224,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     sourceName: '',
                     summary: finalSummary,
                     content: finalContent,
-                    publishedAt: isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
+                    publishedAt: isNaN(parsedTimestamp) ? 0 : parsedTimestamp,
                 });
             }
         }
@@ -237,7 +237,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             const item = items[i];
             const title = (item['dc:title'] as any)?.__cdata || item['dc:title'] || (item.title as any)?.__cdata || item.title;
             const link = item['link'] || item['@_rdf:about']; // linkまたはrdf:aboutを使用
-            let rawSummary = item.description?.__cdata || item.description || '';
+                let rawSummary = item.description?.__cdata || item.description || '';
             let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
             const pubDate = new Date().toISOString(); // Always use current date
 
@@ -282,7 +282,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     sourceName: '',
                     summary: finalSummary,
                     content: finalContent,
-                    publishedAt: isNaN(parsedTimestamp) ? Date.now() : parsedTimestamp,
+                    publishedAt: isNaN(parsedTimestamp) ? 0 : parsedTimestamp,
                 });
             }
         }

@@ -6,6 +6,7 @@ import { getAllUserIds, getUserProfile, getMMRLambda } from '../userProfile';
 import { selectPersonalizedArticles, cosineSimilarityBulk } from '../articleSelector';
 import { generateNewsEmail, sendNewsEmail } from '../emailGenerator';
 import { ClickLogger } from '../clickLogger';
+import { getSentArticlesForUser } from '../services/d1Service';
 import { Logger } from '../logger';
 import { chunkArray } from '../utils/textProcessor';
 import { DurableObjectStub } from '@cloudflare/workers-types';
@@ -231,12 +232,25 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         articlesForSelection = articlesWithUpdatedFreshness.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
                     }
 
+                    // --- Exclude already sent articles ---
+                    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+                    const sentArticles = await getSentArticlesForUser(env, userId, sevenDaysAgo);
+                    const sentArticleIds = new Set(sentArticles.map(sa => sa.article_id));
+                    
+                    const filteredArticlesForSelection = articlesForSelection.filter(article => !sentArticleIds.has(article.articleId));
+                    logger.debug(`Filtered out ${articlesForSelection.length - filteredArticlesForSelection.length} already sent articles. Remaining candidates: ${filteredArticlesForSelection.length}.`, { userId, filteredCount: filteredArticlesForSelection.length });
+
+                    if (filteredArticlesForSelection.length === 0) {
+                        logger.debug('No articles remaining after filtering sent articles. Skipping email sending for this user.', { userId });
+                        continue;
+                    }
+
                     // ユーザーの保存されたMMR lambdaを取得
                     const userMMRLambda = await getMMRLambda(userId, env);
                     logger.debug(`Using saved MMR lambda for user ${userId}: ${userMMRLambda}`, { userId, lambda: userMMRLambda });
 
-                    logger.debug(`Selecting personalized articles for user ${userId} from ${articlesForSelection.length} candidates.`, { userId, candidateCount: articlesForSelection.length });
-                    const selectedArticles = await selectPersonalizedArticles(articlesForSelection, userProfileEmbeddingForSelection, clickLogger, userId, numberOfArticlesToSend, userCTR, userMMRLambda, env) as NewsArticleWithEmbedding[];
+                    logger.debug(`Selecting personalized articles for user ${userId} from ${filteredArticlesForSelection.length} candidates.`, { userId, candidateCount: filteredArticlesForSelection.length });
+                    const selectedArticles = await selectPersonalizedArticles(filteredArticlesForSelection, userProfileEmbeddingForSelection, clickLogger, userId, numberOfArticlesToSend, userCTR, userMMRLambda, env) as NewsArticleWithEmbedding[];
                     logger.debug(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
 
                     if (selectedArticles.length === 0) {
