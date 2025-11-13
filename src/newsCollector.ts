@@ -22,7 +22,7 @@ function getRandomUserAgent(): string {
 
 // エラーが発生したURLを一時的にスキップするためのキャッシュ
 const errorUrlCache = new Map<string, number>(); // URL -> 次にリトライするタイムスタンプ
-const ERROR_SKIP_DURATION_MS = 5 * 60 * 1000; // 5分間スキップ
+const ERROR_SKIP_DURATION_MS = 30 * 60 * 1000; // 30分間スキップ
 
 // HTMLタグを除去するヘルパー関数
 function stripHtmlTags(html: string): string {
@@ -56,45 +56,64 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
 
     for (let i = 0; i < MAX_RETRIES; i++) {
         try {
-            const response = await fetch(url, {
-                headers: {
-                    'User-Agent': getRandomUserAgent(),
-                    'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                    'Connection': 'keep-alive',
-                    'Referer': new URL(url).origin,
-                },
-                cf: {
-                    cacheTtl: 60, // 60秒間キャッシュ
-                },
-            });
-            if (!response.ok) {
-                logger.warn(`Failed to fetch RSS feed from ${url}: Status ${response.status} ${response.statusText}. Attempt ${i + 1}/${MAX_RETRIES}.`, { url, status: response.status, statusText: response.statusText, attempt: i + 1 });
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒のタイムアウト
+
+            try {
+                const response = await fetch(url, {
+                    headers: {
+                        'User-Agent': getRandomUserAgent(),
+                        'Accept-Language': 'ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                        'Connection': 'keep-alive',
+                        'Referer': 'https://www.google.com/',
+                    },
+                    cf: {
+                        cacheTtl: 60, // 60秒間キャッシュ
+                    },
+                    signal: controller.signal, // タイムアウトシグナルを渡す
+                });
+                clearTimeout(timeoutId); // 成功したらタイムアウトをクリア
+
+                if (!response.ok) {
+                    logger.warn(`Failed to fetch RSS feed from ${url}: Status ${response.status} ${response.statusText}. Attempt ${i + 1}/${MAX_RETRIES}.`, { url, status: response.status, statusText: response.statusText, attempt: i + 1 });
+                    if (i < MAX_RETRIES - 1) {
+                        const delay = BASE_DELAY_MS * Math.pow(2, i); // Exponential backoff
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    logger.error(`Failed to fetch RSS feed from ${url} after ${MAX_RETRIES} attempts: ${response.status} ${response.statusText}`, null, { url, status: response.status, statusText: response.statusText });
+                    errorUrlCache.set(url, Date.now() + ERROR_SKIP_DURATION_MS); // エラーURLをキャッシュ
+                    return null;
+                }
+                return await response.text();
+            } catch (innerError: unknown) { // 内側のcatchブロック
+                clearTimeout(timeoutId); // エラーが発生したらタイムアウトをクリア
+                const err = innerError instanceof Error ? innerError : new Error(String(innerError));
+                if (err.name === 'AbortError') {
+                    logger.warn(`Fetch to ${url} timed out after 15 seconds. Attempt ${i + 1}/${MAX_RETRIES}.`, err, { url, attempt: i + 1, errorName: err.name, errorMessage: err.message });
+                } else {
+                    logger.warn(`Error fetching RSS feed from ${url}: ${err.message}. Attempt ${i + 1}/${MAX_RETRIES}.`, err, { url, attempt: i + 1, errorName: err.name, errorMessage: err.message });
+                }
+
                 if (i < MAX_RETRIES - 1) {
                     const delay = BASE_DELAY_MS * Math.pow(2, i); // Exponential backoff
                     await new Promise(resolve => setTimeout(resolve, delay));
                     continue;
                 }
-                logger.error(`Failed to fetch RSS feed from ${url} after ${MAX_RETRIES} attempts: ${response.status} ${response.statusText}`, null, { url, status: response.status, statusText: response.statusText });
+                logger.error(`Error fetching RSS feed from ${url} after ${MAX_RETRIES} attempts: ${err.message}`, err, { url, errorName: err.name, errorMessage: err.message });
                 errorUrlCache.set(url, Date.now() + ERROR_SKIP_DURATION_MS); // エラーURLをキャッシュ
                 return null;
             }
-            return await response.text();
-        } catch (error: unknown) {
-            const err = error instanceof Error ? error : new Error(String(error));
-            logger.warn(`Error fetching RSS feed from ${url}: ${err.message}. Attempt ${i + 1}/${MAX_RETRIES}.`, err, { url, attempt: i + 1, errorName: err.name, errorMessage: err.message });
-            if (i < MAX_RETRIES - 1) {
-                const delay = BASE_DELAY_MS * Math.pow(2, i); // Exponential backoff
-                await new Promise(resolve => setTimeout(resolve, delay));
-                continue;
-            }
-            logger.error(`Error fetching RSS feed from ${url} after ${MAX_RETRIES} attempts: ${err.message}`, err, { url, errorName: err.name, errorMessage: err.message });
-            errorUrlCache.set(url, Date.now() + ERROR_SKIP_DURATION_MS); // エラーURLをキャッシュ
+        } catch (outerError: unknown) { // 外側のcatchブロック (これは通常到達しないはずですが、念のため)
+            const err = outerError instanceof Error ? outerError : new Error(String(outerError));
+            logger.error(`Unexpected outer error in fetchRSSFeed for ${url}: ${err.message}`, err, { url, errorName: err.name, errorMessage: err.message });
+            errorUrlCache.set(url, Date.now() + ERROR_SKIP_DURATION_MS);
             return null;
         }
     }
-    return null; // Should not be reached
+    return null; // すべてのリトライが失敗した場合
 }
 
 async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
