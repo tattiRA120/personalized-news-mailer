@@ -60,8 +60,19 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
             const { success, error, meta } = await stmt.bind(...bindParams).run() as D1Result;
 
             if (success) {
-                savedCount += meta?.changes || 0;
-                logger.info(`Successfully inserted/updated ${meta?.changes || 0} articles in D1 batch.`, { changes: meta?.changes || 0 });
+                const changes = meta?.changes || 0;
+                const skippedCount = chunk.length - changes;
+                savedCount += changes;
+                logger.info(`Successfully inserted/updated ${changes} articles in D1 batch. Skipped ${skippedCount} existing articles.`, { changes, skippedCount });
+                if (skippedCount > 0) {
+                    const skippedArticleTitles = chunk.filter((_, index) => {
+                        // 挿入されなかった記事を特定するためのロジックはD1のメタデータからは直接得られないため、
+                        // ここでは単純に挿入されなかった記事の数をログに記録するに留める。
+                        // より詳細なログが必要な場合は、事前にSELECTで存在チェックを行う必要があるが、パフォーマンスへの影響が大きい。
+                        return true; // 全ての記事がスキップされた可能性を考慮
+                    }).map(article => article.title);
+                    logger.warn(`Skipped ${skippedCount} articles in D1 batch due to existing article_id or url.`, { skippedCount, skippedArticleTitles: skippedArticleTitles.slice(0, 5) });
+                }
             } else {
                 logger.error(`Failed to save articles to D1 in batch: ${error}`, null, { error });
             }

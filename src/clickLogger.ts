@@ -311,26 +311,47 @@ export class ClickLogger extends DurableObject {
     }
 
     async alarm() {
+        // This alarm is triggered periodically to save dirty models to R2, process unclicked articles, and update models from feedback.
         try {
-            // This alarm is triggered periodically to save dirty models to R2, process unclicked articles, and update models from feedback.
             if (this.dirty) {
                 this.logger.info('Alarm triggered. Saving dirty models to R2.');
                 await this.saveModelsToR2();
             } else {
                 this.logger.debug('Alarm triggered, but no changes to save.');
             }
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logger.error('Error saving dirty models in ClickLogger alarm method:', err, {
+                errorName: err.name,
+                errorMessage: err.message,
+                errorStack: err.stack,
+                context: 'saveModelsToR2',
+            });
+        }
 
+        try {
             // Process unclicked articles
             await this.processUnclickedArticles();
+        } catch (error: unknown) {
+            const err = this.normalizeError(error);
+            this.logger.error('Error processing unclicked articles in ClickLogger alarm method:', err, {
+                errorName: err.name,
+                errorMessage: err.message,
+                errorStack: err.stack,
+                context: 'processUnclickedArticles',
+            });
+        }
 
+        try {
             // Process pending feedback and update models
             await this.processPendingFeedback();
         } catch (error: unknown) {
             const err = this.normalizeError(error);
-            this.logger.error('Error in ClickLogger alarm method:', err, {
+            this.logger.error('Error processing pending feedback in ClickLogger alarm method:', err, {
                 errorName: err.name,
                 errorMessage: err.message,
                 errorStack: err.stack,
+                context: 'processPendingFeedback',
             });
         }
     }
@@ -508,13 +529,14 @@ export class ClickLogger extends DurableObject {
                         // embeddingが見つからない場合でも、エラーをログに記録し、200 OKを返すことで、
                         // クライアント側でフィードバック処理がブロックされるのを防ぎます。
                         // ただし、バンディットモデルの更新はスキップされます。
-                        this.logger.error(`Failed to find embedding for article ${articleId} for user ${userId}. Cannot update bandit model.`, null, {
+                        this.logger.error(`Failed to find embedding for article ${articleId} for user ${userId}. Cannot update bandit model.`, undefined, {
                             userId,
                             articleId,
                             sentArticlesExists: !!sentArticleResult,
                             articlesExists: !!originalArticle,
                             embeddingExists: !!originalArticle?.embedding,
-                            publishedAtExists: !!originalArticle?.published_at
+                            publishedAtExists: !!originalArticle?.published_at,
+                            timestamp: new Date().toISOString()
                         });
                         return new Response('Feedback logged (embedding not found, model not updated)', { status: 200 });
                     }

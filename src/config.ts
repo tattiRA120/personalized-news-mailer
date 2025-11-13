@@ -18,7 +18,7 @@ export const NEWS_RSS_URLS: string[] = [
     // ブログ系
     'https://zenn.dev/feed', // Zenn(エンジニア系)
     'https://qiita.com/popular-items/feed.atom', // Qiita(エンジニア系)
-    'https://gazlog.jp/feed/', // ギャズログ｜GAZLOG(PCパーツ:リーク系)
+    // 'https://gazlog.jp/feed/', // ギャズログ｜GAZLOG(PCパーツ:リーク系) - 526エラーが継続するため一時的に無効化
     'https://northwood.blog.fc2.com/?xml', // 北森瓦版(PCパーツ:リーク系)
 ];
 

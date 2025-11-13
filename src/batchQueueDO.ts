@@ -23,6 +23,13 @@ interface BatchJobInfo {
   userId?: string;
 }
 
+interface PendingCallback {
+  embeddings: { articleId: string; embedding: number[]; }[];
+  userId?: string;
+  retryCount: number;
+  timestamp: number; // コールバックがペンディングされた時刻
+}
+
 interface BatchResultItem {
     id?: string; // リクエストID
     custom_id: string; // JSON.stringify({ articleId: article.articleId }) された文字列
@@ -70,6 +77,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
       // DOが初期化される際に、未処理のチャンクがあれば処理を開始
       const storedChunks = await this.state.storage.get<BatchChunk[]>("chunks") || [];
       const storedBatchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
+      const storedPendingCallbacks = await this.state.storage.get<PendingCallback[]>("pendingCallbacks") || [];
 
       if (storedChunks.length > 0) {
         this.logger.debug("BatchQueueDO initialized with pending chunks. Resuming chunk processing.");
@@ -85,6 +93,15 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
           await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
           await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
           this.logger.debug("Set initial alarm for batch job polling during DO initialization.");
+        }
+      }
+      if (storedPendingCallbacks.length > 0) {
+        this.logger.debug("BatchQueueDO initialized with pending callbacks. Resuming callback processing.");
+        // アラームが設定されていない場合は設定
+        if (!await this.state.storage.getAlarm()) {
+          const now = Date.now();
+          await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
+          this.logger.debug("Set initial alarm for pending callback processing during DO initialization.");
         }
       }
     });
@@ -152,11 +169,52 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
   }
 
   async alarm() {
-    this.logger.debug("BatchQueueDO: Alarm triggered. Checking batch job statuses.");
+    this.logger.debug("BatchQueueDO: Alarm triggered. Checking batch job statuses and pending callbacks.");
     let batchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
+    let pendingCallbacks = await this.state.storage.get<PendingCallback[]>("pendingCallbacks") || [];
+
     const completedJobs: BatchJobInfo[] = [];
     const failedJobs: BatchJobInfo[] = [];
-    const pendingJobs: BatchJobInfo[] = [];
+    const pendingBatchJobs: BatchJobInfo[] = []; // 名前を変更して区別しやすくする
+    const pendingCallbacksToProcess: PendingCallback[] = []; // 処理中のコールバック
+
+    // まず、ペンディング中のコールバックを処理
+    if (pendingCallbacks.length > 0) {
+        this.logger.debug(`Processing ${pendingCallbacks.length} pending callbacks.`);
+        const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+        const clickLogger = this.env.CLICK_LOGGER.get(clickLoggerId);
+        const MAX_CALLBACK_RETRIES = 5;
+        const INITIAL_RETRY_DELAY_MS = 1000; // 1秒
+
+        for (const callback of pendingCallbacks) {
+            try {
+                const response = await clickLogger.fetch(
+                    new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ embeddings: callback.embeddings, userId: callback.userId }),
+                    })
+                );
+                if (!response.ok) {
+                    throw new Error(`Callback failed with status ${response.status}: ${response.statusText}`);
+                }
+                this.logger.debug(`Successfully re-sent pending callback for user ${callback.userId || 'N/A'}.`);
+            } catch (e: unknown) {
+                callback.retryCount++;
+                if (callback.retryCount <= MAX_CALLBACK_RETRIES) {
+                    const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, callback.retryCount - 1) + Math.random() * 1000; // 指数バックオフ + ジッター
+                    this.logger.warn(`Retrying pending callback for user ${callback.userId || 'N/A'}, attempt ${callback.retryCount}/${MAX_CALLBACK_RETRIES}. Delaying for ${delay}ms.`, e, { userId: callback.userId, retryCount: callback.retryCount });
+                    pendingCallbacksToProcess.push(callback); // リトライのためにキューに戻す
+                } else {
+                    const err = e instanceof Error ? e : new Error(String(e));
+                    this.logger.error(`Max retries exceeded for pending callback for user ${callback.userId || 'N/A'}. Skipping.`, err, { userId: callback.userId, errorName: err.name, errorMessage: err.message });
+                }
+            }
+        }
+        await this.state.storage.put("pendingCallbacks", pendingCallbacksToProcess); // 処理後のペンディングコールバックを保存
+    }
+    
+    // バッチジョブの処理
 
     const pollingStartTime = await this.state.storage.get<number>("pollingStartTime");
     let currentPollingInterval = await this.state.storage.get<number>("currentPollingInterval") || 60 * 1000; // デフォルト1分
@@ -191,7 +249,7 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
             jobInfo.retryCount = (jobInfo.retryCount || 0) + 1;
             const MAX_POLLING_RETRIES = 5;
             if (jobInfo.retryCount <= MAX_POLLING_RETRIES) {
-                pendingJobs.push(jobInfo);
+                pendingBatchJobs.push(jobInfo);
             } else {
                 this.logger.error(`Max polling retries exceeded for batch job ${jobInfo.batchId} due to null response. Skipping.`, new Error('Null status response'), { jobId: jobInfo.batchId });
                 failedJobs.push(jobInfo);
@@ -291,8 +349,21 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
                                 errorMessage: err.message,
                                 errorStack: err.stack,
                             });
-                            // リトライ後も失敗した場合は、このジョブは失敗として扱い、再試行しない
-                            failedJobs.push(jobInfo);
+                            // リトライ後も失敗した場合は、このジョブは失敗として扱い、ペンディングコールバックとして保存
+                            this.logger.warn(`Failed to send embedding completion callback to ClickLogger after ${MAX_CALLBACK_RETRIES} retries for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}). Saving as pending callback.`, err, {
+                                jobId: jobInfo.batchId,
+                                errorName: err.name,
+                                errorMessage: err.message,
+                                errorStack: err.stack,
+                            });
+                            const currentPendingCallbacks = await this.state.storage.get<PendingCallback[]>("pendingCallbacks") || [];
+                            currentPendingCallbacks.push({
+                                embeddings: embeddingsToUpdate,
+                                userId: jobInfo.userId,
+                                retryCount: 0, // 新しいペンディングコールバックなのでリトライカウントは0から
+                                timestamp: Date.now(),
+                            });
+                            await this.state.storage.put("pendingCallbacks", currentPendingCallbacks);
                         }
                     })());
 
@@ -311,14 +382,14 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
           failedJobs.push(jobInfo);
         } else {
           // pending, in_progress, finalizing など
-          pendingJobs.push(jobInfo);
+          pendingBatchJobs.push(jobInfo);
         }
       } catch (error) {
         jobInfo.retryCount = (jobInfo.retryCount || 0) + 1;
         const MAX_POLLING_RETRIES = 5; // ポーリングのリトライ回数
         if (jobInfo.retryCount <= MAX_POLLING_RETRIES) {
           this.logger.warn(`Error checking status for batch job ${jobInfo.batchId}. Retrying (${jobInfo.retryCount}/${MAX_POLLING_RETRIES}).`, { error: error, jobId: jobInfo.batchId });
-          pendingJobs.push(jobInfo); // リトライのためにキューに戻す
+          pendingBatchJobs.push(jobInfo); // リトライのためにキューに戻す
         } else {
           this.logger.error(`Max polling retries exceeded for batch job ${jobInfo.batchId}. Skipping.`, error, { jobId: jobInfo.batchId });
           failedJobs.push(jobInfo); // 失敗として扱う
@@ -327,14 +398,15 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     }
 
     // 完了または失敗したジョブをストレージから削除し、保留中のジョブを保存
-    await this.state.storage.put("batchJobs", pendingJobs);
+    await this.state.storage.put("batchJobs", pendingBatchJobs);
 
-    if (pendingJobs.length > 0) {
+    // ペンディング中のバッチジョブまたはコールバックがある場合のみアラームを設定
+    if (pendingBatchJobs.length > 0 || pendingCallbacksToProcess.length > 0) {
       // 未処理のジョブが残っている場合、次のアラームを設定
       await this.state.storage.setAlarm(Date.now() + currentPollingInterval); // 計算された間隔でアラームを設定
-      this.logger.debug(`Set next alarm for batch job polling in ${currentPollingInterval / 1000 / 60} minutes. Remaining jobs: ${pendingJobs.length}`);
+      this.logger.debug(`Set next alarm for batch job polling in ${currentPollingInterval / 1000 / 60} minutes. Remaining batch jobs: ${pendingBatchJobs.length}, pending callbacks: ${pendingCallbacksToProcess.length}`);
     } else {
-      this.logger.debug("All batch jobs processed. No more alarms scheduled for polling.");
+      this.logger.debug("All batch jobs and pending callbacks processed. No more alarms scheduled for polling.");
       // 全てのジョブが完了したら、ポーリング開始時刻と間隔をリセット
       await this.state.storage.delete("pollingStartTime");
       await this.state.storage.delete("currentPollingInterval");
@@ -466,5 +538,16 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     });
     const batchResult = await env.DB.batch(batch);
     this.logger.debug(`D1 batch update result for job:`, { batchResult });
+
+    // 更新された行数をチェックし、更新されなかった記事があればエラーログを出力
+    for (let i = 0; i < batchResult.length; i++) {
+        const result = batchResult[i];
+        const articleId = records[i].articleId;
+        if (result.success && result.meta?.changes === 0) {
+            this.logger.error(`Failed to update embedding for article ${articleId} in D1: Article not found or no changes made.`, null, { articleId });
+        } else if (!result.success) {
+            this.logger.error(`Failed to update embedding for article ${articleId} in D1: ${result.error}`, null, { articleId, error: result.error });
+        }
+    }
   }
 }
