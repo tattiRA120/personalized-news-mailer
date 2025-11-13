@@ -365,7 +365,7 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                     sourceName = 'TECHNO–EDGE';
                 } else if (sourceName.includes('gdm.or.jp')) {
                     sourceName = 'エルミタージュ秋葉原';
-                } else if (sourceName.includes('gazlog.jp')) {
+                } else if (sourceName.includes('gazlog.com')) {
                     sourceName = 'ギャズログ';
                 } else if (sourceName.includes('northwood.blog.fc2.com')) {
                     sourceName = '北森瓦版';
