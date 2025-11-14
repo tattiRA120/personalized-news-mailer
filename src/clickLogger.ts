@@ -429,8 +429,13 @@ export class ClickLogger extends DurableObject {
         }
 
         if (request.method === 'POST' && path === '/log-click') {
+            let userId: string | undefined;
+            let articleId: string | undefined;
             try {
-                const { userId, articleId, timestamp } = await request.json() as LogClickRequestBody;
+                const requestBody = await request.json() as LogClickRequestBody;
+                userId = requestBody.userId;
+                articleId = requestBody.articleId;
+                const timestamp = requestBody.timestamp;
 
                 if (!userId || !articleId || timestamp === undefined) {
                     this.logger.warn('Log click failed: Missing userId, articleId, or timestamp.');
@@ -446,6 +451,10 @@ export class ClickLogger extends DurableObject {
 
             } catch (error: unknown) {
                 const err = this.normalizeError(error);
+                if (err.message.includes('FOREIGN KEY constraint failed')) {
+                    this.logger.warn(`Ignoring click log due to foreign key constraint failure (user_id: ${userId}, article_id: ${articleId}). Article or user may have been deleted.`, { userId, articleId, errorName: err.name, errorMessage: err.message });
+                    return new Response('Click ignored due to missing foreign key', { status: 200 });
+                }
                 this.logger.error('Error logging click:', err, {
                     requestUrl: request.url,
                     errorName: err.name,

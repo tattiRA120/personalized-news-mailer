@@ -1,7 +1,7 @@
 import { NEWS_RSS_URLS, RSS_FETCH_CHUNK_SIZE } from './config';
 import { Logger } from './logger';
 import { XMLParser } from 'fast-xml-parser';
-import { cleanArticleText, generateContentHash } from './utils/textProcessor';
+import { cleanArticleText } from './utils/textProcessor';
 import { decodeHtmlEntities } from './utils/htmlDecoder';
 import { Env } from './index';
 
@@ -174,7 +174,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
 
                 const parsedTimestamp = new Date(pubDate).getTime();
                 articles.push({
-                    articleId: await generateContentHash(title),
+                    articleId: crypto.randomUUID(),
                     title: title,
                     link: articleLink,
                     sourceName: '',
@@ -237,7 +237,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
 
                 const parsedTimestamp = new Date(pubDate).getTime();
                 articles.push({
-                    articleId: await generateContentHash(cleanedTitle),
+                    articleId: crypto.randomUUID(),
                     title: cleanedTitle,
                     link: articleLink,
                     sourceName: '',
@@ -295,7 +295,7 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
 
                 const parsedTimestamp = new Date(pubDate).getTime();
                 articles.push({
-                    articleId: await generateContentHash(cleanedTitle),
+                    articleId: crypto.randomUUID(),
                     title: cleanedTitle,
                     link: articleLink,
                     sourceName: '',

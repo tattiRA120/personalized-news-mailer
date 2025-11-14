@@ -38,10 +38,16 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
 
         for (const chunk of articleChunks) {
             const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(','); // articleId, title, url, publishedAt, content, embedding
-            // ON CONFLICT(article_id) DO NOTHING: article_idが重複する場合は挿入を無視
             // ON CONFLICT(url) DO UPDATE SET ...: URLが重複する場合、title, published_at, contentを更新。
             // contentが変更された場合、embeddingをNULLにリセットして再生成を促す。
-            const query = `INSERT OR IGNORE INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders}`;
+            const query = `
+                INSERT INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders}
+                ON CONFLICT(url) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    published_at = EXCLUDED.published_at,
+                    content = EXCLUDED.content,
+                    embedding = CASE WHEN articles.content != EXCLUDED.content THEN NULL ELSE articles.embedding END
+            `;
             const stmt = env.DB.prepare(query);
 
             const bindParams: (string | number | null)[] = [];
@@ -52,7 +58,7 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
                     article.link,
                     isNaN(article.publishedAt) ? Date.now() : article.publishedAt, // publishedAtがNaNの場合は現在時刻をセット
                     article.content || '', // contentがundefinedの場合は空文字列
-                    null // 新しい記事のembeddingはNULLに設定
+                    null // 新しい記事のembeddingはNULLに設定 (新規挿入時)
                 );
             }
 
