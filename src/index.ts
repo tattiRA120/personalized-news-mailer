@@ -9,7 +9,7 @@ import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding, getUserCTR }
 import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
 import { decodeHtmlEntities } from './utils/htmlDecoder';
-import { selectDissimilarArticles, selectPersonalizedArticles } from './articleSelector';
+import { selectDissimilarArticles } from './articleSelector';
 import { OPENAI_EMBEDDING_DIMENSION } from './config';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
@@ -766,17 +766,34 @@ export default {
                         };
                     });
 
-                // selectPersonalizedArticlesを呼び出し
-                const selectedArticles = await selectPersonalizedArticles(
-                    articlesWithUpdatedFreshness,
-                    userProfileEmbeddingForSelection,
-                    clickLogger,
-                    userId,
-                    20, // 20件選択
-                    userCTR,
-                    lambda,
-                    env
-                );
+                // WASM DOを使用してパーソナライズド記事を選択
+                const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
+                const wasmDOStub = env.WASM_DO.get(wasmDOId);
+
+                const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/wasm-do/select-personalized-articles`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        articles: articlesWithUpdatedFreshness,
+                        userProfileEmbeddingForSelection: userProfileEmbeddingForSelection,
+                        userId: userId,
+                        count: 20, // 20件選択
+                        userCTR: userCTR,
+                        lambda: lambda,
+                        workerBaseUrl: env.WORKER_BASE_URL,
+                    }),
+                }));
+
+                let selectedArticles: NewsArticle[] = [];
+                if (response.ok) {
+                    selectedArticles = await response.json();
+                    logger.debug(`Selected ${selectedArticles.length} personalized articles for user ${userId} via WASM DO.`, { userId, selectedCount: selectedArticles.length });
+                } else {
+                    const errorText = await response.text();
+                    logger.error(`Failed to select personalized articles for user ${userId} via WASM DO: ${response.statusText}. Error: ${errorText}`, null, { userId, status: response.status, statusText: response.statusText });
+                    // エラー時は空の配列を使用
+                    selectedArticles = [];
+                }
 
                 logger.debug(`Selected ${selectedArticles.length} personalized articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
 

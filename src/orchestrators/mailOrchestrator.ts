@@ -3,7 +3,6 @@ import { collectNews, NewsArticle } from '../newsCollector';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs, getUserCTR } from '../services/d1Service';
 import { getAllUserIds, getUserProfile, getMMRLambda } from '../userProfile';
-import { selectPersonalizedArticles, cosineSimilarityBulk } from '../articleSelector';
 import { generateNewsEmail, sendNewsEmail } from '../emailGenerator';
 import { ClickLogger } from '../clickLogger';
 import { getSentArticlesForUser } from '../services/d1Service';
@@ -177,100 +176,13 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                             };
                         });
 
-                    // UCB計算の負荷を軽減しつつ、より多くの記事を対象とするため、記事候補を戦略的にサンプリング
-                    // --- Strategic Sampling for Article Candidates ---
-                    const EXPLOITATION_COUNT = 150;
-                    const EXPLORATION_COUNT = 50;
-
-                    let articlesForSelection: NewsArticleWithEmbedding[] = [];
-
-                    // ユーザープロファイルの埋め込みベクトルが有効な場合のみ類似度計算を行う
-                    if (userProfileEmbeddingForSelection.length === EXTENDED_EMBEDDING_DIMENSION && userProfileEmbeddingForSelection.some(val => val !== 0)) {
-                        // NOTE: 類似度計算には鮮度情報を含まない元の埋め込みベクトルを使用
-                        const userProfileOriginalEmbedding = userProfileEmbeddingForSelection.slice(0, OPENAI_EMBEDDING_DIMENSION);
-                        const articlesToCompare = articlesWithUpdatedFreshness
-                            .filter(article => article.embedding && article.embedding.length === EXTENDED_EMBEDDING_DIMENSION);
-
-                        const vec1s: number[][] = [];
-                        const vec2s: number[][] = [];
-                        articlesToCompare.forEach(article => {
-                            vec1s.push(userProfileOriginalEmbedding);
-                            vec2s.push(article.embedding!.slice(0, OPENAI_EMBEDDING_DIMENSION));
-                        });
-
-                        const similarities = vec1s.length > 0
-                            ? await cosineSimilarityBulk(vec1s, vec2s, logger, env)
-                            : [];
-
-                        const articlesWithSimilarity = articlesToCompare.map((article, index) => ({
-                            ...article,
-                            similarity: similarities[index] || 0,
-                        }));
-
-                        // Exploitation: 類似度に基づいて上位N件の記事を取得し、さらに公開日でソート
-                        const exploitationArticles = articlesWithSimilarity
-                            .sort((a, b) => b.similarity - a.similarity) // 類似度で降順
-                            .slice(0, EXPLOITATION_COUNT)
-                            .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0)); // 公開日で降順 (新しい記事を優先)
-                        
-                        const exploitationArticleIds = new Set(exploitationArticles.map(a => a.articleId));
-
-                        // Exploration: Exploitationで選ばれなかった記事の中から、公開日でソートし、新しい記事を優先的にランダムサンプリング
-                        const remainingForExploration = articlesWithUpdatedFreshness
-                            .filter(a => !exploitationArticleIds.has(a.articleId))
-                            .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0)); // 公開日で降順 (新しい記事を優先)
-
-                        const explorationArticles: NewsArticleWithEmbedding[] = [];
-                        const explorationIndices = new Set<number>();
-
-                        // 重み付けランダムサンプリング (新しい記事ほど選ばれやすい)
-                        // remainingForExplorationはpublishedAtで降順ソートされているため、インデックスが小さいほど新しい記事
-                        const weights: number[] = [];
-                        let totalWeight = 0;
-                        for (let i = 0; i < remainingForExploration.length; i++) {
-                            // インデックスが小さいほど重みを大きくする (例: 0番目の記事が最も重い)
-                            const weight = remainingForExploration.length - i;
-                            weights.push(weight);
-                            totalWeight += weight;
-                        }
-
-                        while (explorationArticles.length < EXPLORATION_COUNT && explorationArticles.length < remainingForExploration.length) {
-                            let random = Math.random() * totalWeight;
-                            let selectedIndex = -1;
-
-                            for (let i = 0; i < remainingForExploration.length; i++) {
-                                if (random < weights[i]) {
-                                    selectedIndex = i;
-                                    break;
-                                }
-                                random -= weights[i];
-                            }
-
-                            if (selectedIndex !== -1 && !explorationIndices.has(selectedIndex)) {
-                                explorationArticles.push(remainingForExploration[selectedIndex]);
-                                explorationIndices.add(selectedIndex);
-                            }
-                        }
-                        
-                        articlesForSelection = [...exploitationArticles, ...explorationArticles];
-                        logger.debug(`Created a candidate pool of ${articlesForSelection.length} articles (${exploitationArticles.length} exploitation, ${explorationArticles.length} exploration).`, { userId });
-
-                    } else {
-                        // Fallback for users without an embedding profile: use the latest articles
-                        logger.warn(`User ${userId} has no embedding profile. Falling back to latest articles for selection.`, { userId });
-                        // プロファイルがない場合も、最新の記事を優先
-                        articlesForSelection = articlesWithUpdatedFreshness
-                            .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0)) // 公開日で降順
-                            .slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
-                    }
-
                     // --- Exclude already sent articles ---
                     const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
                     const sentArticles = await getSentArticlesForUser(env, userId, sevenDaysAgo);
                     const sentArticleIds = new Set(sentArticles.map(sa => sa.article_id));
-                    
-                    const filteredArticlesForSelection = articlesForSelection.filter(article => !sentArticleIds.has(article.articleId));
-                    logger.debug(`Filtered out ${articlesForSelection.length - filteredArticlesForSelection.length} already sent articles. Remaining candidates: ${filteredArticlesForSelection.length}.`, { userId, filteredCount: filteredArticlesForSelection.length });
+
+                    const filteredArticlesForSelection = articlesWithUpdatedFreshness.filter(article => !sentArticleIds.has(article.articleId));
+                    logger.debug(`Filtered out ${articlesWithUpdatedFreshness.length - filteredArticlesForSelection.length} already sent articles. Remaining candidates: ${filteredArticlesForSelection.length}.`, { userId, filteredCount: filteredArticlesForSelection.length });
 
                     if (filteredArticlesForSelection.length === 0) {
                         logger.debug('No articles remaining after filtering sent articles. Skipping email sending for this user.', { userId });
@@ -282,8 +194,35 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     logger.debug(`Using saved MMR lambda for user ${userId}: ${userMMRLambda}`, { userId, lambda: userMMRLambda });
 
                     logger.debug(`Selecting personalized articles for user ${userId} from ${filteredArticlesForSelection.length} candidates.`, { userId, candidateCount: filteredArticlesForSelection.length });
-                    const selectedArticles = await selectPersonalizedArticles(filteredArticlesForSelection, userProfileEmbeddingForSelection, clickLogger, userId, numberOfArticlesToSend, userCTR, userMMRLambda, env) as NewsArticleWithEmbedding[];
-                    logger.debug(`Selected ${selectedArticles.length} articles for user ${userId}.`, { userId, selectedCount: selectedArticles.length });
+
+                    // WASM DOを使用してパーソナライズド記事を選択
+                    const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
+                    const wasmDOStub = env.WASM_DO.get(wasmDOId);
+
+                    const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/wasm-do/select-personalized-articles`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            articles: filteredArticlesForSelection,
+                            userProfileEmbeddingForSelection: userProfileEmbeddingForSelection,
+                            userId: userId,
+                            count: numberOfArticlesToSend,
+                            userCTR: userCTR,
+                            lambda: userMMRLambda,
+                            workerBaseUrl: env.WORKER_BASE_URL,
+                        }),
+                    }));
+
+                    let selectedArticles: NewsArticleWithEmbedding[] = [];
+                    if (response.ok) {
+                        selectedArticles = await response.json();
+                        logger.debug(`Selected ${selectedArticles.length} articles for user ${userId} via WASM DO.`, { userId, selectedCount: selectedArticles.length });
+                    } else {
+                        const errorText = await response.text();
+                        logger.error(`Failed to select personalized articles for user ${userId} via WASM DO: ${response.statusText}. Error: ${errorText}`, null, { userId, status: response.status, statusText: response.statusText });
+                        // エラー時は空の配列を使用
+                        selectedArticles = [];
+                    }
 
                     if (selectedArticles.length === 0) {
                         logger.debug('No articles selected. Skipping email sending for this user.', { userId });
