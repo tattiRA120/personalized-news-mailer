@@ -74,8 +74,8 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
         const scheduledHourUTC = scheduledTime.getUTCHours();
 
-        // UTC 13時 (日本時間 22時) のCronトリガーでのみ埋め込みバッチジョブを作成
-        if (scheduledHourUTC === 13) {
+        // UTC 13時 (日本時間 22時) または UTC 21時 (日本時間 6時) のCronトリガーでのみ埋め込みバッチジョブを作成
+        if (scheduledHourUTC === 13 || scheduledHourUTC === 21) {
             logger.debug('Starting embedding generation for articles missing embeddings in D1.');
             const articlesMissingEmbedding = await getArticlesFromD1(env, 1000, 0, "embedding IS NULL") as NewsArticleWithEmbedding[];
             logger.debug(`Found ${articlesMissingEmbedding.length} articles missing embeddings in D1.`, { count: articlesMissingEmbedding.length });
