@@ -205,21 +205,50 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                         const articlesWithSimilarity = articlesToCompare.map((article, index) => ({
                             ...article,
                             similarity: similarities[index] || 0,
-                        })).sort((a, b) => b.similarity - a.similarity);
+                        }));
 
-                        // Exploitation: 類似度に基づいて上位N件の記事を取得
-                        const exploitationArticles = articlesWithSimilarity.slice(0, EXPLOITATION_COUNT);
+                        // Exploitation: 類似度に基づいて上位N件の記事を取得し、さらに公開日でソート
+                        const exploitationArticles = articlesWithSimilarity
+                            .sort((a, b) => b.similarity - a.similarity) // 類似度で降順
+                            .slice(0, EXPLOITATION_COUNT)
+                            .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0)); // 公開日で降順 (新しい記事を優先)
+                        
                         const exploitationArticleIds = new Set(exploitationArticles.map(a => a.articleId));
 
-                        // Exploration: Get random M articles from the rest
-                        const remainingForExploration = articlesWithUpdatedFreshness.filter(a => !exploitationArticleIds.has(a.articleId));
+                        // Exploration: Exploitationで選ばれなかった記事の中から、公開日でソートし、新しい記事を優先的にランダムサンプリング
+                        const remainingForExploration = articlesWithUpdatedFreshness
+                            .filter(a => !exploitationArticleIds.has(a.articleId))
+                            .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0)); // 公開日で降順 (新しい記事を優先)
+
                         const explorationArticles: NewsArticleWithEmbedding[] = [];
                         const explorationIndices = new Set<number>();
+
+                        // 重み付けランダムサンプリング (新しい記事ほど選ばれやすい)
+                        // remainingForExplorationはpublishedAtで降順ソートされているため、インデックスが小さいほど新しい記事
+                        const weights: number[] = [];
+                        let totalWeight = 0;
+                        for (let i = 0; i < remainingForExploration.length; i++) {
+                            // インデックスが小さいほど重みを大きくする (例: 0番目の記事が最も重い)
+                            const weight = remainingForExploration.length - i;
+                            weights.push(weight);
+                            totalWeight += weight;
+                        }
+
                         while (explorationArticles.length < EXPLORATION_COUNT && explorationArticles.length < remainingForExploration.length) {
-                            const randomIndex = Math.floor(Math.random() * remainingForExploration.length);
-                            if (!explorationIndices.has(randomIndex)) {
-                                explorationArticles.push(remainingForExploration[randomIndex]);
-                                explorationIndices.add(randomIndex);
+                            let random = Math.random() * totalWeight;
+                            let selectedIndex = -1;
+
+                            for (let i = 0; i < remainingForExploration.length; i++) {
+                                if (random < weights[i]) {
+                                    selectedIndex = i;
+                                    break;
+                                }
+                                random -= weights[i];
+                            }
+
+                            if (selectedIndex !== -1 && !explorationIndices.has(selectedIndex)) {
+                                explorationArticles.push(remainingForExploration[selectedIndex]);
+                                explorationIndices.add(selectedIndex);
                             }
                         }
                         
@@ -229,7 +258,10 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     } else {
                         // Fallback for users without an embedding profile: use the latest articles
                         logger.warn(`User ${userId} has no embedding profile. Falling back to latest articles for selection.`, { userId });
-                        articlesForSelection = articlesWithUpdatedFreshness.slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
+                        // プロファイルがない場合も、最新の記事を優先
+                        articlesForSelection = articlesWithUpdatedFreshness
+                            .sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0)) // 公開日で降順
+                            .slice(0, EXPLOITATION_COUNT + EXPLORATION_COUNT);
                     }
 
                     // --- Exclude already sent articles ---
