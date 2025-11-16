@@ -200,39 +200,38 @@ export async function updateArticleEmbeddingInD1(articleId: string, embedding: n
 /**
  * D1データベースから古い記事を削除します。
  * @param env 環境変数
- * @param cutoffTimestamp 削除する記事のpublished_atがこのタイムスタンプより古いもの
- * @param embeddingIsNull embeddingがNULLの記事のみを対象とするか
+ * @param articleIdsToKeep 削除せずに残す記事のIDの配列
  * @returns 削除された記事の数
  */
-export async function deleteOldArticlesFromD1(env: Env, cutoffTimestamp: number, embeddingIsNull: boolean = false, deleteInvalidDates: boolean = false): Promise<number> {
+export async function deleteOldArticlesFromD1(env: Env, articleIdsToKeep: string[]): Promise<number> {
     const logger = new Logger(env);
-    logger.info(`Deleting old articles from D1 older than ${new Date(cutoffTimestamp).toISOString()}. Embedding IS NULL: ${embeddingIsNull}. Delete invalid dates: ${deleteInvalidDates}`);
+    logger.info(`Starting D1 article cleanup. Articles to keep: ${articleIdsToKeep.length} IDs.`);
     try {
-        let selectQuery = `SELECT article_id FROM articles WHERE published_at < ?`;
-        if (embeddingIsNull) {
-            selectQuery += ` AND embedding IS NULL`;
-        }
-        
-        let bindValue = cutoffTimestamp;
+        // データベース上のすべての記事IDを取得
+        const { results: allArticles } = await env.DB.prepare(`SELECT article_id FROM articles`).all<{ article_id: string }>();
+        const allArticleIds = new Set(allArticles.map(article => article.article_id));
+        logger.debug(`Found ${allArticleIds.size} total articles in D1.`);
 
-        if (deleteInvalidDates) {
-            // published_atが0以下、または現在から1日以上未来の日付を不正とみなす
-            selectQuery = `SELECT article_id FROM articles WHERE published_at <= 0 OR published_at > ?`;
-            bindValue = Date.now() + (24 * 60 * 60 * 1000); // 現在から1日後を上限とする
-        }
-        
-        const { results: articlesToDelete } = await env.DB.prepare(selectQuery).bind(bindValue).all<{ article_id: string }>();
-        const articleIds = articlesToDelete.map(article => article.article_id);
+        // 残す記事IDのセットを作成
+        const keepArticleIdsSet = new Set(articleIdsToKeep);
 
-        if (articleIds.length === 0) {
-            logger.info('No old articles found to delete from D1. Skipping cleanup.', { cutoffTimestamp, embeddingIsNull, deleteInvalidDates });
+        // 削除対象の記事IDを特定
+        const articleIdsToDelete: string[] = [];
+        for (const articleId of allArticleIds) {
+            if (!keepArticleIdsSet.has(articleId)) {
+                articleIdsToDelete.push(articleId);
+            }
+        }
+
+        if (articleIdsToDelete.length === 0) {
+            logger.info('No articles found to delete from D1. All articles are either to be kept or the database is empty. Skipping cleanup.');
             return 0;
         }
 
-        logger.info(`Found ${articleIds.length} old articles to delete. Proceeding with cascading deletion.`, { count: articleIds.length });
+        logger.info(`Found ${articleIdsToDelete.length} articles to delete. Proceeding with cascading deletion.`, { count: articleIdsToDelete.length });
 
         const CHUNK_SIZE_SQL_VARIABLES = 50;
-        const articleIdChunks = chunkArray(articleIds, CHUNK_SIZE_SQL_VARIABLES);
+        const articleIdChunks = chunkArray(articleIdsToDelete, CHUNK_SIZE_SQL_VARIABLES);
         let totalDeleted = 0;
 
         // 関連テーブルからレコードを削除
