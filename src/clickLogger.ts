@@ -254,25 +254,25 @@ export class ClickLogger extends DurableObject {
 
             lambda = Math.max(0.3, Math.min(0.9, baseLambda)); // 0.3-0.9の範囲に制限
 
-            this.logger.debug(`Optimized MMR lambda for user ${userId} (not interested reduction): ${lambda.toFixed(3)}`, {
+            this.logger.info(`Calculated MMR lambda for user ${userId} (optimized): ${lambda.toFixed(3)}`, {
                 userId,
                 lambda,
-                userCTR,
-                interestRatio,
-                notInterestRatio,
-                recentNotInterestRatio,
-                totalCount,
-                baseLambda: baseLambda.toFixed(3)
+                userCTR: userCTR.toFixed(4),
+                interestRatio: interestRatio.toFixed(4),
+                notInterestRatio: notInterestRatio.toFixed(4),
+                recentNotInterestRatio: recentNotInterestRatio.toFixed(4),
+                totalFeedbackCount: totalCount,
+                baseLambdaBeforeClamping: baseLambda.toFixed(3)
             });
 
         } else {
             // フィードバックがない場合はCTRに基づいて調整（少し類似性を高めに）
             lambda = 0.5 + (userCTR * 0.2); // CTRに応じて0.5-0.7の範囲
 
-            this.logger.debug(`Initial MMR lambda for user ${userId}: ${lambda.toFixed(3)} (based on CTR: ${userCTR})`, {
+            this.logger.info(`Calculated MMR lambda for user ${userId} (initial, based on CTR): ${lambda.toFixed(3)}`, {
                 userId,
                 lambda,
-                userCTR
+                userCTR: userCTR.toFixed(4)
             });
         }
 
