@@ -89,6 +89,45 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
         // UTC 23時 (日本時間 8時) のCronトリガー、またはテスト実行の場合にメール送信と関連動作を実行
         if (isTestRun || scheduledHourUTC === 23) {
+
+            // --- 1. Clean up old articles in D1 ---
+            logger.debug('Starting D1 article cleanup...');
+            try {
+                const now = Date.now();
+
+                // 残す記事のIDを収集
+                const articleIdsToKeep = new Set<string>();
+
+                // 1. 過去7日間にユーザーに送信された記事
+                const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
+                const allSentArticles = await env.DB.prepare(`SELECT DISTINCT article_id FROM sent_articles WHERE timestamp >= ?`).bind(sevenDaysAgo).all<{ article_id: string }>();
+                allSentArticles.results?.forEach(row => articleIdsToKeep.add(row.article_id));
+                logger.debug(`Keeping ${allSentArticles.results?.length || 0} articles sent in the last 7 days.`);
+
+                // 2. 過去30日間にユーザーがクリックした記事
+                const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
+                const allClickedArticles = await env.DB.prepare(`SELECT DISTINCT article_id FROM click_logs WHERE timestamp >= ?`).bind(thirtyDaysAgo).all<{ article_id: string }>();
+                allClickedArticles.results?.forEach(row => articleIdsToKeep.add(row.article_id));
+                logger.debug(`Keeping ${allClickedArticles.results?.length || 0} articles clicked in the last 30 days.`);
+
+                // 3. 過去24時間以内に収集された新しい記事 (embeddingがまだ生成されていない可能性のあるものも含む)
+                const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
+                const recentlyCollectedArticles = await env.DB.prepare(`SELECT DISTINCT article_id FROM articles WHERE published_at >= ?`).bind(twentyFourHoursAgo).all<{ article_id: string }>();
+                recentlyCollectedArticles.results?.forEach(row => articleIdsToKeep.add(row.article_id));
+                logger.debug(`Keeping ${recentlyCollectedArticles.results?.length || 0} articles collected in the last 24 hours.`);
+
+                // 4. embeddingがまだ生成されていない記事 (published_atに関わらず)
+                const articlesMissingEmbedding = await env.DB.prepare(`SELECT DISTINCT article_id FROM articles WHERE embedding IS NULL`).all<{ article_id: string }>();
+                articlesMissingEmbedding.results?.forEach(row => articleIdsToKeep.add(row.article_id));
+                logger.debug(`Keeping ${articlesMissingEmbedding.results?.length || 0} articles missing embeddings.`);
+
+                // 最終的な残す記事のIDリストを渡してクリーンアップを実行
+                await deleteOldArticlesFromD1(env, Array.from(articleIdsToKeep));
+
+            } catch (cleanupError) {
+                logger.error('Error during D1 article cleanup:', cleanupError);
+            }
+
             // --- Fetch articles from D1 ---
             logger.debug('Fetching articles from D1 for email sending (only articles with embeddings).');
             const articlesWithEmbeddings = await getArticlesFromD1(env, 1000) as NewsArticleWithEmbedding[]; // d1ServiceのgetArticlesFromD1を使用
@@ -334,44 +373,6 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     logger.error(`Error processing user ${userId}:`, userProcessError, { userId });
                 }
             } // End of user loop
-
-            // --- 8. Clean up old articles in D1 ---
-            logger.debug('Starting D1 article cleanup...');
-            try {
-                const now = Date.now();
-
-                // 残す記事のIDを収集
-                const articleIdsToKeep = new Set<string>();
-
-                // 1. 過去7日間にユーザーに送信された記事
-                const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
-                const allSentArticles = await env.DB.prepare(`SELECT DISTINCT article_id FROM sent_articles WHERE timestamp >= ?`).bind(sevenDaysAgo).all<{ article_id: string }>();
-                allSentArticles.results?.forEach(row => articleIdsToKeep.add(row.article_id));
-                logger.debug(`Keeping ${allSentArticles.results?.length || 0} articles sent in the last 7 days.`);
-
-                // 2. 過去30日間にユーザーがクリックした記事
-                const thirtyDaysAgo = now - (30 * 24 * 60 * 60 * 1000);
-                const allClickedArticles = await env.DB.prepare(`SELECT DISTINCT article_id FROM click_logs WHERE timestamp >= ?`).bind(thirtyDaysAgo).all<{ article_id: string }>();
-                allClickedArticles.results?.forEach(row => articleIdsToKeep.add(row.article_id));
-                logger.debug(`Keeping ${allClickedArticles.results?.length || 0} articles clicked in the last 30 days.`);
-
-                // 3. 過去24時間以内に収集された新しい記事 (embeddingがまだ生成されていない可能性のあるものも含む)
-                const twentyFourHoursAgo = now - (24 * 60 * 60 * 1000);
-                const recentlyCollectedArticles = await env.DB.prepare(`SELECT DISTINCT article_id FROM articles WHERE published_at >= ?`).bind(twentyFourHoursAgo).all<{ article_id: string }>();
-                recentlyCollectedArticles.results?.forEach(row => articleIdsToKeep.add(row.article_id));
-                logger.debug(`Keeping ${recentlyCollectedArticles.results?.length || 0} articles collected in the last 24 hours.`);
-
-                // 4. embeddingがまだ生成されていない記事 (published_atに関わらず)
-                const articlesMissingEmbedding = await env.DB.prepare(`SELECT DISTINCT article_id FROM articles WHERE embedding IS NULL`).all<{ article_id: string }>();
-                articlesMissingEmbedding.results?.forEach(row => articleIdsToKeep.add(row.article_id));
-                logger.debug(`Keeping ${articlesMissingEmbedding.results?.length || 0} articles missing embeddings.`);
-
-                // 最終的な残す記事のIDリストを渡してクリーンアップを実行
-                await deleteOldArticlesFromD1(env, Array.from(articleIdsToKeep));
-
-            } catch (cleanupError) {
-                logger.error('Error during D1 article cleanup:', cleanupError);
-            }
         }
 
         logger.debug('Mail delivery orchestration finished.');
