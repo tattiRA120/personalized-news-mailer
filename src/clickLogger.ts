@@ -188,6 +188,7 @@ export class ClickLogger extends DurableObject {
         let lambda = 0.5; // デフォルト値
 
         if (feedbackLogs.results && feedbackLogs.results.length > 0) {
+            this.logger.info(`Calculating optimized MMR lambda with ${feedbackLogs.results.length} feedback entries.`, { userId, feedbackCount: feedbackLogs.results.length });
             // 詳細なフィードバック分析
             const interestedCount = feedbackLogs.results.filter(log => log.action === 'interested').length;
             const notInterestedCount = feedbackLogs.results.filter(log => log.action === 'not_interested').length;
@@ -266,6 +267,11 @@ export class ClickLogger extends DurableObject {
             });
 
         } else {
+            this.logger.info(`No feedback logs found for user ${userId} or feedbackLogs.results is empty. Calculating initial MMR lambda based on CTR.`, {
+                userId,
+                feedbackLogsResultsExists: !!feedbackLogs.results,
+                feedbackLogsLength: feedbackLogs.results?.length ?? 0
+            });
             // フィードバックがない場合はCTRに基づいて調整（少し類似性を高めに）
             lambda = 0.5 + (userCTR * 0.2); // CTRに応じて0.5-0.7の範囲
 
@@ -1172,7 +1178,9 @@ export class ClickLogger extends DurableObject {
         this.logger.debug('Starting to process pending feedback.');
         try {
             // Get all user IDs that have feedback logs
-            const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM education_logs`).all<{ user_id: string }>();
+            const { results: distinctUsersWithFeedback } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM education_logs`).all<{ user_id: string }>();
+            this.logger.info(`Found ${distinctUsersWithFeedback.length} distinct users with feedback logs.`, { distinctUsersWithFeedbackCount: distinctUsersWithFeedback.length });
+
             // すべてのユーザーの最近のフィードバックログを一度に取得
             const BATCH_SIZE = 50; // D1のSQL変数制限を考慮してバッチサイズを調整
             const allFeedbackLogs = await this.env.DB.prepare(
@@ -1180,9 +1188,10 @@ export class ClickLogger extends DurableObject {
             ).all<{ user_id: string, article_id: string, action: string, timestamp: number }>();
 
             if (!allFeedbackLogs.results || allFeedbackLogs.results.length === 0) {
-                this.logger.debug('No feedback logs found for any user.');
+                this.logger.info('No feedback logs found in the database for any user.');
                 return;
             }
+            this.logger.info(`Fetched ${allFeedbackLogs.results.length} feedback logs from the database.`, { totalFeedbackLogsFetched: allFeedbackLogs.results.length });
 
             // ユーザーIDごとにフィードバックログをグループ化
             const feedbackLogsByUser = new Map<string, { article_id: string, action: string, timestamp: number }[]>();
