@@ -91,4 +91,58 @@ export class Logger {
         };
         console.log(JSON.stringify(logEntry));
     }
+
+    /**
+     * Logs batch processing operations efficiently.
+     * Only logs start, end summary, and errors at appropriate levels.
+     * Individual item successes are logged at debug level.
+     */
+    public async logBatchProcess<T, R = void>(
+        operationName: string,
+        items: T[],
+        processItem: (item: T, index: number) => Promise<R>,
+        options?: {
+            batchSize?: number;
+            onItemSuccess?: (item: T, index: number, result?: R) => void;
+            onItemError?: (item: T, index: number, error: any) => void;
+        }
+    ): Promise<{ successCount: number; errorCount: number; results: R[] }> {
+        const totalItems = items.length;
+        this.info(`Starting ${operationName} for ${totalItems} items`);
+
+        let successCount = 0;
+        let errorCount = 0;
+        const errors: Array<{ item: T; index: number; error: any }> = [];
+        const results: R[] = [];
+
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            try {
+                const result = await processItem(item, i);
+                results.push(result);
+                successCount++;
+                if (options?.onItemSuccess) {
+                    this.debug(`${operationName} succeeded for item ${i + 1}/${totalItems}`, { item, result });
+                }
+            } catch (error) {
+                errorCount++;
+                errors.push({ item, index: i, error });
+                results.push(undefined as R); // エラーの場合は undefined を追加
+                if (options?.onItemError) {
+                    this.error(`${operationName} failed for item ${i + 1}/${totalItems}`, error, { item });
+                }
+            }
+        }
+
+        if (errorCount === 0) {
+            this.info(`Completed ${operationName}. Success: ${successCount}/${totalItems}`);
+        } else {
+            this.warn(`Completed ${operationName}. Success: ${successCount}/${totalItems}, Errors: ${errorCount}/${totalItems}`);
+            if (errors.length > 0 && this.shouldLog(LogLevel.DEBUG)) {
+                this.debug(`${operationName} error details`, { errors });
+            }
+        }
+
+        return { successCount, errorCount, results };
+    }
 }

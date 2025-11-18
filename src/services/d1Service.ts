@@ -36,53 +36,60 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
         const CHUNK_SIZE_SQL_VARIABLES = 10; // SQLiteの変数制限を考慮してチャンクサイズを設定
         const articleChunks = chunkArray(articles, CHUNK_SIZE_SQL_VARIABLES); // 記事の配列をチャンクに分割
 
-        for (const chunk of articleChunks) {
-            const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(','); // articleId, title, url, publishedAt, content, embedding
-            // ON CONFLICT(url) DO UPDATE SET ...: URLが重複する場合、title, published_at, contentを更新。
-            // contentが変更された場合、embeddingをNULLにリセットして再生成を促す。
-            const query = `
-                INSERT INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders}
-                ON CONFLICT(url) DO UPDATE SET
-                    title = EXCLUDED.title,
-                    published_at = EXCLUDED.published_at,
-                    content = EXCLUDED.content,
-                    embedding = CASE WHEN articles.content != EXCLUDED.content THEN NULL ELSE articles.embedding END
-            `;
-            const stmt = env.DB.prepare(query);
+        const result = await logger.logBatchProcess(
+            'D1 article batch insert',
+            articleChunks,
+            async (chunk: NewsArticle[], chunkIndex: number) => {
+                const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(','); // articleId, title, url, publishedAt, content, embedding
+                // ON CONFLICT(url) DO UPDATE SET ...: URLが重複する場合、title, published_at, contentを更新。
+                // contentが変更された場合、embeddingをNULLにリセットして再生成を促す。
+                const query = `
+                    INSERT INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders}
+                    ON CONFLICT(url) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        published_at = EXCLUDED.published_at,
+                        content = EXCLUDED.content,
+                        embedding = CASE WHEN articles.content != EXCLUDED.content THEN NULL ELSE articles.embedding END
+                `;
+                const stmt = env.DB.prepare(query);
 
-            const bindParams: (string | number | null)[] = [];
-            for (const article of chunk) {
-                bindParams.push(
-                    article.articleId,
-                    article.title,
-                    article.link,
-                    isNaN(article.publishedAt) ? Date.now() : article.publishedAt, // publishedAtがNaNの場合は現在時刻をセット
-                    article.content || '', // contentがundefinedの場合は空文字列
-                    null // 新しい記事のembeddingはNULLに設定 (新規挿入時)
-                );
-            }
-
-            logger.info(`Executing D1 batch insert for ${chunk.length} articles.`, { query, chunkCount: chunk.length });
-            const { success, error, meta } = await stmt.bind(...bindParams).run() as D1Result;
-
-            if (success) {
-                const changes = meta?.changes || 0;
-                const skippedCount = chunk.length - changes;
-                savedCount += changes;
-                logger.info(`Successfully inserted/updated ${changes} articles in D1 batch. Skipped ${skippedCount} existing articles.`, { changes, skippedCount });
-                if (skippedCount > 0) {
-                    const skippedArticleTitles = chunk.filter((_, index) => {
-                        // 挿入されなかった記事を特定するためのロジックはD1のメタデータからは直接得られないため、
-                        // ここでは単純に挿入されなかった記事の数をログに記録するに留める。
-                        // より詳細なログが必要な場合は、事前にSELECTで存在チェックを行う必要があるが、パフォーマンスへの影響が大きい。
-                        return true; // 全ての記事がスキップされた可能性を考慮
-                    }).map(article => article.title);
-                    logger.warn(`Skipped ${skippedCount} articles in D1 batch due to existing article_id or url.`, { skippedCount, skippedArticleTitles: skippedArticleTitles.slice(0, 5) });
+                const bindParams: (string | number | null)[] = [];
+                for (const article of chunk) {
+                    bindParams.push(
+                        article.articleId,
+                        article.title,
+                        article.link,
+                        isNaN(article.publishedAt) ? Date.now() : article.publishedAt, // publishedAtがNaNの場合は現在時刻をセット
+                        article.content || '', // contentがundefinedの場合は空文字列
+                        null // 新しい記事のembeddingはNULLに設定 (新規挿入時)
+                    );
                 }
-            } else {
-                logger.error(`Failed to save articles to D1 in batch: ${error}`, null, { error });
+
+                const { success, error, meta } = await stmt.bind(...bindParams).run() as D1Result;
+
+                if (success) {
+                    const changes = meta?.changes || 0;
+                    const skippedCount = chunk.length - changes;
+                    savedCount += changes;
+
+                    if (skippedCount > 0) {
+                        logger.warn(`Skipped ${skippedCount} articles in D1 batch due to existing article_id or url.`, { skippedCount, chunkIndex });
+                    }
+                } else {
+                    throw new Error(`Failed to save articles to D1 in batch: ${error}`);
+                }
+            },
+            {
+                onItemSuccess: (chunk: NewsArticle[], chunkIndex: number) => {
+                    // 個々のチャンクの成功はdebugレベルでログ
+                    logger.debug(`Successfully processed article chunk ${chunkIndex + 1}`, { chunkSize: chunk.length });
+                },
+                onItemError: (chunk: NewsArticle[], chunkIndex: number, error: any) => {
+                    // エラーはlogBatchProcess内で処理されるため、ここでは何もしない
+                }
             }
-        }
+        );
+
         logger.info(`Finished saving articles to D1. Total saved: ${savedCount}.`, { totalSaved: savedCount });
         return savedCount;
     } catch (error) {

@@ -168,7 +168,7 @@ export class ClickLogger extends DurableObject {
             const emailToUpdate = currentUserProfile?.email || ''; // 既存のemailを使用、なければ空文字列
 
             await updateUserProfile({ userId: userId, email: emailToUpdate, embedding: normalizedEmbedding }, this.env);
-            this.logger.info(`Successfully updated user profile embedding in D1 for user: ${userId}`);
+            this.logger.debug(`Successfully updated user profile embedding in D1 for user: ${userId}`);
         } catch (error: unknown) {
             const err = this.normalizeError(error);
             this.logger.error('Error updating user profile embedding in D1:', err, { userId, errorName: err.name, errorMessage: err.message });
@@ -1085,7 +1085,6 @@ export class ClickLogger extends DurableObject {
 
     // Process unclicked articles and update bandit models
     private async processUnclickedArticles(): Promise<void> {
-        this.logger.debug('Starting to process unclicked articles.');
         try {
             // Get all user IDs that have sent articles
             const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM sent_articles`).all<{ user_id: string }>();
@@ -1113,56 +1112,69 @@ export class ClickLogger extends DurableObject {
                 articlesByUser.get(article.user_id)?.push(article);
             }
 
-            this.logger.debug(`Found ${articlesByUser.size} users with unclicked articles to process.`, { userCount: articlesByUser.size });
+            // ユーザーごとの処理をバッチ処理として実行
+            const userIds = Array.from(articlesByUser.keys());
+            const result = await this.logger.logBatchProcess(
+                'unclicked articles processing',
+                userIds,
+                async (userId: string) => {
+                    const unclickedArticlesForUser = articlesByUser.get(userId) || [];
 
-            const now = Date.now();
-            for (const [userId, unclickedArticlesForUser] of articlesByUser.entries()) {
-                this.logger.debug(`Processing unclicked articles for user: ${userId}`, { userId, articleCount: unclickedArticlesForUser.length });
+                    let banditModel = this.inMemoryModels.get(userId);
+                    if (!banditModel) {
+                        this.logger.warn(`No bandit model found for user ${userId} during unclicked article processing. Initializing a new one.`);
+                        banditModel = this.initializeNewBanditModel(userId);
+                    }
 
-                let banditModel = this.inMemoryModels.get(userId);
-                if (!banditModel) {
-                    this.logger.warn(`No bandit model found for user ${userId} during unclicked article processing. Initializing a new one.`);
-                    banditModel = this.initializeNewBanditModel(userId);
-                }
+                    const now = Date.now();
+                    let updatedCount = 0;
+                    for (const article of unclickedArticlesForUser) {
+                        if (article.embedding && article.published_at) {
+                            const originalEmbedding = JSON.parse(article.embedding) as number[];
+                            let embeddingToUse = originalEmbedding;
+                            const publishedDate = new Date(article.published_at);
+                            let normalizedAge = 0;
 
-                let updatedCount = 0;
-                for (const article of unclickedArticlesForUser) {
-                    if (article.embedding && article.published_at) {
-                        const originalEmbedding = JSON.parse(article.embedding) as number[];
-                        let embeddingToUse = originalEmbedding;
-                        const publishedDate = new Date(article.published_at);
-                        let normalizedAge = 0;
+                            if (isNaN(publishedDate.getTime())) {
+                                this.logger.warn(`Invalid publishedAt date for article ${article.article_id} from sent_articles during unclicked article processing. Using default freshness (0).`, { userId, articleId: article.article_id, publishedAt: article.published_at });
+                                normalizedAge = 0;
+                            } else {
+                                const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
+                                normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            }
 
-                        if (isNaN(publishedDate.getTime())) {
-                            this.logger.warn(`Invalid publishedAt date for article ${article.article_id} from sent_articles during unclicked article processing. Using default freshness (0).`, { userId, articleId: article.article_id, publishedAt: article.published_at });
-                            normalizedAge = 0;
+                            // embeddingの次元をチェックし、必要に応じて鮮度情報を追加または更新
+                            if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
+                                embeddingToUse = [...originalEmbedding, normalizedAge];
+                            } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
+                                embeddingToUse = [...originalEmbedding];
+                                embeddingToUse[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
+                            } else {
+                                this.logger.warn(`Article ${article.article_id} from sent_articles has unexpected embedding dimension ${originalEmbedding.length} during unclicked article processing. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: article.article_id, embeddingLength: originalEmbedding.length });
+                                continue;
+                            }
+
+                            // クリックされなかった記事には負の報酬を与える (例: -0.1)
+                            await this.updateBanditModel(banditModel, embeddingToUse, -0.1, userId);
+                            this.dirty = true;
+                            updatedCount++;
                         } else {
-                            const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
-                            normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
+                            this.logger.warn(`Article ${article.article_id} from sent_articles missing embedding or published_at. Skipping update.`, { userId, articleId: article.article_id, hasEmbedding: !!article.embedding, hasPublishedAt: !!article.published_at });
                         }
+                    }
 
-                        // embeddingの次元をチェックし、必要に応じて鮮度情報を追加または更新
-                        if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
-                            embeddingToUse = [...originalEmbedding, normalizedAge];
-                        } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
-                            embeddingToUse = [...originalEmbedding];
-                            embeddingToUse[OPENAI_EMBEDDING_DIMENSION] = normalizedAge;
-                        } else {
-                            this.logger.warn(`Article ${article.article_id} from sent_articles has unexpected embedding dimension ${originalEmbedding.length} during unclicked article processing. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping update.`, { userId, articleId: article.article_id, embeddingLength: originalEmbedding.length });
-                            continue;
-                        }
-
-                        // クリックされなかった記事には負の報酬を与える (例: -0.1)
-                        await this.updateBanditModel(banditModel, embeddingToUse, -0.1, userId);
-                        this.dirty = true;
-                        updatedCount++;
-                    } else {
-                        this.logger.warn(`Article ${article.article_id} from sent_articles missing embedding or published_at. Skipping update.`, { userId, articleId: article.article_id, hasEmbedding: !!article.embedding, hasPublishedAt: !!article.published_at });
+                    return updatedCount; // 処理した記事数を返す
+                },
+                {
+                    onItemSuccess: (userId: string, index: number, result?: number) => {
+                        // 個々のユーザーの成功はdebugレベルでログ
+                        this.logger.debug(`Successfully processed unclicked articles for user ${userId}: ${result} articles updated`);
+                    },
+                    onItemError: (userId: string, index: number, error: any) => {
+                        // エラーはlogBatchProcess内で処理されるため、ここでは何もしない
                     }
                 }
-                this.logger.debug(`Updated bandit model for user ${userId} with -0.1 reward for ${updatedCount} unclicked articles.`, { userId, updatedCount });
-            }
-            this.logger.debug('Finished processing unclicked articles.');
+            );
         } catch (error: unknown) {
             const err = this.normalizeError(error);
             this.logger.error('Error processing unclicked articles:', err, {
