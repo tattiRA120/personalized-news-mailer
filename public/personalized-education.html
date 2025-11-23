@@ -46,7 +46,8 @@
 
         /* New Discoveries Specific Styles */
         .new-article-card {
-            background-color: #fff; /* Changed to match container bg or slightly different? style.css uses #f9f9f9 for article-item */
+            background-color: #fff;
+            /* Changed to match container bg or slightly different? style.css uses #f9f9f9 for article-item */
             border: 1px solid #ddd;
             border-radius: 5px;
             padding: 15px;
@@ -55,9 +56,9 @@
             flex-direction: column;
             gap: 10px;
         }
-        
+
         /* Reuse .article-item style from style.css for consistency if possible, but new discoveries has different layout */
-        
+
         .new-article-header {
             display: flex;
             justify-content: space-between;
@@ -65,10 +66,12 @@
         }
 
         .new-article-title {
-            font-size: 1.17em; /* Match h3 size roughly */
+            font-size: 1.17em;
+            /* Match h3 size roughly */
             font-weight: bold;
             margin: 0;
-            color: #007bff; /* Match style.css h3 color */
+            color: #007bff;
+            /* Match style.css h3 color */
             text-decoration: none;
         }
 
@@ -116,14 +119,19 @@
             border-color: #bbdefb;
             color: #1565c0;
         }
-        
+
         /* Loading & No Articles */
-        .loading, .no-articles, .error {
+        .loading,
+        .no-articles,
+        .error {
             text-align: center;
             padding: 20px;
             color: #666;
         }
-        .error { color: #dc3545; }
+
+        .error {
+            color: #dc3545;
+        }
     </style>
 </head>
 
@@ -187,7 +195,8 @@
                         </div>
                     </div>
                     <div class="score-text" id="score-value"
-                        style="font-size: 24px; font-weight: bold; color: #495057; min-width: 60px; text-align: center;">--%
+                        style="font-size: 24px; font-weight: bold; color: #495057; min-width: 60px; text-align: center;">
+                        --%
                     </div>
                 </div>
                 <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">
@@ -197,6 +206,10 @@
             <div id="articles-list">
                 <div class="loading">記事を読み込んでいます...</div>
             </div>
+            <button id="submit-button" class="submit-button" disabled>
+                <span class="button-text">選択した記事を送信</span>
+                <div class="spinner"></div>
+            </button>
         </div>
 
         <!-- New Discoveries Tab -->

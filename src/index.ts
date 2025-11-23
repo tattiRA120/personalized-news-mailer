@@ -318,6 +318,40 @@ export default {
             }
         }
 
+        // --- Batch Feedback Handler ---
+        if (request.method === 'POST' && path === '/track-feedback-batch') {
+            try {
+                const { userId, feedbackData, immediateUpdate } = await request.json() as {
+                    userId: string,
+                    feedbackData: { articleId: string, feedback: 'interested' | 'not_interested' }[],
+                    immediateUpdate?: boolean
+                };
+
+                if (!userId || !Array.isArray(feedbackData)) {
+                    return new Response('Missing parameters', { status: 400 });
+                }
+
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+                // Process feedback in parallel
+                const promises = feedbackData.map(item => {
+                    const feedbackUrl = `${env.WORKER_BASE_URL}/log-feedback?userId=${userId}&articleId=${encodeURIComponent(item.articleId)}&feedback=${item.feedback}&immediateUpdate=${immediateUpdate ? 'true' : 'false'}`;
+                    return clickLogger.fetch(new Request(feedbackUrl, { method: 'GET' }));
+                });
+
+                await Promise.all(promises);
+
+                return new Response(JSON.stringify({ message: 'Batch feedback processed' }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200
+                });
+            } catch (error) {
+                logger.error('Error processing batch feedback:', error);
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
+
         // --- Submit Education Feedback Handler (New) ---
         if (request.method === 'POST' && path === '/submit-education-feedback') {
             logger.debug('Submit education feedback request received');

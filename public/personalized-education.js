@@ -15,7 +15,8 @@ const lambdaSlider = document.getElementById('lambda-slider');
 const lambdaValue = document.getElementById('lambda-value');
 const scoreValue = document.getElementById('score-value');
 const scoreFill = document.getElementById('score-fill');
-const submitNewFeedbackBtn = document.getElementById('submit-new-feedback');
+const submitButton = document.getElementById('submit-button'); // Recommended tab submit
+const submitNewFeedbackBtn = document.getElementById('submit-new-feedback'); // New Discoveries tab submit
 
 // Initialization
 document.addEventListener('DOMContentLoaded', async () => {
@@ -41,14 +42,14 @@ async function switchTab(tabName) {
         newDiscoveriesTabBtn.classList.add('active');
         recommendedTabContent.classList.remove('active');
         newDiscoveriesTabContent.classList.add('active');
-        
+
         if (newArticles.length === 0) {
             await fetchNewArticles();
         }
     }
 }
 
-// --- Recommended Tab Logic (Existing) ---
+// --- Recommended Tab Logic ---
 
 if (lambdaSlider) {
     lambdaSlider.addEventListener('input', (e) => {
@@ -57,14 +58,12 @@ if (lambdaSlider) {
     });
 
     lambdaSlider.addEventListener('change', async () => {
-        // Update backend with new lambda
         try {
             await fetch('/api/calculate-mmr-lambda', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, immediate: true }) 
+                body: JSON.stringify({ userId, immediate: true })
             });
-            // Re-fetch articles with new lambda
             await fetchPersonalizedArticles();
         } catch (error) {
             console.error('Error updating lambda:', error);
@@ -80,8 +79,7 @@ async function fetchMMRSettings() {
             lambda = data.lambda;
             if (lambdaSlider) lambdaSlider.value = lambda;
             if (lambdaValue) lambdaValue.textContent = lambda;
-            
-            // Update progress bar if it exists (from original HTML structure)
+
             const mmrSettingsDiv = document.getElementById('mmr-settings');
             const progressFill = mmrSettingsDiv.querySelector('.progress-fill');
             if (progressFill) {
@@ -109,13 +107,12 @@ function updateScoreDisplay(score) {
     if (scoreValue) scoreValue.textContent = Math.round(score);
     if (scoreFill) {
         scoreFill.style.width = `${score}%`;
-        // Color coding based on score
         if (score < 30) {
-            scoreFill.style.backgroundColor = '#ff4d4d'; // Red
+            scoreFill.style.backgroundColor = '#ff4d4d';
         } else if (score < 70) {
-            scoreFill.style.backgroundColor = '#ffa600'; // Orange
+            scoreFill.style.backgroundColor = '#ffa600';
         } else {
-            scoreFill.style.backgroundColor = '#4caf50'; // Green
+            scoreFill.style.backgroundColor = '#4caf50';
         }
     }
 }
@@ -140,103 +137,167 @@ function renderArticles() {
     }
 
     articles.forEach(article => {
-        // Use structure matching style.css
-        const articleItem = document.createElement('div');
-        articleItem.className = 'article-item';
-        articleItem.dataset.articleId = article.articleId;
-
-        const articleMainContent = document.createElement('div');
-        articleMainContent.className = 'article-main-content';
-
-        const articleContent = document.createElement('div');
-        articleContent.className = 'article-content';
-
-        const title = document.createElement('h3');
-        const link = document.createElement('a');
-        link.href = article.link;
-        link.target = '_blank';
-        link.textContent = article.title;
-        link.style.textDecoration = 'none';
-        link.style.color = 'inherit';
-        title.appendChild(link);
-
-        const summary = document.createElement('p');
-        summary.textContent = article.summary || '要約はありません。';
-        
-        const meta = document.createElement('p');
-        meta.style.fontSize = '0.8em';
-        meta.style.color = '#888';
-        meta.style.marginTop = '5px';
-        const date = new Date(article.publishedAt);
-        const dateStr = !isNaN(date.getTime()) ? date.toLocaleDateString() : '';
-        meta.textContent = `${article.sourceName || ''} ${dateStr}`;
-
-        articleContent.appendChild(title);
-        articleContent.appendChild(summary);
-        articleContent.appendChild(meta);
-        articleMainContent.appendChild(articleContent);
-
-        const interestSelection = document.createElement('div');
-        interestSelection.className = 'interest-selection';
-
-        // Interested Button
-        const interestedLabel = document.createElement('label');
-        interestedLabel.className = 'radio-label interested-label';
-        interestedLabel.innerHTML = `
-            <input type="radio" name="interest-${article.articleId}" value="interested" onchange="handleInterestChange('${article.articleId}', 'interested')">
-            <span>興味あり</span>
-        `;
-
-        // Not Interested Button
-        const notInterestedLabel = document.createElement('label');
-        notInterestedLabel.className = 'radio-label not-interested-label';
-        notInterestedLabel.innerHTML = `
-            <input type="radio" name="interest-${article.articleId}" value="not_interested" onchange="handleInterestChange('${article.articleId}', 'not_interested')">
-            <span>興味なし</span>
-        `;
-
-        interestSelection.appendChild(interestedLabel);
-        interestSelection.appendChild(notInterestedLabel);
-
-        articleItem.appendChild(articleMainContent);
-        articleItem.appendChild(interestSelection);
-
+        const articleItem = createArticleItem(article, 'recommended');
         articlesList.appendChild(articleItem);
+    });
+
+    // Reset submit button
+    submitButton.disabled = true;
+    const textSpan = submitButton.querySelector('.button-text');
+    if (textSpan) textSpan.textContent = '選択した記事を送信';
+}
+
+// Helper to create article item HTML (Unified UI)
+function createArticleItem(article, type) {
+    const articleItem = document.createElement('div');
+    articleItem.className = 'article-item';
+    articleItem.dataset.articleId = article.articleId;
+
+    const articleMainContent = document.createElement('div');
+    articleMainContent.className = 'article-main-content';
+
+    const articleContent = document.createElement('div');
+    articleContent.className = 'article-content';
+
+    const title = document.createElement('h3');
+    const link = document.createElement('a');
+    link.href = article.link;
+    link.target = '_blank';
+    link.textContent = article.title;
+    link.style.textDecoration = 'none';
+    link.style.color = 'inherit';
+    title.appendChild(link);
+
+    const summary = document.createElement('p');
+    summary.textContent = article.summary || '要約はありません。';
+
+    const meta = document.createElement('p');
+    meta.style.fontSize = '0.8em';
+    meta.style.color = '#888';
+    meta.style.marginTop = '5px';
+    const date = new Date(article.publishedAt);
+    const dateStr = !isNaN(date.getTime()) ? date.toLocaleDateString() : '';
+    meta.textContent = `${article.sourceName || ''} ${dateStr}`;
+
+    articleContent.appendChild(title);
+    articleContent.appendChild(summary);
+    articleContent.appendChild(meta);
+    articleMainContent.appendChild(articleContent);
+
+    const interestSelection = document.createElement('div');
+    interestSelection.className = 'interest-selection';
+
+    // Determine handler based on type
+    const handlerName = type === 'recommended' ? 'handleRecommendedChange' : 'handleNewDiscoveryChange';
+    const groupName = type === 'recommended' ? `rec-interest-${article.articleId}` : `new-interest-${article.articleId}`;
+
+    // Interested Button
+    const interestedLabel = document.createElement('label');
+    interestedLabel.className = 'radio-label interested-label';
+    interestedLabel.innerHTML = `
+        <input type="radio" name="${groupName}" value="interested" onchange="${handlerName}('${article.articleId}', 'interested')">
+        <span>興味あり</span>
+    `;
+
+    // Not Interested Button
+    const notInterestedLabel = document.createElement('label');
+    notInterestedLabel.className = 'radio-label not-interested-label';
+    notInterestedLabel.innerHTML = `
+        <input type="radio" name="${groupName}" value="not_interested" onchange="${handlerName}('${article.articleId}', 'not_interested')">
+        <span>興味なし</span>
+    `;
+
+    interestSelection.appendChild(interestedLabel);
+    interestSelection.appendChild(notInterestedLabel);
+
+    articleItem.appendChild(articleMainContent);
+    articleItem.appendChild(interestSelection);
+
+    return articleItem;
+}
+
+// Recommended Tab Handler (Batch)
+window.handleRecommendedChange = function (articleId, interest) {
+    // Just update UI visual state
+    const articleItem = document.querySelector(`#articles-list .article-item[data-article-id="${articleId}"]`);
+    updateRadioStyles(articleItem);
+
+    // Enable submit button
+    submitButton.disabled = false;
+};
+
+function updateRadioStyles(articleItem) {
+    const radios = articleItem.querySelectorAll('input[type="radio"]');
+    radios.forEach(radio => {
+        const label = radio.closest('.radio-label');
+        if (radio.checked) {
+            label.classList.remove('deselected');
+        } else {
+            label.classList.add('deselected');
+        }
     });
 }
 
-window.handleInterestChange = async function(articleId, interest) {
-    // Immediate feedback for Recommended tab
+// Submit Recommended Feedback (Batch)
+submitButton.addEventListener('click', async () => {
+    submitButton.classList.add('loading');
+    submitButton.disabled = true;
+
+    const feedbackPromises = [];
+    const selectedArticleIds = [];
+    const feedbackData = [];
+
+    articlesList.querySelectorAll('.article-item').forEach(articleItem => {
+        const articleId = articleItem.dataset.articleId;
+        const selectedInterest = articleItem.querySelector(`input[name="rec-interest-${articleId}"]:checked`);
+
+        if (selectedInterest) {
+            feedbackData.push({
+                articleId: articleId,
+                feedback: selectedInterest.value
+            });
+            if (selectedInterest.value === 'interested') {
+                selectedArticleIds.push(articleId);
+            }
+        }
+    });
+
+    if (feedbackData.length === 0) {
+        alert('記事を選択してください。');
+        submitButton.classList.remove('loading');
+        submitButton.disabled = false;
+        return;
+    }
+
     try {
-        const feedbackUrl = `/track-feedback?userId=${userId}&articleId=${encodeURIComponent(articleId)}&feedback=${interest}&immediateUpdate=true`;
-        await fetch(feedbackUrl, { method: 'GET' });
-        
-        // Visual feedback
-        const articleItem = document.querySelector(`.article-item[data-article-id="${articleId}"]`);
-        if (articleItem) {
-            articleItem.style.opacity = '0.5';
-            articleItem.style.pointerEvents = 'none';
-            
-            // Update radio button styles
-            const radios = articleItem.querySelectorAll('input[type="radio"]');
-            radios.forEach(radio => {
-                const label = radio.closest('.radio-label');
-                if (radio.checked) {
-                    label.classList.remove('deselected');
-                } else {
-                    label.classList.add('deselected');
-                }
+        // Send all feedback in a single batch request
+        await fetch('/track-feedback-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId, feedbackData, immediateUpdate: true })
+        });
+
+        // Update score
+        if (selectedArticleIds.length > 0) {
+            await fetch('/api/preference-score', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, selectedArticleIds })
             });
         }
-        
-        // Update score
-        await fetchPreferenceScore();
+
+        // Reload to refresh recommendations
+        window.location.reload();
     } catch (error) {
         console.error('Error submitting feedback:', error);
+        alert('送信に失敗しました。');
+        submitButton.classList.remove('loading');
+        submitButton.disabled = false;
     }
-};
+});
 
-// --- New Discoveries Tab Logic (New) ---
+
+// --- New Discoveries Tab Logic ---
 
 async function fetchNewArticles() {
     newArticlesList.innerHTML = '<div class="loading">新しい記事を読み込んでいます...</div>';
@@ -258,55 +319,18 @@ function renderNewArticles() {
     }
 
     newArticles.forEach(article => {
-        const card = document.createElement('div');
-        card.className = 'new-article-card';
-        card.dataset.articleId = article.articleId;
-        
-        const date = new Date(article.publishedAt);
-        const dateStr = !isNaN(date.getTime()) ? date.toLocaleDateString() : '';
-        
-        card.innerHTML = `
-            <div class="new-article-header">
-                <a href="${article.link}" target="_blank" class="new-article-title">${article.title}</a>
-            </div>
-            <p class="new-article-summary">${article.summary || '要約はありません。'}</p>
-            <div style="font-size: 0.8em; color: #888; margin-bottom: 10px;">${article.sourceName || ''} ${dateStr}</div>
-            <div class="feedback-actions">
-                <button class="feedback-btn interested" onclick="toggleNewFeedback('${article.articleId}', 'interested')">
-                    ❤️ 興味あり
-                </button>
-                <button class="feedback-btn not-interested" onclick="toggleNewFeedback('${article.articleId}', 'not_interested')">
-                    ❌ 興味なし
-                </button>
-            </div>
-        `;
-        newArticlesList.appendChild(card);
+        const articleItem = createArticleItem(article, 'new-discovery');
+        newArticlesList.appendChild(articleItem);
     });
     updateSubmitButtonState();
 }
 
-window.toggleNewFeedback = function (articleId, type) {
-    const currentFeedback = newArticlesFeedback.get(articleId);
-    const card = document.querySelector(`.new-article-card[data-article-id="${articleId}"]`);
-    const interestedBtn = card.querySelector('.feedback-btn.interested');
-    const notInterestedBtn = card.querySelector('.feedback-btn.not-interested');
+window.handleNewDiscoveryChange = function (articleId, interest) {
+    newArticlesFeedback.set(articleId, interest);
 
-    if (currentFeedback === type) {
-        // Toggle off
-        newArticlesFeedback.delete(articleId);
-        interestedBtn.classList.remove('active');
-        notInterestedBtn.classList.remove('active');
-    } else {
-        // Set new feedback
-        newArticlesFeedback.set(articleId, type);
-        if (type === 'interested') {
-            interestedBtn.classList.add('active');
-            notInterestedBtn.classList.remove('active');
-        } else {
-            interestedBtn.classList.remove('active');
-            notInterestedBtn.classList.add('active');
-        }
-    }
+    const articleItem = document.querySelector(`#new-articles-list .article-item[data-article-id="${articleId}"]`);
+    updateRadioStyles(articleItem);
+
     updateSubmitButtonState();
 };
 
@@ -314,7 +338,7 @@ function updateSubmitButtonState() {
     submitNewFeedbackBtn.disabled = newArticlesFeedback.size === 0;
     const count = newArticlesFeedback.size;
     const textSpan = submitNewFeedbackBtn.querySelector('.button-text');
-    textSpan.textContent = count > 0 ? `フィードバックを送信 (${count})` : 'フィードバックを送信';
+    if (textSpan) textSpan.textContent = count > 0 ? `フィードバックを送信 (${count})` : 'フィードバックを送信';
 }
 
 submitNewFeedbackBtn.addEventListener('click', async () => {
@@ -346,9 +370,8 @@ submitNewFeedbackBtn.addEventListener('click', async () => {
                 .filter(item => item.feedback === 'interested')
                 .map(item => item.article);
 
-            // Store in localStorage to pass to the next page
             localStorage.setItem('selectedArticles', JSON.stringify(interestedArticles));
-            
+
             window.location.href = `selected-articles.html?userId=${userId}`;
         } else {
             alert('フィードバックの送信に失敗しました。もう一度お試しください。');
