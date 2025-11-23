@@ -2,6 +2,7 @@ import { Env } from '../index';
 import { collectNews, NewsArticle } from '../newsCollector';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs, getUserCTR } from '../services/d1Service';
+import { collectAndSaveNews } from '../services/articleService';
 import { getAllUserIds, getUserProfile, getMMRLambda } from '../userProfile';
 import { generateNewsEmail, sendNewsEmail } from '../emailGenerator';
 import { ClickLogger } from '../clickLogger';
@@ -33,43 +34,14 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
     logger.debug('Mail delivery orchestration started', { scheduledTime: scheduledTime.toISOString(), isTestRun });
 
     try {
-        // --- 1. News Collection ---
-        logger.debug('Starting news collection...');
-        const articles = await collectNews(env);
-        logger.debug(`Collected ${articles.length} articles.`, { articleCount: articles.length });
+        // --- 1. News Collection and Save ---
+        logger.debug('Starting news collection and save...');
+        const articlesWithIds = await collectAndSaveNews(env);
+        logger.debug(`Collected and saved ${articlesWithIds.length} articles with persistent IDs.`, { articleCount: articlesWithIds.length });
 
-        if (articles.length === 0) {
+        if (articlesWithIds.length === 0) {
             logger.debug('No articles collected. Skipping further steps.');
             return;
-        }
-
-        // --- 1. 新規記事のみをD1に保存 ---
-        const articleIds = articles.map(a => a.articleId).filter(Boolean) as string[];
-        logger.debug(`Collected ${articleIds.length} article IDs from new articles.`, { count: articleIds.length });
-
-        let newArticles: NewsArticle[] = [];
-        if (articleIds.length > 0) {
-            const CHUNK_SIZE_SQL_VARIABLES = 50;
-            const articleIdChunks = chunkArray(articleIds, CHUNK_SIZE_SQL_VARIABLES);
-            const existingArticleIds = new Set<string>();
-
-            for (const chunk of articleIdChunks) {
-                const placeholders = chunk.map(() => '?').join(',');
-                const query = `SELECT article_id FROM articles WHERE article_id IN (${placeholders})`;
-                logger.debug(`Executing D1 query to find existing articles: ${query} with ${chunk.length} variables.`, { query, variableCount: chunk.length });
-                const stmt = env.DB.prepare(query);
-                const { results: existingRows } = await stmt.bind(...chunk).all<{ article_id: string }>();
-                existingRows.forEach(row => existingArticleIds.add(row.article_id));
-            }
-            logger.debug(`Found ${existingArticleIds.size} existing article IDs in D1.`, { count: existingArticleIds.size });
-
-            newArticles = articles.filter(article => article.articleId && !existingArticleIds.has(article.articleId));
-            logger.debug(`Filtered down to ${newArticles.length} new articles to be saved.`, { count: newArticles.length });
-
-            if (newArticles.length > 0) {
-                await saveArticlesToD1(newArticles, env); // d1ServiceのsaveArticlesToD1を使用
-                logger.debug(`Saved ${newArticles.length} new articles to D1.`, { count: newArticles.length });
-            }
         }
 
         const scheduledHourUTC = scheduledTime.getUTCHours();

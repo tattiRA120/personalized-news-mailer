@@ -1272,6 +1272,40 @@ export class ClickLogger extends DurableObject {
             }
             this.logger.debug(`Pre-fetched ${allEmbeddingsMap.size} article embeddings for feedback processing.`, { embeddingCount: allEmbeddingsMap.size });
 
+            // Identify articles missing embeddings and trigger batch generation
+            const articleIdsMissingEmbeddings = articleIdsArray.filter(id => !allEmbeddingsMap.has(id));
+            if (articleIdsMissingEmbeddings.length > 0) {
+                this.logger.info(`Found ${articleIdsMissingEmbeddings.length} articles missing embeddings. Triggering batch generation.`, { count: articleIdsMissingEmbeddings.length });
+
+                // Fetch article content for embedding generation
+                const { results: articlesForEmbedding } = await this.env.DB.prepare(
+                    `SELECT article_id, title, url, content, published_at FROM articles WHERE article_id IN (${articleIdsMissingEmbeddings.map(() => "?").join(",")})`
+                ).bind(...articleIdsMissingEmbeddings).all<any>();
+
+                if (articlesForEmbedding.length > 0) {
+                    const articlesToEmbed = articlesForEmbedding.map(row => ({
+                        articleId: row.article_id,
+                        title: row.title,
+                        link: row.url,
+                        sourceName: '',
+                        summary: row.content ? row.content.substring(0, Math.min(row.content.length, 200)) : '',
+                        content: row.content,
+                        publishedAt: row.published_at,
+                    }));
+
+                    // Trigger batch embedding generation (use first user's ID for the job)
+                    const firstUserId = feedbackLogsByUser.keys().next().value;
+                    if (firstUserId) {
+                        this.state.waitUntil(
+                            import('./services/embeddingService').then(({ generateAndSaveEmbeddings }) =>
+                                generateAndSaveEmbeddings(articlesToEmbed, this.env, firstUserId)
+                            )
+                        );
+                        this.logger.info(`Triggered batch embedding generation for ${articlesToEmbed.length} articles.`, { count: articlesToEmbed.length });
+                    }
+                }
+            }
+
             for (const [userId, feedbackLogsForUser] of feedbackLogsByUser.entries()) {
                 this.logger.debug(`Processing pending feedback for user: ${userId}`, { userId, feedbackCount: feedbackLogsForUser.length });
 
@@ -1321,19 +1355,20 @@ export class ClickLogger extends DurableObject {
                             await this.updateBanditModel(banditModel, embedding, reward, userId);
                             this.dirty = true;
                             updatedCount++;
+
+                            // Successfully processed, delete the log
+                            logStatements.push(
+                                this.env.DB.prepare(
+                                    `DELETE FROM education_logs WHERE user_id = ? AND article_id = ? AND timestamp = ?`
+                                ).bind(userId, log.article_id, log.timestamp)
+                            );
                         } else {
                             this.logger.warn(`Skipping feedback for article ${log.article_id} due to missing or mismatched embedding.`, { userId, articleId: log.article_id });
                         }
                     } else {
-                        this.logger.warn(`Skipping feedback for article ${log.article_id} due to missing embedding data.`, { userId, articleId: log.article_id });
+                        // No embedding available - keep the log for next processing cycle
+                        this.logger.debug(`Deferring feedback for article ${log.article_id} - embedding not yet available.`, { userId, articleId: log.article_id });
                     }
-
-                    // education_logs から処理済みのログを削除するためのステートメントを追加
-                    logStatements.push(
-                        this.env.DB.prepare(
-                            `DELETE FROM education_logs WHERE user_id = ? AND article_id = ? AND timestamp = ?`
-                        ).bind(userId, log.article_id, log.timestamp)
-                    );
 
                     // バッチサイズに達したら実行
                     if (logStatements.length >= BATCH_SIZE) {

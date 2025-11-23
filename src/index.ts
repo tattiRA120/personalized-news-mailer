@@ -6,6 +6,7 @@ import { Logger } from './logger';
 import { collectNews, NewsArticle } from './newsCollector';
 import { generateAndSaveEmbeddings } from './services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, ArticleWithEmbedding, getUserCTR } from './services/d1Service';
+import { collectAndSaveNews } from './services/articleService';
 import { orchestrateMailDelivery } from './orchestrators/mailOrchestrator';
 import { generateNewsEmail, sendNewsEmail } from './emailGenerator';
 import { decodeHtmlEntities } from './utils/htmlDecoder';
@@ -295,30 +296,31 @@ export default {
             logger.debug('Request received for articles for education');
             try {
                 const userId = url.searchParams.get('userId');
-                const articles: NewsArticle[] = await collectNews(env);
-                logger.debug(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
-                let availableArticles = articles;
+                // Use helper function to collect fresh articles and save to D1 with persistent IDs
+                let availableArticles = await collectAndSaveNews(env);
 
-                // If userId is provided, exclude articles already sent/seen
+                // Exclude articles already sent/seen by this user
                 if (userId) {
                     const sentArticles = await env.DB.prepare(
                         `SELECT article_id FROM sent_articles WHERE user_id = ?`
                     ).bind(userId).all<{ article_id: string }>();
 
                     const sentArticleIds = new Set(sentArticles.results.map(a => a.article_id));
-                    availableArticles = articles.filter(a => !sentArticleIds.has(a.articleId));
-                    logger.debug(`Filtered out ${articles.length - availableArticles.length} already sent articles for user ${userId}.`, { userId, remaining: availableArticles.length });
+                    const initialCount = availableArticles.length;
+                    availableArticles = availableArticles.filter(a => !sentArticleIds.has(a.articleId));
+                    logger.debug(`Filtered out ${initialCount - availableArticles.length} already sent articles for user ${userId}.`, { userId, remaining: availableArticles.length });
                 }
 
-                // 記事をシャッフルして30件に制限
+                // Shuffle and limit to 30
                 const shuffledArticles = availableArticles.sort(() => 0.5 - Math.random()).slice(0, 30);
 
-                const articlesForEducation = shuffledArticles.map((article: NewsArticle) => ({
+                const articlesForEducation = shuffledArticles.map((article) => ({
                     articleId: article.articleId,
                     title: article.title,
                     summary: article.summary,
                     link: article.link,
+                    sourceName: article.sourceName,
                 }));
 
                 return new Response(JSON.stringify(articlesForEducation), {
