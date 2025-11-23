@@ -587,29 +587,29 @@ export class ClickLogger extends DurableObject {
                 }
 
                 // 4. Log the feedback to education_logs table (for immediate training)
-                this.state.waitUntil(this.env.DB.prepare(
+                await this.env.DB.prepare(
                     `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
-                ).bind(userId, articleId, timestamp, feedback).run());
+                ).bind(userId, articleId, timestamp, feedback).run();
                 this.logger.info(`Logged feedback to education_logs for user ${userId}, article ${articleId}, feedback: ${feedback}`);
 
                 // 5. Record exposure in sent_articles (so it can be excluded later and counted for score)
                 // Use INSERT OR IGNORE to avoid errors if it was already sent/recorded
                 if (embedding) {
-                    this.state.waitUntil(this.env.DB.prepare(
+                    await this.env.DB.prepare(
                         `INSERT OR IGNORE INTO sent_articles (user_id, article_id, timestamp, embedding, published_at) VALUES (?, ?, ?, ?, ?)`
-                    ).bind(userId, articleId, timestamp, JSON.stringify(embedding), new Date().toISOString()).run()); // published_at is approximate here if not fetched, but acceptable for exclusion
+                    ).bind(userId, articleId, timestamp, JSON.stringify(embedding), new Date().toISOString()).run(); // published_at is approximate here if not fetched, but acceptable for exclusion
                 } else {
                     // Try to insert without embedding if we don't have it, just for ID exclusion
-                    this.state.waitUntil(this.env.DB.prepare(
+                    await this.env.DB.prepare(
                         `INSERT OR IGNORE INTO sent_articles (user_id, article_id, timestamp) VALUES (?, ?, ?)`
-                    ).bind(userId, articleId, timestamp).run());
+                    ).bind(userId, articleId, timestamp).run();
                 }
 
                 // 6. If interested, record as a click in click_logs (for score calculation)
                 if (feedback === 'interested') {
-                    this.state.waitUntil(this.env.DB.prepare(
+                    await this.env.DB.prepare(
                         `INSERT INTO click_logs (user_id, article_id, timestamp) VALUES (?, ?, ?)`
-                    ).bind(userId, articleId, timestamp).run());
+                    ).bind(userId, articleId, timestamp).run();
                     this.logger.info(`Logged interested feedback as click for user ${userId}, article ${articleId}`);
                 }
 
