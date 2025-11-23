@@ -125,7 +125,7 @@ export class ClickLogger extends DurableObject {
             });
         }
     }
-    
+
     // Initialize a new bandit model for a specific user.
     private initializeNewBanditModel(userId: string): BanditModelState {
         const dimension = EXTENDED_EMBEDDING_DIMENSION; // Dimension for text-embedding-3-small + 1 (freshness)
@@ -224,36 +224,37 @@ export class ClickLogger extends DurableObject {
             const ctrInfluence = userCTR * 0.2; // CTRが高いほど類似性を高く
             baseLambda += ctrInfluence;
 
-            // 興味なしの割合が高い場合にlambdaを高くする（類似性を重視）
-            if (notInterestRatio > 0.5) {
-                baseLambda += 0.2; // 興味なしが多い場合は強く類似性を高く
-            } else if (notInterestRatio > 0.3) {
-                baseLambda += 0.1; // 興味なしが少し多い場合は少し類似性を高く
+            // 興味なしの割合が高い場合のlambda調整
+            // 以前は興味なしが多いと強く類似性を高めていたが、好みが定まっていない段階で守りに入ると逆効果になるため緩和
+            if (notInterestRatio > 0.7) {
+                baseLambda += 0.1; // 興味なしが非常に多い場合は少し類似性を高くして安全策
+            } else if (notInterestRatio > 0.4) {
+                // 興味なしがある程度あっても、まだ探索が必要な段階かもしれないので、あまり上げすぎない
+                baseLambda += 0.05;
             }
 
-            // 興味ありの割合が高い場合でも適度に探索性を保つ
+            // 興味ありの割合が高い場合（好みがわかっている場合）は、活用（Exploitation）を促進するために類似性を高める
+            if (interestRatio > 0.6) {
+                baseLambda += 0.1; // 好みがわかってきたら類似性を高める
+            }
             if (interestRatio > 0.8) {
-                baseLambda -= 0.1; // 興味ありが多い場合は少し探索性を高く
+                baseLambda += 0.1; // 非常に好みが明確ならさらに高める
             }
 
             // 最近の興味なし傾向を考慮
-            if (recentNotInterestRatio > 0.4) {
-                baseLambda += 0.15; // 最近興味なしが多い場合は類似性を高く
+            if (recentNotInterestRatio > 0.6) {
+                baseLambda += 0.1; // 最近興味なしが続いている場合は少し類似性を高く
             }
 
             // フィードバック数の影響
-            if (totalCount < 5) {
-                baseLambda += 0.1; // 少ない場合は類似性を高くして安全に
-            } else if (totalCount > 15) {
-                baseLambda += 0.05; // 十分なデータがある場合は少し類似性を高く
+            if (totalCount < 10) {
+                // データが少ないうちは、極端な調整を避ける（デフォルトに近い値で探索）
+                // 何もしない（baseLambdaのまま）
+            } else if (totalCount > 30) {
+                baseLambda += 0.05; // 十分なデータがある場合は少し類似性を高くして安定させる
             }
 
-            // 興味なしの多様性による調整（興味なしの割合が高い場合）
-            if (notInterestRatio > interestRatio) {
-                baseLambda += 0.1; // 興味なしが多い場合は類似性を高く
-            }
-
-            lambda = Math.max(0.3, Math.min(0.9, baseLambda)); // 0.3-0.9の範囲に制限
+            lambda = Math.max(0.3, Math.min(0.95, baseLambda)); // 0.3-0.95の範囲に制限（上限を少し緩和）
 
             this.logger.info(`Calculated MMR lambda for user ${userId} (optimized): ${lambda.toFixed(3)}`, {
                 userId,
@@ -479,7 +480,8 @@ export class ClickLogger extends DurableObject {
                 }
 
                 // 1. Determine reward based on feedback
-                const reward = feedback === 'interested' ? 2.0 : -1.0;
+                // 教育ページからの明示的なフィードバックは強いシグナルとして扱うため、報酬を大きくする (2.0 -> 5.0)
+                const reward = feedback === 'interested' ? 5.0 : -1.0;
 
                 // 2. Get the article's embedding from D1
                 // First, try to get from sent_articles (for regular email feedback)
@@ -515,7 +517,7 @@ export class ClickLogger extends DurableObject {
                                 const ageInHours = (now - publishedDate.getTime()) / (1000 * 60 * 60);
                                 normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
                             }
-                            
+
                             // embeddingの次元をチェックし、必要に応じて鮮度情報を追加または更新
                             if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
                                 embedding = [...originalEmbedding, normalizedAge];
@@ -602,10 +604,10 @@ export class ClickLogger extends DurableObject {
                 return new Response('Error logging feedback', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/get-ucb-values') {
-             try {
+            try {
                 const { userId, articlesWithEmbeddings, userCTR } = await request.json() as GetUcbValuesRequestBody;
                 if (!userId || !Array.isArray(articlesWithEmbeddings) || userCTR === undefined) {
-                     return new Response('Invalid input: userId, articlesWithEmbeddings array, and userCTR are required', { status: 400 });
+                    return new Response('Invalid input: userId, articlesWithEmbeddings array, and userCTR are required', { status: 400 });
                 }
 
                 let banditModel = this.inMemoryModels.get(userId);
@@ -751,7 +753,7 @@ export class ClickLogger extends DurableObject {
                         );
                     }
                 }
-                
+
                 if (logStatements.length > 0) {
                     this.state.waitUntil(this.env.DB.batch(logStatements));
                     this.dirty = true;
@@ -796,7 +798,7 @@ export class ClickLogger extends DurableObject {
                 } else {
                     this.logger.debug('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
                 }
-                
+
                 return new Response('Embedding completed callback processed', { status: 200 });
             } catch (error: unknown) {
                 const err = this.normalizeError(error);
@@ -809,7 +811,7 @@ export class ClickLogger extends DurableObject {
                 return new Response('Error processing callback', { status: 500 });
             }
         } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
-             try {
+            try {
                 const { userId, articleId, embedding, reward } = await request.json() as UpdateBanditFromClickRequestBody;
                 if (!userId || !articleId || !embedding || reward === undefined) {
                     return new Response('Missing parameters', { status: 400 });
@@ -909,7 +911,7 @@ export class ClickLogger extends DurableObject {
                                 this.logger.warn(`Article ${article.articleId} has unexpected embedding dimension ${originalEmbedding.length} during preference score calculation. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping.`, { userId, articleId: article.articleId, embeddingLength: originalEmbedding.length });
                                 continue;
                             }
-                            
+
                             if (extendedEmbedding.length === banditModel.dimension) {
                                 articleEmbeddings.push(extendedEmbedding);
                             } else {
@@ -940,7 +942,7 @@ export class ClickLogger extends DurableObject {
                     userPreferenceVector,
                     averageArticleVector,
                 );
-                
+
                 // スコアを0-100のパーセンテージに変換 (類似度は-1から1の範囲なので、0から1に正規化してから100倍)
                 const preferenceScore = ((similarity + 1) / 2) * 100;
 
@@ -981,17 +983,19 @@ export class ClickLogger extends DurableObject {
                     });
                 }
 
-                // ユーザーの好みベクトル (bベクトル) の最大絶対値を計算
+                // ユーザーの好みベクトル (bベクトル) のL2ノルムを計算
                 const bVector = Array.from(banditModel.b);
-                const maxAbs = bVector.length > 0 ? Math.max(...bVector.map(Math.abs)) : 0; // bVectorが空の場合のハンドリング
+                const l2Norm = Math.sqrt(bVector.reduce((sum, val) => sum + val * val, 0));
 
-                // 最大絶対値を0-1に正規化し、スコアに変換 (例: 最大値が大きいほどスコアが高い)
-                // 閾値として、5を基準に正規化（報酬2.0で1回で40%）
-                const threshold = 5;
-                const normalizedScore = Math.min(1, maxAbs / threshold);
+                // L2ノルムをスコアに変換
+                // ScaleFactorを10として、tanhで0-1に正規化
+                // norm=10でtanh(1)≒0.76 (76%)
+                // norm=20でtanh(2)≒0.96 (96%)
+                const scaleFactor = 10;
+                const normalizedScore = Math.tanh(l2Norm / scaleFactor);
                 const preferenceScore = normalizedScore * 100;
 
-                this.logger.debug(`Calculated current preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (maxAbs: ${maxAbs.toFixed(2)})`, { userId, score: preferenceScore, maxAbs });
+                this.logger.debug(`Calculated current preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (L2Norm: ${l2Norm.toFixed(2)})`, { userId, score: preferenceScore, l2Norm });
 
                 return new Response(JSON.stringify({ score: preferenceScore }), {
                     headers: { 'Content-Type': 'application/json' },
@@ -1224,7 +1228,7 @@ export class ClickLogger extends DurableObject {
                 }
             }
             const articleIdsArray = Array.from(articleIdsToFetch);
-            
+
             // sent_articles と articles テーブルから必要な埋め込みを一度に取得
             const sentArticlesEmbeddings = await this.env.DB.prepare(
                 `SELECT article_id, embedding, published_at FROM sent_articles WHERE article_id IN (${articleIdsArray.map(() => "?").join(",")})`
@@ -1291,7 +1295,8 @@ export class ClickLogger extends DurableObject {
                         }
 
                         if (embedding && embedding.length === banditModel.dimension) {
-                            const reward = log.action === 'interested' ? 2.0 : -1.0;
+                            // 教育ページからの明示的なフィードバックは強いシグナルとして扱うため、報酬を大きくする (2.0 -> 5.0)
+                            const reward = log.action === 'interested' ? 5.0 : -1.0;
                             await this.updateBanditModel(banditModel, embedding, reward, userId);
                             this.dirty = true;
                             updatedCount++;
