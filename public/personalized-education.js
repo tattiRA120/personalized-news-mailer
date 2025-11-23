@@ -57,7 +57,7 @@ async function fetchMMRSettings() {
             lambda = data.lambda;
 
             const lambdaValue = document.getElementById('lambda-value');
-            if (lambdaValue) lambdaValue.textContent = lambda;
+            if (lambdaValue) lambdaValue.textContent = lambda.toFixed(2); // Format to 2 decimal places
 
             const mmrSettingsDiv = document.getElementById('mmr-settings');
             if (mmrSettingsDiv) {
@@ -85,7 +85,7 @@ async function fetchPreferenceScore() {
 }
 
 function updateScoreDisplay(score) {
-    if (scoreValue) scoreValue.textContent = Math.round(score);
+    if (scoreValue) scoreValue.textContent = `${Math.round(score)}%`;
     if (scoreFill) {
         scoreFill.style.width = `${score}%`;
         if (score < 30) {

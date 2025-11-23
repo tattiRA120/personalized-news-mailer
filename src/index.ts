@@ -350,8 +350,17 @@ export default {
 
                 // Process feedback in parallel
                 const promises = feedbackData.map(item => {
-                    const feedbackUrl = `${env.WORKER_BASE_URL}/log-feedback?userId=${userId}&articleId=${encodeURIComponent(item.articleId)}&feedback=${item.feedback}&immediateUpdate=${immediateUpdate ? 'true' : 'false'}`;
-                    return clickLogger.fetch(new Request(feedbackUrl, { method: 'GET' }));
+                    return clickLogger.fetch(new Request(`${env.WORKER_BASE_URL}/log-feedback`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            userId,
+                            articleId: item.articleId,
+                            feedback: item.feedback,
+                            timestamp: Date.now(),
+                            immediateUpdate: immediateUpdate
+                        })
+                    }));
                 });
 
                 await Promise.all(promises);
