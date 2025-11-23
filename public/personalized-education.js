@@ -11,8 +11,6 @@ const recommendedTabContent = document.getElementById('recommended-tab');
 const newDiscoveriesTabContent = document.getElementById('new-discoveries-tab');
 const articlesList = document.getElementById('articles-list');
 const newArticlesList = document.getElementById('new-articles-list');
-const lambdaSlider = document.getElementById('lambda-slider');
-const lambdaValue = document.getElementById('lambda-value');
 const scoreValue = document.getElementById('score-value');
 const scoreFill = document.getElementById('score-fill');
 const submitButton = document.getElementById('submit-button'); // Recommended tab submit
@@ -51,39 +49,22 @@ async function switchTab(tabName) {
 
 // --- Recommended Tab Logic ---
 
-if (lambdaSlider) {
-    lambdaSlider.addEventListener('input', (e) => {
-        lambda = e.target.value;
-        if (lambdaValue) lambdaValue.textContent = lambda;
-    });
-
-    lambdaSlider.addEventListener('change', async () => {
-        try {
-            await fetch('/api/calculate-mmr-lambda', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, immediate: true })
-            });
-            await fetchPersonalizedArticles();
-        } catch (error) {
-            console.error('Error updating lambda:', error);
-        }
-    });
-}
-
 async function fetchMMRSettings() {
     try {
         const response = await fetch(`/api/mmr-settings?userId=${encodeURIComponent(userId)}`);
         if (response.ok) {
             const data = await response.json();
             lambda = data.lambda;
-            if (lambdaSlider) lambdaSlider.value = lambda;
+
+            const lambdaValue = document.getElementById('lambda-value');
             if (lambdaValue) lambdaValue.textContent = lambda;
 
             const mmrSettingsDiv = document.getElementById('mmr-settings');
-            const progressFill = mmrSettingsDiv.querySelector('.progress-fill');
-            if (progressFill) {
-                progressFill.style.width = `${lambda * 100}%`;
+            if (mmrSettingsDiv) {
+                const progressFill = mmrSettingsDiv.querySelector('.progress-fill');
+                if (progressFill) {
+                    progressFill.style.width = `${lambda * 100}%`;
+                }
             }
         }
     } catch (error) {

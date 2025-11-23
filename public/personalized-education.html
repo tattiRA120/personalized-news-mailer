@@ -165,21 +165,10 @@
                         λ: <span id="lambda-value">0.5</span>
                     </div>
                 </div>
-                <!-- Hidden slider for compatibility with JS logic if needed, or we can expose it if desired. 
-                     The previous JS used a slider. Let's restore it but maybe style it better or keep it hidden if the original didn't have it?
-                     Actually, the original HTML snippet showed a progress bar but NOT an input slider in the view_file output of Step 101 (lines 17-35).
-                     However, my JS code expects `lambda-slider`. I should add it back or update JS.
-                     The user said "restore UI". The original UI in Step 101 lines 17-35 did NOT have a slider input visible, just a progress bar visualization.
-                     But my JS (Step 95) uses `lambdaSlider`. 
-                     I will add the slider but maybe keep the visual style similar to what I added in JS, or try to match the "progress bar" look.
-                     Let's add the slider back as it gives control, which is a feature I added.
-                -->
-                <div style="margin-top: 10px;">
-                    <input type="range" id="lambda-slider" min="0" max="1" step="0.1" value="0.5" style="width: 100%;">
-                </div>
                 <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">
-                    探索性（新しい記事の発見）と類似性（興味のある記事の推薦）のバランスを調整します。左（0）は探索重視、右（1）は類似性重視です。</p>
+                    探索性（新しい記事の発見）と類似性（興味のある記事の推薦）のバランス。左（0）は探索重視、右（1）は類似性重視です。（システムが自動調整します）</p>
             </div>
+
 
             <!-- 好みスコア表示エリア -->
             <div id="preference-score"
