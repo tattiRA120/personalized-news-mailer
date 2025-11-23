@@ -112,6 +112,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const articleItem = document.createElement('div');
             articleItem.className = 'article-item';
             articleItem.dataset.link = article.link; // 記事のリンクをdata属性として追加
+            articleItem.dataset.articleId = article.articleId; // 記事IDをdata属性として追加
 
             const articleContent = document.createElement('div');
             articleContent.className = 'article-content';
@@ -189,7 +190,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const feedbackPromises = [];
         articlesListDiv.querySelectorAll('.article-item').forEach(articleItem => {
-            const articleId = articleItem.querySelector('input[type="radio"]').name.split('-')[1];
+            const articleId = articleItem.dataset.articleId;
             const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
             if (selectedInterest) {
                 const feedbackUrl = `/track-feedback?userId=${userId}&articleId=${encodeURIComponent(articleId)}&feedback=${selectedInterest.value}&immediateUpdate=true`;
@@ -216,7 +217,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 選択された記事IDを取得してスコア計算APIを呼び出す
                 const selectedArticleIds = [];
                 articlesListDiv.querySelectorAll('.article-item').forEach(articleItem => {
-                    const articleId = articleItem.querySelector('input[type="radio"]').name.split('-')[1];
+                    const articleId = articleItem.dataset.articleId;
                     const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
                     if (selectedInterest) {
                         selectedArticleIds.push(articleId);
