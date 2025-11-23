@@ -281,14 +281,19 @@ submitButton.addEventListener('click', async () => {
 // --- New Discoveries Tab Logic ---
 
 async function fetchNewArticles() {
+    const newArticlesList = document.getElementById('new-articles-list');
     newArticlesList.innerHTML = '<div class="loading">新しい記事を読み込んでいます...</div>';
+
     try {
-        const response = await fetch('/get-articles-for-education');
-        if (!response.ok) throw new Error('Failed to fetch new articles');
+        const response = await fetch(`/get-articles-for-education?userId=${encodeURIComponent(userId)}`);
+        if (!response.ok) {
+            throw new Error('Failed to fetch new articles');
+        }
         newArticles = await response.json();
         renderNewArticles();
     } catch (error) {
-        newArticlesList.innerHTML = `<div class="error">新しい記事の読み込みに失敗しました: ${error.message}</div>`;
+        console.error('Error fetching new articles:', error);
+        newArticlesList.innerHTML = '<div class="error">記事の読み込みに失敗しました。</div>';
     }
 }
 

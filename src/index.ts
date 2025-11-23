@@ -294,11 +294,25 @@ export default {
         if (request.method === 'GET' && path === '/get-articles-for-education') {
             logger.debug('Request received for articles for education');
             try {
+                const userId = url.searchParams.get('userId');
                 const articles: NewsArticle[] = await collectNews(env);
                 logger.debug(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
+                let availableArticles = articles;
+
+                // If userId is provided, exclude articles already sent/seen
+                if (userId) {
+                    const sentArticles = await env.DB.prepare(
+                        `SELECT article_id FROM sent_articles WHERE user_id = ?`
+                    ).bind(userId).all<{ article_id: string }>();
+
+                    const sentArticleIds = new Set(sentArticles.results.map(a => a.article_id));
+                    availableArticles = articles.filter(a => !sentArticleIds.has(a.articleId));
+                    logger.debug(`Filtered out ${articles.length - availableArticles.length} already sent articles for user ${userId}.`, { userId, remaining: availableArticles.length });
+                }
+
                 // 記事をシャッフルして30件に制限
-                const shuffledArticles = articles.sort(() => 0.5 - Math.random()).slice(0, 30);
+                const shuffledArticles = availableArticles.sort(() => 0.5 - Math.random()).slice(0, 30);
 
                 const articlesForEducation = shuffledArticles.map((article: NewsArticle) => ({
                     articleId: article.articleId,

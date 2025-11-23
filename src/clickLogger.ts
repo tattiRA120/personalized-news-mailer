@@ -585,11 +585,32 @@ export class ClickLogger extends DurableObject {
                     this.logger.debug(`Immediate update not requested for feedback from user ${userId}, article ${articleId}. Model update will be handled periodically.`, { userId, articleId, feedback });
                 }
 
-                // 4. Log the feedback to education_logs table
+                // 4. Log the feedback to education_logs table (for immediate training)
                 this.state.waitUntil(this.env.DB.prepare(
                     `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
                 ).bind(userId, articleId, timestamp, feedback).run());
                 this.logger.info(`Logged feedback to education_logs for user ${userId}, article ${articleId}, feedback: ${feedback}`);
+
+                // 5. Record exposure in sent_articles (so it can be excluded later and counted for score)
+                // Use INSERT OR IGNORE to avoid errors if it was already sent/recorded
+                if (embedding) {
+                    this.state.waitUntil(this.env.DB.prepare(
+                        `INSERT OR IGNORE INTO sent_articles (user_id, article_id, timestamp, embedding, published_at) VALUES (?, ?, ?, ?, ?)`
+                    ).bind(userId, articleId, timestamp, JSON.stringify(embedding), new Date().toISOString()).run()); // published_at is approximate here if not fetched, but acceptable for exclusion
+                } else {
+                    // Try to insert without embedding if we don't have it, just for ID exclusion
+                    this.state.waitUntil(this.env.DB.prepare(
+                        `INSERT OR IGNORE INTO sent_articles (user_id, article_id, timestamp) VALUES (?, ?, ?)`
+                    ).bind(userId, articleId, timestamp).run());
+                }
+
+                // 6. If interested, record as a click in click_logs (for score calculation)
+                if (feedback === 'interested') {
+                    this.state.waitUntil(this.env.DB.prepare(
+                        `INSERT INTO click_logs (user_id, article_id, timestamp) VALUES (?, ?, ?)`
+                    ).bind(userId, articleId, timestamp).run());
+                    this.logger.info(`Logged interested feedback as click for user ${userId}, article ${articleId}`);
+                }
 
                 return new Response('Feedback logged', { status: 200 });
 
@@ -973,29 +994,27 @@ export class ClickLogger extends DurableObject {
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                let banditModel = this.inMemoryModels.get(userId);
-                if (!banditModel) {
-                    // モデルが存在しない場合、スコアは0%
-                    this.logger.debug(`No model found for user ${userId}. Returning 0% score.`, { userId });
-                    return new Response(JSON.stringify({ score: 0 }), {
-                        headers: { 'Content-Type': 'application/json' },
-                        status: 200,
-                    });
+                // Calculate score based on Interest Rate: (Clicks / Sent) * 100
+                const sentCountResult = await this.env.DB.prepare(
+                    `SELECT COUNT(*) as count FROM sent_articles WHERE user_id = ?`
+                ).bind(userId).first<{ count: number }>();
+
+                const clickCountResult = await this.env.DB.prepare(
+                    `SELECT COUNT(*) as count FROM click_logs WHERE user_id = ?`
+                ).bind(userId).first<{ count: number }>();
+
+                const sentCount = sentCountResult?.count || 0;
+                const clickCount = clickCountResult?.count || 0;
+
+                let preferenceScore = 0;
+                if (sentCount > 0) {
+                    preferenceScore = (clickCount / sentCount) * 100;
                 }
 
-                // ユーザーの好みベクトル (bベクトル) のL2ノルムを計算
-                const bVector = Array.from(banditModel.b);
-                const l2Norm = Math.sqrt(bVector.reduce((sum, val) => sum + val * val, 0));
+                // Cap at 100% just in case
+                preferenceScore = Math.min(preferenceScore, 100);
 
-                // L2ノルムをスコアに変換
-                // ScaleFactorを10として、tanhで0-1に正規化
-                // norm=10でtanh(1)≒0.76 (76%)
-                // norm=20でtanh(2)≒0.96 (96%)
-                const scaleFactor = 10;
-                const normalizedScore = Math.tanh(l2Norm / scaleFactor);
-                const preferenceScore = normalizedScore * 100;
-
-                this.logger.debug(`Calculated current preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (L2Norm: ${l2Norm.toFixed(2)})`, { userId, score: preferenceScore, l2Norm });
+                this.logger.debug(`Calculated preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (Clicks: ${clickCount}, Sent: ${sentCount})`, { userId, score: preferenceScore, clickCount, sentCount });
 
                 return new Response(JSON.stringify({ score: preferenceScore }), {
                     headers: { 'Content-Type': 'application/json' },
