@@ -480,8 +480,9 @@ export class ClickLogger extends DurableObject {
                 }
 
                 // 1. Determine reward based on feedback
-                // 教育ページからの明示的なフィードバックは強いシグナルとして扱うため、報酬を大きくする (2.0 -> 5.0)
-                const reward = feedback === 'interested' ? 5.0 : -1.0;
+                // 教育ページからの明示的なフィードバックは強いシグナルとして扱う
+                // 興味あり: 5.0, 興味なし: -5.0 (以前は-1.0だったが、抑制効果を強めるために増強)
+                const reward = feedback === 'interested' ? 5.0 : -5.0;
 
                 // 2. Get the article's embedding from D1
                 // First, try to get from sent_articles (for regular email feedback)
@@ -1314,8 +1315,9 @@ export class ClickLogger extends DurableObject {
                         }
 
                         if (embedding && embedding.length === banditModel.dimension) {
-                            // 教育ページからの明示的なフィードバックは強いシグナルとして扱うため、報酬を大きくする (2.0 -> 5.0)
-                            const reward = log.action === 'interested' ? 5.0 : -1.0;
+                            // 教育ページからの明示的なフィードバックは強いシグナルとして扱う
+                            // 興味あり: 5.0, 興味なし: -5.0
+                            const reward = log.action === 'interested' ? 5.0 : -5.0;
                             await this.updateBanditModel(banditModel, embedding, reward, userId);
                             this.dirty = true;
                             updatedCount++;
