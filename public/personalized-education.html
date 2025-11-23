@@ -35,35 +35,208 @@
         </div>
 
         <!-- 好みスコア表示エリア -->
-        <div id="preference-score"
-            style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6;">
-            <h3 style="margin: 0 0 10px 0; color: #495057;">現在の好みスコア</h3>
-            <div style="display: flex; align-items: center; gap: 15px;">
-                <div style="flex: 1;">
-                    <div class="progress-bar"
-                        style="width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden;">
-                        <div class="progress-fill"
-                            style="height: 100%; background: linear-gradient(90deg, #28a745 0%, #ffc107 50%, #dc3545 100%); border-radius: 10px; transition: width 0.3s ease;">
-                        </div>
-                    </div>
+        <div id="preference-score" <h1>Personalized Education</h1>
+
+            <div class="tabs">
+                <button class="tab-button active" data-tab="recommended">Recommended</button>
+                <button class="tab-button" data-tab="new-discoveries">New Discoveries</button>
+            </div>
+
+            <div id="recommended-tab" class="tab-content active">
+                <div id="mmr-settings">
+                    <label for="lambda-slider">Exploration vs. Exploitation (Lambda: <span
+                            id="lambda-value">0.5</span>)</label>
+                    <input type="range" id="lambda-slider" min="0" max="1" step="0.1" value="0.5">
+                    <p class="description">0 = Pure Exploration (Random), 1 = Pure Exploitation (Personalized)</p>
                 </div>
-                <div class="score-text"
-                    style="font-size: 24px; font-weight: bold; color: #495057; min-width: 60px; text-align: center;">0%
+
+                <div id="preference-score">
+                    <h2>Current Preference Score: <span id="score-value">--</span>%</h2>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="score-fill" style="width: 0%;"></div>
+                    </div>
+                    <p class="description">This score represents how well the AI understands your preferences based on
+                        your feedback.</p>
+                </div>
+
+                <div id="articles-list">
+                    <!-- Recommended articles will be loaded here -->
+                    <div class="loading">Loading articles...</div>
                 </div>
             </div>
-            <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">
-                AIがあなたの好みをどれだけ強く学習できているか（学習深度）を示しています。興味のある記事を選択することで、スコアが向上します。</p>
+
+            <div id="new-discoveries-tab" class="tab-content">
+                <p class="description">Discover new articles to broaden your interests. Select "Interested" (❤️) or "Not
+                    Interested" (❌) for articles that catch your eye. You don't have to select everything.</p>
+                <div id="new-articles-list">
+                    <!-- New articles will be loaded here -->
+                    <div class="loading">Loading new articles...</div>
+                </div>
+                <button id="submit-new-feedback" class="submit-button" disabled>
+                    <span class="button-text">Submit Feedback</span>
+                    <div class="spinner"></div>
+                </button>
+            </div>
         </div>
 
-        <div id="articles-list">
-            <!-- 記事リストはJavaScriptでここに表示されます -->
-            <p>記事を読み込んでいます...</p>
-        </div>
+        <style>
+            /* Tab Styles */
+            .tabs {
+                display: flex;
+                margin-bottom: 20px;
+                border-bottom: 2px solid #eee;
+            }
 
-        <button id="submit-button" disabled>
-            <span class="button-text">選択した記事を送信</span>
-            <div class="spinner"></div>
-        </button>
+            .tab-button {
+                padding: 10px 20px;
+                background: none;
+                border: none;
+                border-bottom: 2px solid transparent;
+                cursor: pointer;
+                font-size: 16px;
+                font-weight: bold;
+                color: #666;
+                transition: all 0.3s ease;
+            }
+
+            .tab-button:hover {
+                color: #333;
+                background-color: #f9f9f9;
+            }
+
+            .tab-button.active {
+                color: #007bff;
+                border-bottom-color: #007bff;
+            }
+
+            .tab-content {
+                display: none;
+            }
+
+            .tab-content.active {
+                display: block;
+            }
+
+            /* New Discoveries Styles */
+            .new-article-card {
+                background: white;
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 15px;
+                margin-bottom: 15px;
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+
+            .new-article-header {
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+            }
+
+            .new-article-title {
+                font-size: 18px;
+                font-weight: bold;
+                margin: 0;
+                color: #333;
+                text-decoration: none;
+            }
+
+            .new-article-title:hover {
+                text-decoration: underline;
+            }
+
+            .new-article-summary {
+                font-size: 14px;
+                color: #666;
+                margin: 5px 0;
+            }
+
+            .feedback-actions {
+                display: flex;
+                gap: 15px;
+                margin-top: 10px;
+            }
+
+            .feedback-btn {
+                display: flex;
+                align-items: center;
+                gap: 5px;
+                padding: 8px 12px;
+                border: 1px solid #ddd;
+                border-radius: 20px;
+                background: white;
+                cursor: pointer;
+                transition: all 0.2s;
+                font-size: 14px;
+            }
+
+            .feedback-btn:hover {
+                background-color: #f5f5f5;
+            }
+
+            .feedback-btn.interested.active {
+                background-color: #ffebee;
+                border-color: #ffcdd2;
+                color: #c62828;
+            }
+
+            .feedback-btn.not-interested.active {
+                background-color: #e3f2fd;
+                border-color: #bbdefb;
+                color: #1565c0;
+            }
+
+            .submit-button {
+                margin-top: 20px;
+                padding: 12px 24px;
+                background-color: #007bff;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                font-size: 16px;
+                cursor: pointer;
+                width: 100%;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 10px;
+            }
+
+            .submit-button:disabled {
+                background-color: #ccc;
+                cursor: not-allowed;
+            }
+
+            .spinner {
+                border: 3px solid rgba(255, 255, 255, 0.3);
+                border-radius: 50%;
+                border-top: 3px solid white;
+                width: 20px;
+                height: 20px;
+                animation: spin 1s linear infinite;
+                display: none;
+            }
+
+            @keyframes spin {
+                0% {
+                    transform: rotate(0deg);
+                }
+
+                100% {
+                    transform: rotate(360deg);
+                }
+            }
+
+            .submit-button.loading .spinner {
+                display: block;
+            }
+
+            .submit-button.loading .button-text {
+                display: none;
+            }
+        </style>
         <p id="message"></p>
     </div>
     <script src="personalized-education.js"></script>

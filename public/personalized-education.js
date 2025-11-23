@@ -1,354 +1,297 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const articlesListDiv = document.getElementById('articles-list');
-    const submitButton = document.getElementById('submit-button');
-    const messageElement = document.getElementById('message');
-    const mmrSettingsDiv = document.getElementById('mmr-settings');
-    const lambdaText = document.querySelector('.lambda-text');
+const userId = new URLSearchParams(window.location.search).get('userId') || 'test-user';
+let lambda = 0.5;
+let articles = [];
+let newArticles = []; // For New Discoveries tab
+let newArticlesFeedback = new Map(); // Map<articleId, 'interested' | 'not_interested'>
 
-    // URLからユーザーIDを取得
-    const urlParams = new URLSearchParams(window.location.search);
-    const userId = urlParams.get('userId');
+// DOM Elements
+const recommendedTabBtn = document.querySelector('.tab-button[data-tab="recommended"]');
+const newDiscoveriesTabBtn = document.querySelector('.tab-button[data-tab="new-discoveries"]');
+const recommendedTabContent = document.getElementById('recommended-tab');
+const newDiscoveriesTabContent = document.getElementById('new-discoveries-tab');
+const articlesList = document.getElementById('articles-list');
+const newArticlesList = document.getElementById('new-articles-list');
+const lambdaSlider = document.getElementById('lambda-slider');
+const lambdaValue = document.getElementById('lambda-value');
+const scoreValue = document.getElementById('score-value');
+const scoreFill = document.getElementById('score-fill');
+const submitNewFeedbackBtn = document.getElementById('submit-new-feedback');
 
-    if (!userId) {
-        articlesListDiv.innerHTML = '<p class="error">ユーザーIDが見つかりません。正しいリンクからアクセスしてください。</p>';
-        submitButton.disabled = true;
+// Initialization
+document.addEventListener('DOMContentLoaded', async () => {
+    setupTabs();
+    await fetchMMRSettings();
+    await fetchPreferenceScore();
+    await fetchPersonalizedArticles(); // Load recommended by default
+});
+
+function setupTabs() {
+    recommendedTabBtn.addEventListener('click', () => switchTab('recommended'));
+    newDiscoveriesTabBtn.addEventListener('click', () => switchTab('new-discoveries'));
+}
+
+async function switchTab(tabName) {
+    if (tabName === 'recommended') {
+        recommendedTabBtn.classList.add('active');
+        newDiscoveriesTabBtn.classList.remove('active');
+        recommendedTabContent.classList.add('active');
+        newDiscoveriesTabContent.classList.remove('active');
+    } else {
+        recommendedTabBtn.classList.remove('active');
+        newDiscoveriesTabBtn.classList.add('active');
+        recommendedTabContent.classList.remove('active');
+        newDiscoveriesTabContent.classList.add('active');
+
+        if (newArticles.length === 0) {
+            await fetchNewArticles();
+        }
+    }
+}
+
+// --- Recommended Tab Logic (Existing) ---
+
+lambdaSlider.addEventListener('input', (e) => {
+    lambda = e.target.value;
+    lambdaValue.textContent = lambda;
+});
+
+lambdaSlider.addEventListener('change', async () => {
+    // Update backend with new lambda
+    try {
+        await fetch('/api/calculate-mmr-lambda', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId, immediate: true })
+        });
+        // Re-fetch articles with new lambda
+        await fetchPersonalizedArticles();
+    } catch (error) {
+        console.error('Error updating lambda:', error);
+    }
+});
+
+async function fetchMMRSettings() {
+    try {
+        const response = await fetch(`/api/mmr-settings?userId=${encodeURIComponent(userId)}`);
+        if (response.ok) {
+            const data = await response.json();
+            lambda = data.lambda;
+            lambdaSlider.value = lambda;
+            lambdaValue.textContent = lambda;
+        }
+    } catch (error) {
+        console.error('Error fetching MMR settings:', error);
+    }
+}
+
+async function fetchPreferenceScore() {
+    try {
+        const response = await fetch(`/api/preference-score?userId=${encodeURIComponent(userId)}`);
+        if (response.ok) {
+            const data = await response.json();
+            updateScoreDisplay(data.score);
+        }
+    } catch (error) {
+        console.error('Error fetching preference score:', error);
+    }
+}
+
+function updateScoreDisplay(score) {
+    scoreValue.textContent = Math.round(score);
+    scoreFill.style.width = `${score}%`;
+
+    // Color coding based on score
+    if (score < 30) {
+        scoreFill.style.backgroundColor = '#ff4d4d'; // Red
+    } else if (score < 70) {
+        scoreFill.style.backgroundColor = '#ffa600'; // Orange
+    } else {
+        scoreFill.style.backgroundColor = '#4caf50'; // Green
+    }
+}
+
+async function fetchPersonalizedArticles() {
+    articlesList.innerHTML = '<div class="loading">Loading articles...</div>';
+    try {
+        const response = await fetch(`/get-personalized-articles?userId=${encodeURIComponent(userId)}&lambda=${lambda}`);
+        if (!response.ok) throw new Error('Failed to fetch articles');
+        articles = await response.json();
+        renderArticles();
+    } catch (error) {
+        articlesList.innerHTML = `<div class="error">Error loading articles: ${error.message}</div>`;
+    }
+}
+
+function renderArticles() {
+    articlesList.innerHTML = '';
+    if (articles.length === 0) {
+        articlesList.innerHTML = '<div class="no-articles">No personalized articles found. Try adjusting the slider or use the "New Discoveries" tab.</div>';
         return;
     }
 
-    // 現在の好みスコアを取得する関数
-    async function fetchCurrentPreferenceScore() {
-        // localStorageからスコアを取得
-        const storedData = localStorage.getItem(`preferenceScore_${userId}`);
-        let localScore = null;
-        let localTimestamp = 0;
-        if (storedData) {
-            try {
-                const data = JSON.parse(storedData);
-                localScore = data.score;
-                localTimestamp = data.timestamp;
-            } catch (e) {
-                console.error('Error parsing stored preference score:', e);
-            }
+    articles.forEach(article => {
+        const card = document.createElement('div');
+        card.className = 'article-card';
+        card.innerHTML = `
+            <div class="article-content">
+                <a href="${article.link}" target="_blank" class="article-title">${article.title}</a>
+                <p class="article-summary">${article.summary || 'No summary available.'}</p>
+                <div class="article-meta">
+                    <span class="source">${article.sourceName || 'Unknown Source'}</span>
+                    <span class="date">${new Date(article.publishedAt).toLocaleDateString()}</span>
+                </div>
+            </div>
+            <div class="article-actions">
+                <label class="radio-label">
+                    <input type="radio" name="interest-${article.articleId}" value="interested" onchange="handleInterestChange('${article.articleId}', 'interested')">
+                    Interested
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="interest-${article.articleId}" value="not_interested" onchange="handleInterestChange('${article.articleId}', 'not_interested')">
+                    Not Interested
+                </label>
+            </div>
+        `;
+        articlesList.appendChild(card);
+    });
+}
+
+window.handleInterestChange = async function (articleId, interest) {
+    // Immediate feedback for Recommended tab
+    try {
+        const feedbackUrl = `/track-feedback?userId=${userId}&articleId=${encodeURIComponent(articleId)}&feedback=${interest}&immediateUpdate=true`;
+        await fetch(feedbackUrl, { method: 'GET' });
+
+        // Visual feedback
+        const card = document.querySelector(`input[name="interest-${articleId}"]`).closest('.article-card');
+        card.style.opacity = '0.5';
+        card.style.pointerEvents = 'none';
+
+        // Update score
+        await fetchPreferenceScore();
+    } catch (error) {
+        console.error('Error submitting feedback:', error);
+    }
+};
+
+// --- New Discoveries Tab Logic (New) ---
+
+async function fetchNewArticles() {
+    newArticlesList.innerHTML = '<div class="loading">Loading new articles...</div>';
+    try {
+        const response = await fetch('/get-articles-for-education');
+        if (!response.ok) throw new Error('Failed to fetch new articles');
+        newArticles = await response.json();
+        renderNewArticles();
+    } catch (error) {
+        newArticlesList.innerHTML = `<div class="error">Error loading new articles: ${error.message}</div>`;
+    }
+}
+
+function renderNewArticles() {
+    newArticlesList.innerHTML = '';
+    if (newArticles.length === 0) {
+        newArticlesList.innerHTML = '<div class="no-articles">No new articles found at the moment.</div>';
+        return;
+    }
+
+    newArticles.forEach(article => {
+        const card = document.createElement('div');
+        card.className = 'new-article-card';
+        card.dataset.articleId = article.articleId;
+        card.innerHTML = `
+            <div class="new-article-header">
+                <a href="${article.link}" target="_blank" class="new-article-title">${article.title}</a>
+            </div>
+            <p class="new-article-summary">${article.summary || 'No summary available.'}</p>
+            <div class="feedback-actions">
+                <button class="feedback-btn interested" onclick="toggleNewFeedback('${article.articleId}', 'interested')">
+                    ❤️ Interested
+                </button>
+                <button class="feedback-btn not-interested" onclick="toggleNewFeedback('${article.articleId}', 'not_interested')">
+                    ❌ Not Interested
+                </button>
+            </div>
+        `;
+        newArticlesList.appendChild(card);
+    });
+    updateSubmitButtonState();
+}
+
+window.toggleNewFeedback = function (articleId, type) {
+    const currentFeedback = newArticlesFeedback.get(articleId);
+    const card = document.querySelector(`.new-article-card[data-article-id="${articleId}"]`);
+    const interestedBtn = card.querySelector('.feedback-btn.interested');
+    const notInterestedBtn = card.querySelector('.feedback-btn.not-interested');
+
+    if (currentFeedback === type) {
+        // Toggle off
+        newArticlesFeedback.delete(articleId);
+        interestedBtn.classList.remove('active');
+        notInterestedBtn.classList.remove('active');
+    } else {
+        // Set new feedback
+        newArticlesFeedback.set(articleId, type);
+        if (type === 'interested') {
+            interestedBtn.classList.add('active');
+            notInterestedBtn.classList.remove('active');
+        } else {
+            interestedBtn.classList.remove('active');
+            notInterestedBtn.classList.add('active');
         }
+    }
+    updateSubmitButtonState();
+};
 
-        try {
-            const response = await fetch(`/api/preference-score?userId=${encodeURIComponent(userId)}`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const { score } = await response.json();
-            const serverTimestamp = Date.now();
+function updateSubmitButtonState() {
+    submitNewFeedbackBtn.disabled = newArticlesFeedback.size === 0;
+    const count = newArticlesFeedback.size;
+    const textSpan = submitNewFeedbackBtn.querySelector('.button-text');
+    textSpan.textContent = count > 0 ? `Submit Feedback (${count})` : 'Submit Feedback';
+}
 
-            // localStorageとサーバーのスコアを比較し、新しい方を表示
-            if (localScore !== null && localTimestamp > serverTimestamp - 5000) { // 5秒以内のlocalStorageを優先
-                displayPreferenceScore(localScore);
-            } else {
-                displayPreferenceScore(score);
-                // サーバーのスコアをlocalStorageに保存
-                localStorage.setItem(`preferenceScore_${userId}`, JSON.stringify({ score, timestamp: serverTimestamp }));
-            }
-        } catch (error) {
-            console.error('Error fetching current preference score:', error);
-            // エラーの場合はlocalStorageのスコアを使うか、0%を表示
-            if (localScore !== null) {
-                displayPreferenceScore(localScore);
-            } else {
-                displayPreferenceScore(0);
-            }
+submitNewFeedbackBtn.addEventListener('click', async () => {
+    if (newArticlesFeedback.size === 0) return;
+
+    submitNewFeedbackBtn.classList.add('loading');
+    submitNewFeedbackBtn.disabled = true;
+
+    const feedbackData = [];
+    for (const [articleId, feedback] of newArticlesFeedback) {
+        const article = newArticles.find(a => a.articleId === articleId);
+        if (article) {
+            feedbackData.push({ article, feedback });
         }
     }
 
-    // MMR設定を取得する関数
-    async function fetchMMRSettings() {
-        try {
-            const response = await fetch(`/api/mmr-settings?userId=${encodeURIComponent(userId)}`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const { lambda } = await response.json();
-            displayMMRSettings(lambda);
-        } catch (error) {
-            console.error('Error fetching MMR settings:', error);
-            displayMMRSettings(0.5); // デフォルト値
-        }
-    }
-
-    // 記事リストを取得する関数
-    async function fetchPersonalizedArticles() {
-        try {
-            // MMR設定を取得
-            const mmrResponse = await fetch(`/api/mmr-settings?userId=${encodeURIComponent(userId)}`);
-            let lambda = 0.5;
-            if (mmrResponse.ok) {
-                const mmrData = await mmrResponse.json();
-                lambda = mmrData.lambda;
-            }
-
-            // Workerの新しいエンドポイントからパーソナライズド記事リストを取得
-            const response = await fetch(`/get-personalized-articles?userId=${encodeURIComponent(userId)}&lambda=${lambda}`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const articles = await response.json();
-            displayArticles(articles);
-            submitButton.disabled = false; // 記事が読み込まれたらボタンを常に有効化
-        } catch (error) {
-            console.error('Error fetching personalized articles:', error);
-            articlesListDiv.innerHTML = '<p class="error">記事の読み込みに失敗しました。</p>';
-            messageElement.textContent = '記事の読み込みに失敗しました。';
-            messageElement.className = 'error';
-        }
-    }
-
-    // 記事リストをHTMLに表示する関数
-    function displayArticles(articles) {
-        articlesListDiv.innerHTML = ''; // 既存のコンテンツをクリア
-        if (articles.length === 0) {
-            articlesListDiv.innerHTML = '<p>表示できる記事がありません。</p>';
-            return;
-        }
-
-        articles.forEach(article => {
-            const articleItem = document.createElement('div');
-            articleItem.className = 'article-item';
-            articleItem.dataset.link = article.link; // 記事のリンクをdata属性として追加
-            articleItem.dataset.articleId = article.articleId; // 記事IDをdata属性として追加
-
-            const articleContent = document.createElement('div');
-            articleContent.className = 'article-content';
-
-            const title = document.createElement('h3');
-            title.textContent = article.title;
-
-            const summary = document.createElement('p');
-            summary.textContent = article.summary || '';
-
-            articleContent.appendChild(title);
-            articleContent.appendChild(summary);
-
-            const interestSelection = document.createElement('div');
-            interestSelection.className = 'interest-selection';
-
-            const interestedLabel = document.createElement('label');
-            interestedLabel.htmlFor = `interested-${article.articleId}`;
-            interestedLabel.className = 'radio-label interested-label';
-            interestedLabel.innerHTML = `
-                <input type="radio" id="interested-${article.articleId}" name="interest-${article.articleId}" value="interested">
-                <span>興味あり</span>
-            `;
-            interestedLabel.querySelector('input').addEventListener('change', handleInterestChange);
-
-            const notInterestedLabel = document.createElement('label');
-            notInterestedLabel.htmlFor = `not-interested-${article.articleId}`;
-            notInterestedLabel.className = 'radio-label not-interested-label';
-            notInterestedLabel.innerHTML = `
-                <input type="radio" id="not-interested-${article.articleId}" name="interest-${article.articleId}" value="not_interested">
-                <span>興味なし</span>
-            `;
-            notInterestedLabel.querySelector('input').addEventListener('change', handleInterestChange);
-
-            interestSelection.appendChild(interestedLabel);
-            interestSelection.appendChild(notInterestedLabel);
-
-            const articleMainContent = document.createElement('div');
-            articleMainContent.className = 'article-main-content';
-            articleMainContent.appendChild(articleContent);
-
-            articleItem.appendChild(articleMainContent);
-            articleItem.appendChild(interestSelection);
-
-            articlesListDiv.appendChild(articleItem);
-        });
-    }
-
-    // 興味選択が変更されたときのハンドラ
-    function handleInterestChange(event) {
-        const selectedRadio = event.target;
-        const radioGroupName = selectedRadio.name;
-        const articleItem = selectedRadio.closest('.article-item');
-
-        // 同じグループのすべてのラジオボタンのラベルを取得
-        const allRadiosInGroup = articleItem.querySelectorAll(`input[name="${radioGroupName}"]`);
-        allRadiosInGroup.forEach(radio => {
-            const label = radio.closest('.radio-label');
-            if (radio.checked) {
-                // 選択されたボタンはデフォルトの色を維持
-                label.classList.remove('deselected');
-            } else {
-                // 選択されていないボタンはグレーにする
-                label.classList.add('deselected');
-            }
-        });
-    }
-
-    // 選択された記事をWorkerに送信する関数
-    async function submitInterestResponses() {
-        submitButton.disabled = true;
-        submitButton.classList.add('loading');
-        messageElement.textContent = '送信中...';
-        messageElement.className = '';
-
-        const feedbackPromises = [];
-        articlesListDiv.querySelectorAll('.article-item').forEach(articleItem => {
-            const articleId = articleItem.dataset.articleId;
-            const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
-            if (selectedInterest) {
-                const feedbackUrl = `/track-feedback?userId=${userId}&articleId=${encodeURIComponent(articleId)}&feedback=${selectedInterest.value}&immediateUpdate=true`;
-                feedbackPromises.push(fetch(feedbackUrl, { method: 'GET' }));
-            }
+    try {
+        const response = await fetch('/submit-education-feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                userId: userId,
+                feedbackData: feedbackData
+            })
         });
 
-        if (feedbackPromises.length === 0) {
-            messageElement.textContent = '記事を選択してください。';
-            messageElement.className = 'error';
-            submitButton.disabled = false;
-            submitButton.classList.remove('loading');
-            return;
-        }
+        if (response.ok) {
+            const interestedArticles = feedbackData
+                .filter(item => item.feedback === 'interested')
+                .map(item => item.article);
 
-        try {
-            const responses = await Promise.all(feedbackPromises);
-            const allOk = responses.every(res => res.ok);
+            // Store in localStorage to pass to the next page
+            localStorage.setItem('selectedArticles', JSON.stringify(interestedArticles));
 
-            if (allOk) {
-                messageElement.textContent = '選択結果が送信されました。';
-                messageElement.className = '';
-
-                // 選択された記事IDを取得してスコア計算APIを呼び出す
-                const selectedArticleIds = [];
-                articlesListDiv.querySelectorAll('.article-item').forEach(articleItem => {
-                    const articleId = articleItem.dataset.articleId;
-                    const selectedInterest = articleItem.querySelector(`input[name="interest-${articleId}"]:checked`);
-                    if (selectedInterest) {
-                        selectedArticleIds.push(articleId);
-                    }
-                });
-
-                if (selectedArticleIds.length > 0) {
-                    try {
-                        const scoreResponse = await fetch('/api/preference-score', {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify({
-                                userId: userId,
-                                selectedArticleIds: selectedArticleIds
-                            })
-                        });
-
-                        if (scoreResponse.ok) {
-                            const { score } = await scoreResponse.json();
-                            displayPreferenceScore(score);
-                            // POSTの結果をlocalStorageに保存
-                            localStorage.setItem(`preferenceScore_${userId}`, JSON.stringify({ score, timestamp: Date.now() }));
-                        } else {
-                            console.warn('Failed to calculate preference score:', scoreResponse.statusText);
-                        }
-                    } catch (scoreError) {
-                        console.error('Error calculating preference score:', scoreError);
-                    }
-                }
-
-                // 即座にMMR設定とスコアを更新してからページをリロード
-                setTimeout(async () => {
-                    try {
-                        // バックグラウンドで最新の設定を取得
-                        await Promise.all([
-                            fetchMMRSettings(),
-                            fetchCurrentPreferenceScore()
-                        ]);
-                    } catch (error) {
-                        console.error('Error updating settings after submission:', error);
-                    }
-
-                    // ページをリロードして上部に戻る
-                    window.location.reload();
-                }, 500); // 0.5秒後にリロード
-            } else {
-                const failedResponses = responses.filter(res => !res.ok);
-                const errorMessages = await Promise.all(failedResponses.map(res => res.text()));
-                throw new Error(`一部のフィードバックの送信に失敗しました: ${errorMessages.join(', ')}`);
-            }
-        } catch (error) {
-            console.error('Error submitting interest responses:', error);
-            messageElement.textContent = `送信に失敗しました: ${error.message}`;
-            messageElement.className = 'error';
-        } finally {
-            submitButton.classList.remove('loading');
-            if (messageElement.className === 'error') {
-                submitButton.disabled = false;
-            } else {
-                submitButton.disabled = true;
-            }
-        }
-    }
-
-    submitButton.addEventListener('click', submitInterestResponses);
-
-    // 好みスコアを表示する関数
-    function displayPreferenceScore(score) {
-        const scoreElement = document.getElementById('preference-score');
-        const progressFill = scoreElement.querySelector('.progress-fill');
-        const scoreText = scoreElement.querySelector('.score-text');
-
-        // スコアを0-100の範囲に制限
-        const clampedScore = Math.max(0, Math.min(100, score));
-
-        // プログレスバーの幅を更新
-        progressFill.style.width = `${clampedScore}%`;
-
-        // スコアテキストを更新
-        scoreText.textContent = `${clampedScore.toFixed(1)}%`;
-
-        // スコア表示エリアを表示
-        scoreElement.style.display = 'block';
-
-        // スコアに応じて色を変更（オプション）
-        if (clampedScore >= 70) {
-            scoreText.style.color = '#28a745'; // 緑
-        } else if (clampedScore >= 40) {
-            scoreText.style.color = '#ffc107'; // 黄色
+            window.location.href = `selected-articles.html?userId=${userId}`;
         } else {
-            scoreText.style.color = '#dc3545'; // 赤
+            alert('Failed to submit feedback. Please try again.');
+            submitNewFeedbackBtn.classList.remove('loading');
+            submitNewFeedbackBtn.disabled = false;
         }
+    } catch (error) {
+        console.error('Error submitting new feedback:', error);
+        alert('An error occurred. Please try again.');
+        submitNewFeedbackBtn.classList.remove('loading');
+        submitNewFeedbackBtn.disabled = false;
     }
-
-    // MMR設定を表示する関数
-    function displayMMRSettings(lambda) {
-        const progressFill = mmrSettingsDiv.querySelector('.progress-fill');
-        const lambdaTextElement = mmrSettingsDiv.querySelector('.lambda-text');
-
-        // lambdaを0-1の範囲に制限
-        const clampedLambda = Math.max(0, Math.min(1, lambda));
-
-        // プログレスバーの幅を更新 (0=探索重視, 1=類似性重視)
-        progressFill.style.width = `${clampedLambda * 100}%`;
-
-        // lambdaテキストを更新
-        lambdaTextElement.textContent = `λ: ${clampedLambda.toFixed(2)}`;
-
-        // lambdaに応じて色を変更
-        if (clampedLambda <= 0.4) {
-            lambdaTextElement.style.color = '#007bff'; // 青 (探索重視)
-        } else if (clampedLambda <= 0.6) {
-            lambdaTextElement.style.color = '#28a745'; // 緑 (バランス)
-        } else {
-            lambdaTextElement.style.color = '#ffc107'; // 黄色 (類似性重視)
-        }
-
-        // 説明テキストを更新
-        const descriptionElement = mmrSettingsDiv.querySelector('p');
-        if (clampedLambda <= 0.4) {
-            descriptionElement.textContent = '新しい記事の発見を重視しています。興味なしの記事が表示されやすくなりますが、新しい発見が増えます。';
-        } else if (clampedLambda <= 0.6) {
-            descriptionElement.textContent = '新しい発見と興味のある記事のバランスを取っています。';
-        } else {
-            descriptionElement.textContent = '興味のある記事の推薦を重視しています。興味なしの記事が減少し、好みに合った記事が増えます。';
-        }
-    }
-
-    fetchPersonalizedArticles();
-    fetchCurrentPreferenceScore();
-    fetchMMRSettings();
 });

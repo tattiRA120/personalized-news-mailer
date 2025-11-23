@@ -13,15 +13,15 @@ import { selectDissimilarArticles } from './articleSelector';
 import { OPENAI_EMBEDDING_DIMENSION } from './config';
 // Define the Env interface with bindings from wrangler.jsonc
 export interface Env {
-	DB: D1Database;
-	CLICK_LOGGER: DurableObjectNamespace<ClickLogger>;
+    DB: D1Database;
+    CLICK_LOGGER: DurableObjectNamespace<ClickLogger>;
     BATCH_QUEUE_DO: DurableObjectNamespace<BatchQueueDO>;
     WASM_DO: DurableObjectNamespace<WasmDO>;
-	OPENAI_API_KEY?: string;
-	GOOGLE_CLIENT_ID: string;
-	GOOGLE_CLIENT_SECRET: string;
-	GOOGLE_REDIRECT_URI: string;
-	'mail-news-gmail-tokens': KVNamespace;
+    OPENAI_API_KEY?: string;
+    GOOGLE_CLIENT_ID: string;
+    GOOGLE_CLIENT_SECRET: string;
+    GOOGLE_REDIRECT_URI: string;
+    'mail-news-gmail-tokens': KVNamespace;
     BATCH_CALLBACK_TOKENS: KVNamespace;
     WORKER_BASE_URL?: string;
     DEBUG_API_KEY?: string;
@@ -37,130 +37,130 @@ interface EmailRecipient {
 }
 
 export default {
-	async scheduled(controller: ScheduledController, env: Env): Promise<void> {
+    async scheduled(controller: ScheduledController, env: Env): Promise<void> {
         const logger = new Logger(env);
-		await orchestrateMailDelivery(env, new Date(controller.scheduledTime));
-	},
+        await orchestrateMailDelivery(env, new Date(controller.scheduledTime));
+    },
 
-	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
         const logger = new Logger(env);
-		const url = new URL(request.url);
-		const path = url.pathname;
+        const url = new URL(request.url);
+        const path = url.pathname;
 
-		// --- Static File Server ---
-		if (path.startsWith('/public/')) {
-			const assetPath = path.replace('/public', '');
-			const response = await env.ASSETS.fetch(new Request(new URL(assetPath, request.url)));
+        // --- Static File Server ---
+        if (path.startsWith('/public/')) {
+            const assetPath = path.replace('/public', '');
+            const response = await env.ASSETS.fetch(new Request(new URL(assetPath, request.url)));
 
-			if (response.status === 404) {
-				if (assetPath === '/') {
-					const indexHtmlResponse = await env.ASSETS.fetch(new Request(new URL('/index.html', request.url)));
-					if (indexHtmlResponse.ok) {
-						return indexHtmlResponse;
-					}
-				}
-				return new Response('Not Found', { status: 404 });
-			}
-			return response;
-		}
+            if (response.status === 404) {
+                if (assetPath === '/') {
+                    const indexHtmlResponse = await env.ASSETS.fetch(new Request(new URL('/index.html', request.url)));
+                    if (indexHtmlResponse.ok) {
+                        return indexHtmlResponse;
+                    }
+                }
+                return new Response('Not Found', { status: 404 });
+            }
+            return response;
+        }
 
-		// --- User Registration Handler ---
-		if (request.method === 'POST' && path === '/register') {
-			logger.debug('Registration request received');
-			let requestBody;
-			try {
-				requestBody = await request.json();
-				logger.debug('Registration request body:', requestBody);
-			} catch (jsonError) {
-				logger.error('Failed to parse registration request body as JSON:', jsonError);
-				return new Response('Invalid JSON in request body', { status: 400 });
-			}
+        // --- User Registration Handler ---
+        if (request.method === 'POST' && path === '/register') {
+            logger.debug('Registration request received');
+            let requestBody;
+            try {
+                requestBody = await request.json();
+                logger.debug('Registration request body:', requestBody);
+            } catch (jsonError) {
+                logger.error('Failed to parse registration request body as JSON:', jsonError);
+                return new Response('Invalid JSON in request body', { status: 400 });
+            }
 
-			try {
-				const { email } = requestBody as { email: string };
+            try {
+                const { email } = requestBody as { email: string };
 
-				if (!email) {
-					logger.warn('Registration failed: Missing email in request body.');
-					return new Response('Missing email', { status: 400 });
-				}
+                if (!email) {
+                    logger.warn('Registration failed: Missing email in request body.');
+                    return new Response('Missing email', { status: 400 });
+                }
 
-				// Basic email format validation
-				const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-				if (!emailRegex.test(email)) {
-					logger.warn(`Registration failed: Invalid email format for ${email}.`, { email });
-					return new Response('Invalid email format', { status: 400 });
-				}
+                // Basic email format validation
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(email)) {
+                    logger.warn(`Registration failed: Invalid email format for ${email}.`, { email });
+                    return new Response('Invalid email format', { status: 400 });
+                }
 
-				const encoder = new TextEncoder();
-				const data = encoder.encode(email);
-				const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-				const userId = Array.from(new Uint8Array(hashBuffer))
-					.map(b => b.toString(16).padStart(2, '0'))
-					.join('');
+                const encoder = new TextEncoder();
+                const data = encoder.encode(email);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const userId = Array.from(new Uint8Array(hashBuffer))
+                    .map(b => b.toString(16).padStart(2, '0'))
+                    .join('');
 
-				const existingUser = await getUserProfile(userId, env);
-				if (existingUser) {
-					logger.warn(`Registration failed: User with email ${email} already exists.`, { email, userId });
-					return new Response('User already exists', { status: 409 });
-				}
+                const existingUser = await getUserProfile(userId, env);
+                if (existingUser) {
+                    logger.warn(`Registration failed: User with email ${email} already exists.`, { email, userId });
+                    return new Response('User already exists', { status: 409 });
+                }
 
-				ctx.waitUntil(createUserProfile(userId, email, env));
-				logger.debug(`User registered successfully: ${userId}`, { userId, email });
+                ctx.waitUntil(createUserProfile(userId, email, env));
+                logger.debug(`User registered successfully: ${userId}`, { userId, email });
 
-				if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) {
-					logger.error('Missing Google OAuth environment variables for consent URL generation.', null);
-					return new Response('Server configuration error', { status: 500 });
-				}
+                if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) {
+                    logger.error('Missing Google OAuth environment variables for consent URL generation.', null);
+                    return new Response('Server configuration error', { status: 500 });
+                }
 
-				const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-				authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
-				authUrl.searchParams.set('redirect_uri', env.GOOGLE_REDIRECT_URI);
-				authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.send');
-				authUrl.searchParams.set('access_type', 'offline');
-				authUrl.searchParams.set('prompt', 'consent');
-				authUrl.searchParams.set('response_type', 'code');
-				authUrl.searchParams.set('state', userId);
+                const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+                authUrl.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
+                authUrl.searchParams.set('redirect_uri', env.GOOGLE_REDIRECT_URI);
+                authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/gmail.send');
+                authUrl.searchParams.set('access_type', 'offline');
+                authUrl.searchParams.set('prompt', 'consent');
+                authUrl.searchParams.set('response_type', 'code');
+                authUrl.searchParams.set('state', userId);
 
-				logger.debug(`Generated OAuth consent URL for user ${userId}`, { userId, authUrl: authUrl.toString() });
+                logger.debug(`Generated OAuth consent URL for user ${userId}`, { userId, authUrl: authUrl.toString() });
 
-				return new Response(JSON.stringify({ message: 'User registered. Please authorize Gmail access.', authUrl: authUrl.toString() }), {
-					status: 201,
-					headers: { 'Content-Type': 'application/json' },
-				});
+                return new Response(JSON.stringify({ message: 'User registered. Please authorize Gmail access.', authUrl: authUrl.toString() }), {
+                    status: 201,
+                    headers: { 'Content-Type': 'application/json' },
+                });
 
-			} catch (error) {
-				logger.error('Error during user registration:', error, { requestUrl: request.url });
-				return new Response('Internal Server Error', { status: 500 });
-			}
-		}
+            } catch (error) {
+                logger.error('Error during user registration:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
 
-		// --- Click Tracking Handler ---
-		if (request.method === 'GET' && path === '/track-click') {
-			logger.debug('Click tracking request received');
-			const userId = url.searchParams.get('userId');
-			const articleId = url.searchParams.get('articleId');
-			const encodedRedirectUrl = url.searchParams.get('redirectUrl');
+        // --- Click Tracking Handler ---
+        if (request.method === 'GET' && path === '/track-click') {
+            logger.debug('Click tracking request received');
+            const userId = url.searchParams.get('userId');
+            const articleId = url.searchParams.get('articleId');
+            const encodedRedirectUrl = url.searchParams.get('redirectUrl');
 
-			if (!userId || !articleId || !encodedRedirectUrl) {
-				logger.warn('Click tracking failed: Missing userId, articleId, or redirectUrl.');
-				return new Response('Missing parameters', { status: 400 });
-			}
+            if (!userId || !articleId || !encodedRedirectUrl) {
+                logger.warn('Click tracking failed: Missing userId, articleId, or redirectUrl.');
+                return new Response('Missing parameters', { status: 400 });
+            }
 
-			let redirectUrl: string;
-			try {
-				// まずURLエンコードをデコードし、次にHTMLエンティティをデコードする
-				const decodedUri = decodeURIComponent(encodedRedirectUrl);
-				redirectUrl = decodeHtmlEntities(decodedUri);
-			} catch (e) {
-				logger.error('Click tracking failed: Invalid redirectUrl encoding or HTML entities.', e, { encodedRedirectUrl });
-				return new Response('Invalid redirectUrl encoding or HTML entities', { status: 400 });
-			}
+            let redirectUrl: string;
+            try {
+                // まずURLエンコードをデコードし、次にHTMLエンティティをデコードする
+                const decodedUri = decodeURIComponent(encodedRedirectUrl);
+                redirectUrl = decodeHtmlEntities(decodedUri);
+            } catch (e) {
+                logger.error('Click tracking failed: Invalid redirectUrl encoding or HTML entities.', e, { encodedRedirectUrl });
+                return new Response('Invalid redirectUrl encoding or HTML entities', { status: 400 });
+            }
 
-			try {
-				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
-				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+            try {
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-				const logClickResponse = await clickLogger.fetch(
+                const logClickResponse = await clickLogger.fetch(
                     new Request(`${env.WORKER_BASE_URL}/log-click`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -168,226 +168,333 @@ export default {
                     })
                 );
 
-				if (logClickResponse.ok) {
-					logger.debug(`Click logged successfully for user ${userId}, article ${articleId}`, { userId, articleId });
-				} else {
-					logger.error(`Failed to log click for user ${userId}, article ${articleId}: ${logClickResponse.statusText}`, null, { userId, articleId, status: logClickResponse.status, statusText: logClickResponse.statusText });
-				}
+                if (logClickResponse.ok) {
+                    logger.debug(`Click logged successfully for user ${userId}, article ${articleId}`, { userId, articleId });
+                } else {
+                    logger.error(`Failed to log click for user ${userId}, article ${articleId}: ${logClickResponse.statusText}`, null, { userId, articleId, status: logClickResponse.status, statusText: logClickResponse.statusText });
+                }
 
-				return Response.redirect(redirectUrl, 302);
+                return Response.redirect(redirectUrl, 302);
 
-			} catch (error) {
-				logger.error('Error during click tracking:', error, { userId, articleId, redirectUrl, requestUrl: request.url });
-				return new Response('Internal Server Error', { status: 500 });
-			}
-		}
+            } catch (error) {
+                logger.error('Error during click tracking:', error, { userId, articleId, redirectUrl, requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
 
-		// --- Feedback Tracking Handler ---
-		if (request.method === 'GET' && path === '/track-feedback') {
-			logger.debug('Feedback tracking request received');
-			const userId = url.searchParams.get('userId');
-			const articleId = url.searchParams.get('articleId');
-			const feedback = url.searchParams.get('feedback'); // 'interested' or 'not_interested'
+        // --- Feedback Tracking Handler ---
+        if (request.method === 'GET' && path === '/track-feedback') {
+            logger.debug('Feedback tracking request received');
+            const userId = url.searchParams.get('userId');
+            const articleId = url.searchParams.get('articleId');
+            const feedback = url.searchParams.get('feedback'); // 'interested' or 'not_interested'
 
-			if (!userId || !articleId || !feedback) {
-				logger.warn('Feedback tracking failed: Missing userId, articleId, or feedback.');
-				return new Response('Missing parameters', { status: 400 });
-			}
+            if (!userId || !articleId || !feedback) {
+                logger.warn('Feedback tracking failed: Missing userId, articleId, or feedback.');
+                return new Response('Missing parameters', { status: 400 });
+            }
 
-			if (feedback !== 'interested' && feedback !== 'not_interested') {
-				logger.warn(`Invalid feedback value: ${feedback}`);
-				return new Response('Invalid feedback value', { status: 400 });
-			}
+            if (feedback !== 'interested' && feedback !== 'not_interested') {
+                logger.warn(`Invalid feedback value: ${feedback}`);
+                return new Response('Invalid feedback value', { status: 400 });
+            }
 
-			try {
-				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
-				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+            try {
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-				const logFeedbackResponse = await clickLogger.fetch(
-					new Request(`${env.WORKER_BASE_URL}/log-feedback`, {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ userId, articleId, feedback, timestamp: Date.now(), immediateUpdate: false }),
-					})
-				);
+                const logFeedbackResponse = await clickLogger.fetch(
+                    new Request(`${env.WORKER_BASE_URL}/log-feedback`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ userId, articleId, feedback, timestamp: Date.now(), immediateUpdate: false }),
+                    })
+                );
 
-				if (logFeedbackResponse.ok) {
-					logger.debug(`Feedback logged successfully for user ${userId}, article ${articleId}, feedback: ${feedback}`, { userId, articleId, feedback });
-				} else {
-					logger.error(`Failed to log feedback for user ${userId}, article ${articleId}: ${logFeedbackResponse.statusText}`, null, { userId, articleId, status: logFeedbackResponse.status, statusText: logFeedbackResponse.statusText });
-				}
+                if (logFeedbackResponse.ok) {
+                    logger.debug(`Feedback logged successfully for user ${userId}, article ${articleId}, feedback: ${feedback}`, { userId, articleId, feedback });
+                } else {
+                    logger.error(`Failed to log feedback for user ${userId}, article ${articleId}: ${logFeedbackResponse.statusText}`, null, { userId, articleId, status: logFeedbackResponse.status, statusText: logFeedbackResponse.statusText });
+                }
 
-				// ユーザーにフィードバックが記録されたことを伝える簡単なメッセージを返す
-				return new Response('フィードバックありがとうございます！', {
-					status: 200,
-					headers: { 'Content-Type': 'text/html; charset=utf-8' },
-				});
+                // ユーザーにフィードバックが記録されたことを伝える簡単なメッセージを返す
+                return new Response('フィードバックありがとうございます！', {
+                    status: 200,
+                    headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                });
 
-			} catch (error) {
-				logger.error('Error during feedback tracking:', error, { userId, articleId, feedback, requestUrl: request.url });
-				return new Response('Internal Server Error', { status: 500 });
-			}
-		}
+            } catch (error) {
+                logger.error('Error during feedback tracking:', error, { userId, articleId, feedback, requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
 
-		// --- OAuth2 Callback Handler ---
-		if (request.method === 'GET' && path === '/oauth2callback') {
-			logger.debug('OAuth2 callback request received');
+        // --- OAuth2 Callback Handler ---
+        if (request.method === 'GET' && path === '/oauth2callback') {
+            logger.debug('OAuth2 callback request received');
 
-			const code = url.searchParams.get('code');
-			const userId = url.searchParams.get('state');
+            const code = url.searchParams.get('code');
+            const userId = url.searchParams.get('state');
 
-			if (!code) {
-				logger.warn('OAuth2 callback failed: Missing authorization code.');
-				return new Response('Missing authorization code', { status: 400 });
-			}
+            if (!code) {
+                logger.warn('OAuth2 callback failed: Missing authorization code.');
+                return new Response('Missing authorization code', { status: 400 });
+            }
 
-			if (!userId) {
-				logger.warn('OAuth2 callback failed: Missing state parameter (userId).');
-				return new Response('Missing state parameter', { status: 400 });
-			}
+            if (!userId) {
+                logger.warn('OAuth2 callback failed: Missing state parameter (userId).');
+                return new Response('Missing state parameter', { status: 400 });
+            }
 
-			if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI || !env['mail-news-gmail-tokens']) {
-				logger.error('Missing Google OAuth environment variables or KV binding.', null);
-				return new Response('Server configuration error', { status: 500 });
-			}
+            if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI || !env['mail-news-gmail-tokens']) {
+                logger.error('Missing Google OAuth environment variables or KV binding.', null);
+                return new Response('Server configuration error', { status: 500 });
+            }
 
-			try {
-				const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/x-www-form-urlencoded',
-					},
-					body: new URLSearchParams({
-						code: code,
-						client_id: env.GOOGLE_CLIENT_ID,
-						client_secret: env.GOOGLE_CLIENT_SECRET,
-						redirect_uri: env.GOOGLE_REDIRECT_URI,
-						grant_type: 'authorization_code',
-					}).toString(),
-				});
+            try {
+                const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: new URLSearchParams({
+                        code: code,
+                        client_id: env.GOOGLE_CLIENT_ID,
+                        client_secret: env.GOOGLE_CLIENT_SECRET,
+                        redirect_uri: env.GOOGLE_REDIRECT_URI,
+                        grant_type: 'authorization_code',
+                    }).toString(),
+                });
 
-				if (!tokenResponse.ok) {
-					const errorText = await tokenResponse.text();
-					logger.error(`Failed to exchange authorization code for tokens: ${tokenResponse.statusText}`, null, { status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
-					return new Response(`Error exchanging code: ${tokenResponse.statusText}`, { status: tokenResponse.status });
-				}
+                if (!tokenResponse.ok) {
+                    const errorText = await tokenResponse.text();
+                    logger.error(`Failed to exchange authorization code for tokens: ${tokenResponse.statusText}`, null, { status: tokenResponse.status, statusText: tokenResponse.statusText, errorText });
+                    return new Response(`Error exchanging code: ${tokenResponse.statusText}`, { status: tokenResponse.status });
+                }
 
-				const tokenData: any = await tokenResponse.json();
-				const refreshToken = tokenData.refresh_token;
+                const tokenData: any = await tokenResponse.json();
+                const refreshToken = tokenData.refresh_token;
 
-				if (!refreshToken) {
-					logger.warn('No refresh token received. Ensure access_type=offline was requested and this is the first authorization.');
-				}
+                if (!refreshToken) {
+                    logger.warn('No refresh token received. Ensure access_type=offline was requested and this is the first authorization.');
+                }
 
-				ctx.waitUntil(env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken));
-				logger.debug(`Successfully stored refresh token for user ${userId}.`, { userId });
+                ctx.waitUntil(env['mail-news-gmail-tokens'].put(`refresh_token:${userId}`, refreshToken));
+                logger.debug(`Successfully stored refresh token for user ${userId}.`, { userId });
 
-				return new Response('Authorization successful. You can close this window.', { status: 200 });
+                return new Response('Authorization successful. You can close this window.', { status: 200 });
 
-			} catch (error) {
-				logger.error('Error during OAuth2 callback processing:', error, { userId, requestUrl: request.url });
-				return new Response('Internal Server Error', { status: 500 });
-			}
-		}
+            } catch (error) {
+                logger.error('Error during OAuth2 callback processing:', error, { userId, requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
 
-		// --- Get Articles for Education Handler ---
-		if (request.method === 'GET' && path === '/get-articles-for-education') {
-			logger.debug('Request received for articles for education');
-			try {
-				const articles: NewsArticle[] = await collectNews(env);
-				logger.debug(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
+        // --- Get Articles for Education Handler ---
+        if (request.method === 'GET' && path === '/get-articles-for-education') {
+            logger.debug('Request received for articles for education');
+            try {
+                const articles: NewsArticle[] = await collectNews(env);
+                logger.debug(`Collected ${articles.length} articles for education.`, { articleCount: articles.length });
 
-				const articlesForEducation = articles.map((article: NewsArticle) => ({
-					articleId: article.articleId,
-					title: article.title,
-					summary: article.summary,
-					link: article.link,
-				}));
+                // 記事をシャッフルして30件に制限
+                const shuffledArticles = articles.sort(() => 0.5 - Math.random()).slice(0, 30);
 
-				return new Response(JSON.stringify(articlesForEducation), {
-					headers: { 'Content-Type': 'application/json' },
-					status: 200,
-				});
+                const articlesForEducation = shuffledArticles.map((article: NewsArticle) => ({
+                    articleId: article.articleId,
+                    title: article.title,
+                    summary: article.summary,
+                    link: article.link,
+                }));
 
-			} catch (error) {
-				logger.error('Error fetching articles for education:', error, { requestUrl: request.url });
-				return new Response('Error fetching articles', { status: 500 });
-			}
-		}
+                return new Response(JSON.stringify(articlesForEducation), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
 
-		// --- Submit Interests Handler (for public/script.js - existing functionality) ---
-		if (request.method === 'POST' && path === '/submit-interests') {
-			logger.debug('Submit interests request received from public/script.js');
-			try {
-				const { userId, selectedArticles } = await request.json() as { userId: string, selectedArticles: NewsArticle[] };
+            } catch (error) {
+                logger.error('Error fetching articles for education:', error, { requestUrl: request.url });
+                return new Response('Error fetching articles', { status: 500 });
+            }
+        }
 
-				if (!userId || !Array.isArray(selectedArticles)) {
-					logger.warn('Submit interests failed: Missing userId or selectedArticles in request body.');
-					return new Response('Missing parameters', { status: 400 });
-				}
+        // --- Submit Education Feedback Handler (New) ---
+        if (request.method === 'POST' && path === '/submit-education-feedback') {
+            logger.debug('Submit education feedback request received');
+            try {
+                const { userId, feedbackData } = await request.json() as {
+                    userId: string,
+                    feedbackData: { article: NewsArticle, feedback: 'interested' | 'not_interested' }[]
+                };
 
-				const userProfile = await getUserProfile(userId, env);
+                if (!userId || !Array.isArray(feedbackData)) {
+                    logger.warn('Submit education feedback failed: Missing userId or feedbackData.');
+                    return new Response('Missing parameters', { status: 400 });
+                }
 
-				if (!userProfile) {
-					logger.warn(`Submit interests failed: User profile not found for ${userId}.`, { userId });
-					return new Response(JSON.stringify({ message: 'User not found' }), {
-						status: 404,
-						headers: { 'Content-Type': 'application/json' },
-					});
-				}
+                const userProfile = await getUserProfile(userId, env);
+                if (!userProfile) {
+                    return new Response(JSON.stringify({ message: 'User not found' }), {
+                        status: 404,
+                        headers: { 'Content-Type': 'application/json' },
+                    });
+                }
 
-				logger.debug(`User selected articles received for user ${userId} from public/script.js.`, { userId, selectedArticleCount: selectedArticles.length });
+                logger.debug(`Processing ${feedbackData.length} feedback items for user ${userId}.`, { userId, count: feedbackData.length });
 
-				const articlesNeedingEmbedding: NewsArticle[] = [];
-				const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
+                const articlesNeedingEmbedding: NewsArticle[] = [];
+                const articlesToLearn: { articleId: string; embedding: number[]; reward: number; }[] = [];
 
-				// 1. 選択された記事の中から、既にD1に存在しembeddingを持っている記事を先に問い合わせる
-				const articleIds = selectedArticles.map(article => article.articleId);
-				const existingArticlesWithEmbeddingsInD1: ArticleWithEmbedding[] = await getArticlesFromD1(env, articleIds.length, 0, `article_id IN (${articleIds.map(() => '?').join(',')}) AND embedding IS NOT NULL`, articleIds);
-				const existingArticleIdsWithEmbeddingsSet = new Set(existingArticlesWithEmbeddingsInD1.map(article => article.articleId));
+                // 1. 記事の保存とembedding確認
+                const articlesToSave = feedbackData.map(item => item.article);
+                // 重複排除
+                const uniqueArticlesToSave = Array.from(new Map(articlesToSave.map(a => [a.articleId, a])).values());
 
-				// 2. 新しい記事だけをD1に保存（重複はINSERT OR IGNOREでスキップされる）
-				ctx.waitUntil(saveArticlesToD1(selectedArticles, env));
-				logger.debug(`Selected articles saved to D1 for user ${userId}.`, { userId, savedArticleCount: selectedArticles.length });
+                // D1に保存 (INSERT OR IGNORE)
+                ctx.waitUntil(saveArticlesToD1(uniqueArticlesToSave, env));
 
-				// 3. embeddingがないと判明した記事と、新たに追加した記事を対象に、embedding生成処理を開始する
-				for (const selectedArticle of selectedArticles) {
-					if (existingArticleIdsWithEmbeddingsSet.has(selectedArticle.articleId)) {
-						// 既にembeddingが存在する記事
-						const existingArticle = existingArticlesWithEmbeddingsInD1.find(a => a.articleId === selectedArticle.articleId);
-						if (existingArticle && existingArticle.embedding) {
-							selectedArticlesWithEmbeddings.push({ articleId: existingArticle.articleId, embedding: existingArticle.embedding });
-						} else {
-							// ここに到達することはないはずだが、念のためログ
-							logger.warn(`Article "${selectedArticle.title}" (ID: ${selectedArticle.articleId}) was expected to have embedding but not found.`, { articleId: selectedArticle.articleId, articleTitle: selectedArticle.title });
-							articlesNeedingEmbedding.push(selectedArticle);
-						}
-					} else {
-						// embeddingがまだ存在しない記事（新規保存されたか、以前から存在したがembeddingがなかった記事）
-						articlesNeedingEmbedding.push(selectedArticle);
-					}
-				}
+                // 2. Embeddingの確認と取得
+                const articleIds = uniqueArticlesToSave.map(a => a.articleId);
+                const existingArticlesWithEmbeddingsInD1 = await getArticlesFromD1(env, articleIds.length, 0, `article_id IN (${articleIds.map(() => '?').join(',')}) AND embedding IS NOT NULL`, articleIds);
+                const existingArticleIdsWithEmbeddingsSet = new Set(existingArticlesWithEmbeddingsInD1.map(article => article.articleId));
 
-				if (articlesNeedingEmbedding.length > 0) {
-					logger.debug(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
-					ctx.waitUntil(generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false));
-				} else {
-					logger.debug(`No new embeddings needed for selected articles for user ${userId}.`, { userId });
-				}
+                for (const item of feedbackData) {
+                    const article = item.article;
+                    const feedback = item.feedback;
+                    const reward = feedback === 'interested' ? 5.0 : -1.0; // 興味あり: 5.0, 興味なし: -1.0
 
-				// 4. 既に埋め込みがある記事のみでバンディットモデルを更新
-				if (selectedArticlesWithEmbeddings.length > 0) {
-					const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
-					const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+                    if (existingArticleIdsWithEmbeddingsSet.has(article.articleId)) {
+                        const existingArticle = existingArticlesWithEmbeddingsInD1.find(a => a.articleId === article.articleId);
+                        if (existingArticle && existingArticle.embedding) {
+                            articlesToLearn.push({
+                                articleId: article.articleId,
+                                embedding: existingArticle.embedding,
+                                reward: reward
+                            });
+                        }
+                    } else {
+                        articlesNeedingEmbedding.push(article);
+                        // embeddingがない場合でも、後で学習できるようにログには残したいが、
+                        // 現状のアーキテクチャではembeddingがないとバンディットの更新ができない。
+                        // embedding生成後にコールバックで学習させる仕組みが必要だが、
+                        // ここでは簡略化のため、embedding生成リクエストだけ投げておく。
+                        // (厳密には、生成後に学習させるフローが必要)
+                    }
+                }
 
-					const batchSize = 10;
-					logger.debug(`Sending selected articles with existing embeddings for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length, batchSize });
+                // 3. Embedding生成が必要な記事の処理
+                if (articlesNeedingEmbedding.length > 0) {
+                    // 重複排除
+                    const uniqueArticlesNeedingEmbedding = Array.from(new Map(articlesNeedingEmbedding.map(a => [a.articleId, a])).values());
+                    logger.debug(`Generating embeddings for ${uniqueArticlesNeedingEmbedding.length} articles.`, { count: uniqueArticlesNeedingEmbedding.length });
+                    ctx.waitUntil(generateAndSaveEmbeddings(uniqueArticlesNeedingEmbedding, env, userId, false));
+                }
 
-					for (let i = 0; i < selectedArticlesWithEmbeddings.length; i += batchSize) {
-						const batch = selectedArticlesWithEmbeddings.slice(i, i + batchSize);
-						logger.debug(`Sending batch ${Math.floor(i / batchSize) + 1} with ${batch.length} articles for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1, batchCount: batch.length });
+                // 4. バンディットモデルの更新 (embeddingがある記事のみ)
+                if (articlesToLearn.length > 0) {
+                    const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                    const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-						const learnResponse = await clickLogger.fetch(
+                    const batchSize = 10;
+                    for (let i = 0; i < articlesToLearn.length; i += batchSize) {
+                        const batch = articlesToLearn.slice(i, i + batchSize);
+                        await clickLogger.fetch(
+                            new Request(`${env.WORKER_BASE_URL}/learn-from-education`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    userId: userId,
+                                    selectedArticles: batch
+                                }),
+                            })
+                        );
+                    }
+                }
+
+                return new Response(JSON.stringify({ message: 'フィードバックを受け付けました。' }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
+
+            } catch (error) {
+                logger.error('Error submitting education feedback:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
+
+        // --- Submit Interests Handler (Legacy - kept for compatibility if needed, but mainly replaced by above) ---
+        if (request.method === 'POST' && path === '/submit-interests') {
+            logger.debug('Submit interests request received from public/script.js');
+            try {
+                const { userId, selectedArticles } = await request.json() as { userId: string, selectedArticles: NewsArticle[] };
+
+                if (!userId || !Array.isArray(selectedArticles)) {
+                    logger.warn('Submit interests failed: Missing userId or selectedArticles in request body.');
+                    return new Response('Missing parameters', { status: 400 });
+                }
+
+                const userProfile = await getUserProfile(userId, env);
+
+                if (!userProfile) {
+                    logger.warn(`Submit interests failed: User profile not found for ${userId}.`, { userId });
+                    return new Response(JSON.stringify({ message: 'User not found' }), {
+                        status: 404,
+                        headers: { 'Content-Type': 'application/json' },
+                    });
+                }
+
+                logger.debug(`User selected articles received for user ${userId} from public/script.js.`, { userId, selectedArticleCount: selectedArticles.length });
+
+                const articlesNeedingEmbedding: NewsArticle[] = [];
+                const selectedArticlesWithEmbeddings: { articleId: string; embedding: number[]; }[] = [];
+
+                // 1. 選択された記事の中から、既にD1に存在しembeddingを持っている記事を先に問い合わせる
+                const articleIds = selectedArticles.map(article => article.articleId);
+                const existingArticlesWithEmbeddingsInD1: ArticleWithEmbedding[] = await getArticlesFromD1(env, articleIds.length, 0, `article_id IN (${articleIds.map(() => '?').join(',')}) AND embedding IS NOT NULL`, articleIds);
+                const existingArticleIdsWithEmbeddingsSet = new Set(existingArticlesWithEmbeddingsInD1.map(article => article.articleId));
+
+                // 2. 新しい記事だけをD1に保存（重複はINSERT OR IGNOREでスキップされる）
+                ctx.waitUntil(saveArticlesToD1(selectedArticles, env));
+                logger.debug(`Selected articles saved to D1 for user ${userId}.`, { userId, savedArticleCount: selectedArticles.length });
+
+                // 3. embeddingがないと判明した記事と、新たに追加した記事を対象に、embedding生成処理を開始する
+                for (const selectedArticle of selectedArticles) {
+                    if (existingArticleIdsWithEmbeddingsSet.has(selectedArticle.articleId)) {
+                        // 既にembeddingが存在する記事
+                        const existingArticle = existingArticlesWithEmbeddingsInD1.find(a => a.articleId === selectedArticle.articleId);
+                        if (existingArticle && existingArticle.embedding) {
+                            selectedArticlesWithEmbeddings.push({ articleId: existingArticle.articleId, embedding: existingArticle.embedding });
+                        } else {
+                            // ここに到達することはないはずだが、念のためログ
+                            logger.warn(`Article "${selectedArticle.title}" (ID: ${selectedArticle.articleId}) was expected to have embedding but not found.`, { articleId: selectedArticle.articleId, articleTitle: selectedArticle.title });
+                            articlesNeedingEmbedding.push(selectedArticle);
+                        }
+                    } else {
+                        // embeddingがまだ存在しない記事（新規保存されたか、以前から存在したがembeddingがなかった記事）
+                        articlesNeedingEmbedding.push(selectedArticle);
+                    }
+                }
+
+                if (articlesNeedingEmbedding.length > 0) {
+                    logger.debug(`Generating embeddings for ${articlesNeedingEmbedding.length} articles. This will be processed asynchronously.`, { count: articlesNeedingEmbedding.length });
+                    ctx.waitUntil(generateAndSaveEmbeddings(articlesNeedingEmbedding, env, userId, false));
+                } else {
+                    logger.debug(`No new embeddings needed for selected articles for user ${userId}.`, { userId });
+                }
+
+                // 4. 既に埋め込みがある記事のみでバンディットモデルを更新
+                if (selectedArticlesWithEmbeddings.length > 0) {
+                    const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                    const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+
+                    const batchSize = 10;
+                    logger.debug(`Sending selected articles with existing embeddings for learning to ClickLogger in batches of ${batchSize} for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length, batchSize });
+
+                    for (let i = 0; i < selectedArticlesWithEmbeddings.length; i += batchSize) {
+                        const batch = selectedArticlesWithEmbeddings.slice(i, i + batchSize);
+                        logger.debug(`Sending batch ${Math.floor(i / batchSize) + 1} with ${batch.length} articles for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1, batchCount: batch.length });
+
+                        const learnResponse = await clickLogger.fetch(
                             new Request(`${env.WORKER_BASE_URL}/learn-from-education`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -396,62 +503,62 @@ export default {
                                     selectedArticles: batch.map(article => ({
                                         articleId: article.articleId,
                                         embedding: article.embedding!,
-                                        reward: 1.0, // public/script.js からは常に興味ありとして報酬1.0
+                                        reward: 5.0, // 興味ありとして報酬5.0 (以前は1.0だったが強化)
                                     })),
                                 }),
                             })
                         );
 
-						if (learnResponse.ok) {
-							logger.debug(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
-						} else {
-							logger.error(`Failed to send batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, batchNumber: Math.floor(i / batchSize) + 1, status: learnResponse.status, statusText: learnResponse.statusText });
-						}
-					}
-					logger.debug(`Finished sending all batches for learning to ClickLogger for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length });
-				} else {
-					logger.warn(`No selected articles with existing embeddings to send for learning for user ${userId}.`, { userId });
-				}
+                        if (learnResponse.ok) {
+                            logger.debug(`Successfully sent batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}.`, { userId, batchNumber: Math.floor(i / batchSize) + 1 });
+                        } else {
+                            logger.error(`Failed to send batch ${Math.floor(i / batchSize) + 1} for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, batchNumber: Math.floor(i / batchSize) + 1, status: learnResponse.status, statusText: learnResponse.statusText });
+                        }
+                    }
+                    logger.debug(`Finished sending all batches for learning to ClickLogger for user ${userId}.`, { userId, totalCount: selectedArticlesWithEmbeddings.length });
+                } else {
+                    logger.warn(`No selected articles with existing embeddings to send for learning for user ${userId}.`, { userId });
+                }
 
-				return new Response(JSON.stringify({ message: '興味関心の更新が開始されました。埋め込み生成が必要な記事は非同期で処理されます。' }), {
-					headers: { 'Content-Type': 'application/json' },
-					status: 200,
-				});
+                return new Response(JSON.stringify({ message: '興味関心の更新が開始されました。埋め込み生成が必要な記事は非同期で処理されます。' }), {
+                    headers: { 'Content-Type': 'application/json' },
+                    status: 200,
+                });
 
-			} catch (error) {
-				logger.error('Error submitting interests:', error, { requestUrl: request.url });
-				return new Response('Internal Server Error', { status: 500 });
-			}
-		}
+            } catch (error) {
+                logger.error('Error submitting interests:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        }
 
-		// --- Submit Education Interests Handler (DELETED - now uses /track-feedback) ---
-		// This endpoint has been removed as public/education.js now directly calls /track-feedback.
-		// The logic for fetching embeddings and updating the bandit model is now handled within ClickLogger's /log-feedback.
-		if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
-			logger.debug('Request received to delete all Durable Object data');
-			try {
-				const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
-				const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+        // --- Submit Education Interests Handler (DELETED - now uses /track-feedback) ---
+        // This endpoint has been removed as public/education.js now directly calls /track-feedback.
+        // The logic for fetching embeddings and updating the bandit model is now handled within ClickLogger's /log-feedback.
+        if (request.method === 'POST' && path === '/delete-all-durable-object-data') {
+            logger.debug('Request received to delete all Durable Object data');
+            try {
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
 
-				const deleteResponse = await clickLogger.fetch(
+                const deleteResponse = await clickLogger.fetch(
                     new Request(new URL('/delete-all-data', request.url), {
                         method: 'POST',
                     })
                 );
 
-				if (deleteResponse.ok) {
-					logger.debug('Successfully triggered deletion of all bandit models.');
-					return new Response('Triggered deletion of all bandit models.', { status: 200 });
-				} else {
-					logger.error(`Failed to trigger deletion of all bandit models: ${deleteResponse.statusText}`, null, { status: deleteResponse.status, statusText: deleteResponse.statusText });
-					return new Response('Failed to trigger deletion.', { status: 500 });
-				}
+                if (deleteResponse.ok) {
+                    logger.debug('Successfully triggered deletion of all bandit models.');
+                    return new Response('Triggered deletion of all bandit models.', { status: 200 });
+                } else {
+                    logger.error(`Failed to trigger deletion of all bandit models: ${deleteResponse.statusText}`, null, { status: deleteResponse.status, statusText: deleteResponse.statusText });
+                    return new Response('Failed to trigger deletion.', { status: 500 });
+                }
 
-			} catch (error) {
-				logger.error('Error during deletion of all Durable Object data:', error, { requestUrl: request.url });
-				return new Response('Internal Server Error', { status: 500 });
-			}
-		} else if (request.method === 'POST' && path === '/debug/force-embed-articles') {
+            } catch (error) {
+                logger.error('Error during deletion of all Durable Object data:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        } else if (request.method === 'POST' && path === '/debug/force-embed-articles') {
             logger.debug('Debug: Force embed articles request received');
             const debugApiKey = request.headers.get('X-Debug-Key');
             if (debugApiKey !== env.DEBUG_API_KEY) {
@@ -582,8 +689,8 @@ export default {
                 });
             } catch (error) {
                 logger.error('Debug: Error during test email delivery:', error, { requestUrl: request.url });
-				return new Response('Internal Server Error during test email delivery', { status: 500 });
-			}
+                return new Response('Internal Server Error during test email delivery', { status: 500 });
+            }
         } else if (request.method === 'POST' && path === '/debug/generate-oauth-url') {
             logger.debug('Debug: Generate OAuth URL request received');
             const debugApiKey = request.headers.get('X-Debug-Key');
@@ -937,37 +1044,37 @@ export default {
             }
         }
 
-		// --- WASM Durable Object Handler ---
-		if (path.startsWith('/wasm-do/')) {
-			logger.debug('WASM Durable Object request received');
-			try {
-				const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
-				const wasmDOStub = env.WASM_DO.get(wasmDOId);
+        // --- WASM Durable Object Handler ---
+        if (path.startsWith('/wasm-do/')) {
+            logger.debug('WASM Durable Object request received');
+            try {
+                const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
+                const wasmDOStub = env.WASM_DO.get(wasmDOId);
 
-				// WasmDO が期待するパスに変換
-				const wasmPath = path.replace('/wasm-do', '');
-				const wasmUrl = new URL(wasmPath, env.WORKER_BASE_URL);
-				logger.debug(`Forwarding WASM DO request to: ${wasmUrl.toString()}`, { wasmUrl: wasmUrl.toString() });
+                // WasmDO が期待するパスに変換
+                const wasmPath = path.replace('/wasm-do', '');
+                const wasmUrl = new URL(wasmPath, env.WORKER_BASE_URL);
+                logger.debug(`Forwarding WASM DO request to: ${wasmUrl.toString()}`, { wasmUrl: wasmUrl.toString() });
 
-				const wasmRequest = new Request(wasmUrl, {
-					method: request.method,
-					headers: request.headers,
-					body: request.body,
-				});
+                const wasmRequest = new Request(wasmUrl, {
+                    method: request.method,
+                    headers: request.headers,
+                    body: request.body,
+                });
 
-				const doResponse = await wasmDOStub.fetch(wasmRequest); // リクエストをDOに転送
+                const doResponse = await wasmDOStub.fetch(wasmRequest); // リクエストをDOに転送
 
-				return doResponse;
+                return doResponse;
 
-			} catch (error) {
-				logger.error('Error during WASM Durable Object invocation:', error, { requestUrl: request.url });
-				return new Response('Internal Server Error during WASM Durable Object invocation', { status: 500 });
-			}
-		}
+            } catch (error) {
+                logger.error('Error during WASM Durable Object invocation:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error during WASM Durable Object invocation', { status: 500 });
+            }
+        }
 
-		// Handle other requests or return a default response
-		return new Response('Not Found', { status: 404 });
-	},
+        // Handle other requests or return a default response
+        return new Response('Not Found', { status: 404 });
+    },
 };
 
 // Durable Object class definition (must be exported)
