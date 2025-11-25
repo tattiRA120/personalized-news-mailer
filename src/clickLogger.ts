@@ -767,7 +767,7 @@ export class ClickLogger extends DurableObject {
                             }
                         }
 
-                        await this.updateBanditModel(banditModel, embeddingToUse, article.reward, userId);
+                        await this.updateBanditModel(banditModel, embeddingToUse, article.reward, userId, true);
                         logStatements.push(
                             this.env.DB.prepare(
                                 `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
@@ -780,6 +780,7 @@ export class ClickLogger extends DurableObject {
                     this.state.waitUntil(this.env.DB.batch(logStatements));
                     this.dirty = true;
                     this.logger.debug(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
+                    await this.updateUserProfileEmbeddingInD1(userId, banditModel); // プロファイル更新
                     await this.saveModelsToR2(); // モデルの変更を即座にR2へ保存
                 }
                 return new Response('Learning from education completed', { status: 200 });
@@ -813,9 +814,11 @@ export class ClickLogger extends DurableObject {
                         // embedding-completed-callback は OpenAI Batch API からのコールバックであり、
                         // BatchQueueDOで既に257次元に拡張されたembeddingを受け取り、D1にも保存済みであるため、
                         // ここではバンディットモデルの更新のみを行う。
-                        await this.updateBanditModel(banditModel, embed.embedding, 1.0, userId); // 報酬は1.0
+                        await this.updateBanditModel(banditModel, embed.embedding, 1.0, userId, true); // 報酬は1.0, プロファイル更新はスキップ
                         this.logger.debug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
+                    // バッチ処理完了後に一度だけユーザープロファイルを更新
+                    await this.updateUserProfileEmbeddingInD1(userId, banditModel);
                     this.dirty = true; // モデルが変更されたことをマーク
                 } else {
                     this.logger.debug('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
@@ -1179,12 +1182,16 @@ export class ClickLogger extends DurableObject {
                             }
 
                             // クリックされなかった記事には負の報酬を与える (例: -0.1)
-                            await this.updateBanditModel(banditModel, embeddingToUse, -0.1, userId);
+                            await this.updateBanditModel(banditModel, embeddingToUse, -0.1, userId, true);
                             this.dirty = true;
                             updatedCount++;
                         } else {
                             this.logger.warn(`Article ${article.article_id} from sent_articles missing embedding or published_at. Skipping update.`, { userId, articleId: article.article_id, hasEmbedding: !!article.embedding, hasPublishedAt: !!article.published_at });
                         }
+                    }
+
+                    if (updatedCount > 0) {
+                        await this.updateUserProfileEmbeddingInD1(userId, banditModel);
                     }
 
                     return updatedCount; // 処理した記事数を返す
@@ -1352,7 +1359,7 @@ export class ClickLogger extends DurableObject {
                             // 教育ページからの明示的なフィードバックは強いシグナルとして扱う
                             // 興味あり: 5.0, 興味なし: -5.0
                             const reward = log.action === 'interested' ? 5.0 : -5.0;
-                            await this.updateBanditModel(banditModel, embedding, reward, userId);
+                            await this.updateBanditModel(banditModel, embedding, reward, userId, true);
                             this.dirty = true;
                             updatedCount++;
 
@@ -1380,6 +1387,10 @@ export class ClickLogger extends DurableObject {
                 // 残りのステートメントを実行
                 if (logStatements.length > 0) {
                     this.state.waitUntil(this.env.DB.batch(logStatements));
+                }
+
+                if (updatedCount > 0) {
+                    await this.updateUserProfileEmbeddingInD1(userId, banditModel);
                 }
 
                 this.logger.debug(`Updated bandit model for user ${userId} with ${updatedCount} feedback entries.`, { userId, updatedCount });
@@ -1483,7 +1494,7 @@ export class ClickLogger extends DurableObject {
     }
 
     // Update a specific user's bandit model using WASM.
-    private async updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number, userId: string): Promise<void> {
+    private async updateBanditModel(banditModel: BanditModelState, embedding: number[], reward: number, userId: string, skipProfileUpdate: boolean = false): Promise<void> {
         // embedding の厳密な検証
         if (!embedding) {
             this.logger.warn("Cannot update bandit model: embedding is null or undefined.", { userId });
@@ -1531,8 +1542,10 @@ export class ClickLogger extends DurableObject {
 
             this.logger.debug(`Bandit model updated for user ${userId} with reward ${reward.toFixed(2)}.`, { userId, reward });
 
-            // バンディットモデル更新後、ユーザープロファイルの埋め込みも更新
-            await this.updateUserProfileEmbeddingInD1(userId, banditModel);
+            // バンディットモデル更新後、ユーザープロファイルの埋め込みも更新 (skipProfileUpdateがfalseの場合のみ)
+            if (!skipProfileUpdate) {
+                await this.updateUserProfileEmbeddingInD1(userId, banditModel);
+            }
         } catch (error: unknown) {
             const err = this.normalizeError(error);
             this.logger.error("Error during WASM bandit model update:", err, {
