@@ -796,6 +796,34 @@ export default {
                 logger.error('Debug: Error during OAuth URL generation:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error during OAuth URL generation', { status: 500 });
             }
+        } else if (request.method === 'GET' && path === '/debug/check-exclusions') {
+            logger.debug('Debug: Check exclusions request received');
+            const debugApiKey = request.headers.get('X-Debug-Key');
+            if (debugApiKey !== env.DEBUG_API_KEY) {
+                return new Response('Unauthorized', { status: 401 });
+            }
+            try {
+                const userId = url.searchParams.get('userId');
+                if (!userId) return new Response('Missing userId', { status: 400 });
+
+                // 1. User's feedback history
+                const feedbackLogs = await env.DB.prepare(`SELECT article_id, action, timestamp FROM education_logs WHERE user_id = ?`).bind(userId).all();
+
+                // 2. Articles that WOULD be returned without exclusion
+                const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - 14);
+                const cutoffTimestamp = cutoffDate.getTime();
+
+                const candidates = await env.DB.prepare(`SELECT article_id, title, published_at FROM articles WHERE embedding IS NOT NULL AND published_at >= ? LIMIT 50`).bind(cutoffTimestamp).all();
+
+                return new Response(JSON.stringify({
+                    feedbackLogs: feedbackLogs.results,
+                    candidates: candidates.results,
+                    cutoffTimestamp
+                }), { headers: { 'Content-Type': 'application/json' } });
+            } catch (e) {
+                return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
+            }
         } else if (request.method === 'GET' && path === '/get-dissimilar-articles') {
             logger.debug('Request received for dissimilar articles for education program');
             try {
@@ -871,9 +899,19 @@ export default {
                 }
 
                 // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事を除外
-                const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?)`;
-                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId]);
-                logger.debug(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 (excluding feedbacked articles for user ${userId}).`, { count: allArticlesWithEmbeddings.length, userId });
+                // 14日以内の記事のみを対象とする
+                const cutoffDate = new Date();
+                cutoffDate.setDate(cutoffDate.getDate() - 14);
+                const cutoffTimestamp = cutoffDate.getTime();
+
+                const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?) AND published_at >= ?`;
+                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId, cutoffTimestamp]);
+
+                // 除外された記事の数を確認するためのログ (デバッグ用)
+                const totalArticlesCount = await env.DB.prepare(`SELECT COUNT(*) as count FROM articles WHERE embedding IS NOT NULL AND published_at >= ?`).bind(cutoffTimestamp).first<{ count: number }>();
+                const excludedCount = (totalArticlesCount?.count || 0) - allArticlesWithEmbeddings.length;
+
+                logger.info(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 (newer than 14 days, excluding feedbacked articles for user ${userId}). Excluded approx ${excludedCount} articles based on feedback.`, { count: allArticlesWithEmbeddings.length, userId, cutoffDate: cutoffDate.toISOString() });
 
                 if (allArticlesWithEmbeddings.length === 0) {
                     logger.warn('No articles with embeddings found. Returning empty list.', { userId });
