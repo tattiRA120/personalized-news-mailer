@@ -811,7 +811,7 @@ export default {
 
                 // 2. Articles that WOULD be returned without exclusion
                 const cutoffDate = new Date();
-                cutoffDate.setDate(cutoffDate.getDate() - 14);
+                cutoffDate.setHours(cutoffDate.getHours() - 24);
                 const cutoffTimestamp = cutoffDate.getTime();
 
                 const candidates = await env.DB.prepare(`SELECT article_id, title, published_at FROM articles WHERE embedding IS NOT NULL AND published_at >= ? LIMIT 50`).bind(cutoffTimestamp).all();
@@ -899,9 +899,9 @@ export default {
                 }
 
                 // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事を除外
-                // 14日以内の記事のみを対象とする
+                // 24時間以内の記事のみを対象とする
                 const cutoffDate = new Date();
-                cutoffDate.setDate(cutoffDate.getDate() - 14);
+                cutoffDate.setHours(cutoffDate.getHours() - 24);
                 const cutoffTimestamp = cutoffDate.getTime();
 
                 const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?) AND published_at >= ?`;
@@ -911,7 +911,7 @@ export default {
                 const totalArticlesCount = await env.DB.prepare(`SELECT COUNT(*) as count FROM articles WHERE embedding IS NOT NULL AND published_at >= ?`).bind(cutoffTimestamp).first<{ count: number }>();
                 const excludedCount = (totalArticlesCount?.count || 0) - allArticlesWithEmbeddings.length;
 
-                logger.info(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 (newer than 14 days, excluding feedbacked articles for user ${userId}). Excluded approx ${excludedCount} articles based on feedback.`, { count: allArticlesWithEmbeddings.length, userId, cutoffDate: cutoffDate.toISOString() });
+                logger.info(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 (newer than 24 hours, excluding feedbacked articles for user ${userId}). Excluded approx ${excludedCount} articles based on feedback.`, { count: allArticlesWithEmbeddings.length, userId, cutoffDate: cutoffDate.toISOString() });
 
                 if (allArticlesWithEmbeddings.length === 0) {
                     logger.warn('No articles with embeddings found. Returning empty list.', { userId });
