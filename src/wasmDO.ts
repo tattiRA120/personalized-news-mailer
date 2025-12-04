@@ -166,9 +166,9 @@ export class WasmDO extends DurableObject<Env> {
                         interestRelevance = interestRelevanceResults[relevanceIndex];
                     }
 
-                    const interestWeight = 1.0;
+                    const interestWeight = 3.0;
                     const baseUcbWeight = 1.0;
-                    const ucbWeight = baseUcbWeight + (1 - userCTR) * 1.0;
+                    const ucbWeight = baseUcbWeight + (1 - userCTR) * 0.5;
 
                     const finalScore = interestRelevance * interestWeight + ucb * ucbWeight;
 
