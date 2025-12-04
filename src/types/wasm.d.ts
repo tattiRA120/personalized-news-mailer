@@ -28,4 +28,5 @@ export interface SelectPersonalizedArticlesRequest {
     userCTR: number;
     lambda?: number;
     workerBaseUrl: string; // ClickLoggerへのフェッチのために必要
+    negativeFeedbackEmbeddings?: number[][]; // 興味なし記事の埋め込みベクトル
 }

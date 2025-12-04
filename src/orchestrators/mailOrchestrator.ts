@@ -194,6 +194,33 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     const userMMRLambda = await getMMRLambda(userId, env);
                     logger.debug(`Using saved MMR lambda for user ${userId}: ${userMMRLambda}`, { userId, lambda: userMMRLambda });
 
+                    // --- Fetch Negative Feedback Embeddings ---
+                    // 興味なしと判定された記事の埋め込みを取得 (sent_articlesと結合)
+                    const negativeFeedbackResult = await env.DB.prepare(
+                        `SELECT sa.embedding
+                         FROM education_logs el
+                         JOIN sent_articles sa ON el.article_id = sa.article_id AND el.user_id = sa.user_id
+                         WHERE el.user_id = ? AND el.action = 'not_interested' AND sa.embedding IS NOT NULL
+                         ORDER BY el.timestamp DESC
+                         LIMIT 50`
+                    ).bind(userId).all<{ embedding: string }>();
+
+                    const negativeFeedbackEmbeddings: number[][] = [];
+                    if (negativeFeedbackResult.results) {
+                        for (const row of negativeFeedbackResult.results) {
+                            try {
+                                const embedding = JSON.parse(row.embedding);
+                                if (Array.isArray(embedding)) {
+                                    negativeFeedbackEmbeddings.push(embedding);
+                                }
+                            } catch (e) {
+                                logger.warn(`Failed to parse embedding for negative feedback article`, e);
+                            }
+                        }
+                    }
+                    logger.debug(`Fetched ${negativeFeedbackEmbeddings.length} negative feedback embeddings for user ${userId}.`, { userId, count: negativeFeedbackEmbeddings.length });
+
+
                     logger.debug(`Selecting personalized articles for user ${userId} from ${filteredArticlesForSelection.length} candidates.`, { userId, candidateCount: filteredArticlesForSelection.length });
 
                     // WASM DOを使用してパーソナライズド記事を選択
@@ -211,6 +238,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                             userCTR: userCTR,
                             lambda: userMMRLambda,
                             workerBaseUrl: env.WORKER_BASE_URL,
+                            negativeFeedbackEmbeddings: negativeFeedbackEmbeddings,
                         }),
                     }));
 

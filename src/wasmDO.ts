@@ -100,7 +100,7 @@ export class WasmDO extends DurableObject<Env> {
                 }), { headers: { "Content-Type": "application/json" } });
 
             } else if (path === '/select-personalized-articles') {
-                const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl } = await request.json() as SelectPersonalizedArticlesRequest;
+                const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl, negativeFeedbackEmbeddings } = await request.json() as SelectPersonalizedArticlesRequest;
 
                 if (!articles || !userProfileEmbeddingForSelection || !userId || !count || userCTR === undefined) {
                     return new Response("Missing required parameters for personalized article selection.", { status: 400 });
@@ -156,6 +156,25 @@ export class WasmDO extends DurableObject<Env> {
                     ? cosine_similarity_bulk(vec1sForInterestRelevance, vec2sForInterestRelevance)
                     : [];
 
+                // Pre-calculate negative feedback similarities
+                const negativePenaltyMap = new Map<string, number>();
+                if (negativeFeedbackEmbeddings && negativeFeedbackEmbeddings.length > 0) {
+                    articles.forEach(article => {
+                        if (article.embedding) {
+                            let maxSim = -1.0; // Initialize with lowest possible similarity
+                            for (const negEmb of negativeFeedbackEmbeddings) {
+                                // Ensure dimensions match (ignoring freshness dimension difference if any, but ideally they match)
+                                // Assuming both are extended or both are not, or at least compatible for dot product
+                                if (article.embedding.length === negEmb.length) {
+                                    const sim = cosine_similarity(article.embedding, negEmb);
+                                    if (sim > maxSim) maxSim = sim;
+                                }
+                            }
+                            negativePenaltyMap.set(article.articleId, maxSim);
+                        }
+                    });
+                }
+
                 const articlesWithFinalScore = articles.map((article, index) => {
                     const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.articleId);
                     const ucb = ucbInfo ? ucbInfo.ucb : 0;
@@ -170,7 +189,29 @@ export class WasmDO extends DurableObject<Env> {
                     const baseUcbWeight = 1.0;
                     const ucbWeight = baseUcbWeight + (1 - userCTR) * 0.5;
 
-                    const finalScore = interestRelevance * interestWeight + ucb * ucbWeight;
+                    // --- Freshness Boost ---
+                    const freshnessWeight = 0.5;
+                    // embeddingの最後の要素が鮮度情報 (0.0 - 1.0, 1.0が最新)
+                    // ただし、embeddingの次元が拡張されている場合のみ
+                    let freshnessScore = 0;
+                    if (article.embedding && article.embedding.length > 0) {
+                        // 最後の要素を取得
+                        const normalizedAge = article.embedding[article.embedding.length - 1];
+                        // normalizedAgeは 0(最新) -> 1(古い) なので、 1 - normalizedAge でスコア化
+                        freshnessScore = 1.0 - normalizedAge;
+                    }
+
+                    // --- Negative Feedback Penalty ---
+                    const penaltyWeight = 2.0;
+                    const maxSimilarityWithNegative = negativePenaltyMap.get(article.articleId) || 0;
+
+                    let finalScore = interestRelevance * interestWeight + ucb * ucbWeight + freshnessScore * freshnessWeight;
+
+                    // Apply penalty if similarity is significant (e.g., > 0.5)
+                    if (maxSimilarityWithNegative > 0.5) {
+                        finalScore -= maxSimilarityWithNegative * penaltyWeight;
+                    }
+
 
                     return {
                         ...article,
