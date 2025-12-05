@@ -1282,27 +1282,49 @@ export class ClickLogger extends DurableObject {
             const articleIdsArray = Array.from(articleIdsToFetch);
             this.logger.info(`Preparing to fetch embeddings for ${articleIdsArray.length} articles.`, { count: articleIdsArray.length });
 
-            // sent_articles と articles テーブルから必要な埋め込みを一度に取得
-            const sentArticlesEmbeddings = await this.env.DB.prepare(
-                `SELECT article_id, embedding, published_at FROM sent_articles WHERE article_id IN (${articleIdsArray.map(() => "?").join(",")})`
-            ).bind(...articleIdsArray).all<{ article_id: string, embedding: string, published_at: string }>();
-            this.logger.info(`Fetched ${sentArticlesEmbeddings.results.length} embeddings from sent_articles.`);
+            // Chunking to avoid "too many SQL variables" error
+            const CHUNK_SIZE = 50;
+            const sentArticlesEmbeddingsAccumulator: { article_id: string, embedding: string, published_at: string }[] = [];
+            const articlesEmbeddingsAccumulator: { article_id: string, embedding: string | null, published_at: string | null }[] = [];
 
-            const articlesEmbeddings = await this.env.DB.prepare(
-                `SELECT article_id, embedding, published_at FROM articles WHERE article_id IN (${articleIdsArray.map(() => "?").join(",")})`
-            ).bind(...articleIdsArray).all<{ article_id: string, embedding: string | null, published_at: string | null }>();
-            this.logger.info(`Fetched ${articlesEmbeddings.results.length} embeddings from articles table.`);
+            for (let i = 0; i < articleIdsArray.length; i += CHUNK_SIZE) {
+                const chunk = articleIdsArray.slice(i, i + CHUNK_SIZE);
+                if (chunk.length === 0) continue;
+
+                const placeholders = chunk.map(() => "?").join(",");
+
+                // Fetch from sent_articles
+                const sentChunk = await this.env.DB.prepare(
+                    `SELECT article_id, embedding, published_at FROM sent_articles WHERE article_id IN (${placeholders})`
+                ).bind(...chunk).all<{ article_id: string, embedding: string, published_at: string }>();
+                if (sentChunk.results) {
+                    sentArticlesEmbeddingsAccumulator.push(...sentChunk.results);
+                }
+
+                // Fetch from articles
+                const articlesChunk = await this.env.DB.prepare(
+                    `SELECT article_id, embedding, published_at FROM articles WHERE article_id IN (${placeholders})`
+                ).bind(...chunk).all<{ article_id: string, embedding: string | null, published_at: string | null }>();
+                if (articlesChunk.results) {
+                    articlesEmbeddingsAccumulator.push(...articlesChunk.results);
+                }
+            }
+
+            this.logger.info(`Fetched ${sentArticlesEmbeddingsAccumulator.length} embeddings from sent_articles.`);
+            this.logger.info(`Fetched ${articlesEmbeddingsAccumulator.length} embeddings from articles table.`);
 
             const allEmbeddingsMap = new Map<string, { embedding: number[], published_at: string }>();
 
-            for (const article of sentArticlesEmbeddings.results) {
-                if (article.embedding && article.published_at) {
-                    allEmbeddingsMap.set(article.article_id, { embedding: JSON.parse(article.embedding), published_at: article.published_at });
+            // Merge results: sent_articles priority
+            for (const sentArticle of sentArticlesEmbeddingsAccumulator) {
+                if (sentArticle.embedding) {
+                    allEmbeddingsMap.set(sentArticle.article_id, { embedding: JSON.parse(sentArticle.embedding), published_at: sentArticle.published_at });
                 }
             }
-            for (const article of articlesEmbeddings.results) {
-                if (article.embedding && article.published_at && !allEmbeddingsMap.has(article.article_id)) {
-                    allEmbeddingsMap.set(article.article_id, { embedding: JSON.parse(article.embedding), published_at: article.published_at });
+
+            for (const article of articlesEmbeddingsAccumulator) {
+                if (!allEmbeddingsMap.has(article.article_id) && article.embedding) {
+                    allEmbeddingsMap.set(article.article_id, { embedding: JSON.parse(article.embedding), published_at: article.published_at || new Date().toISOString() });
                 }
             }
             this.logger.info(`Pre-fetched ${allEmbeddingsMap.size} article embeddings for feedback processing.`, { embeddingCount: allEmbeddingsMap.size });
