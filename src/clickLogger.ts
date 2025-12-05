@@ -1109,8 +1109,21 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Internal Server Error', { status: 500 });
             }
+        } else if (request.method === 'POST' && path === '/debug/process-pending-feedback') {
+            try {
+                this.logger.info('Debug: Manually triggering processPendingFeedback');
+                await this.processPendingFeedback();
+                return new Response('Processed pending feedback', { status: 200 });
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Debug: Error processing pending feedback:', err, {
+                    errorName: err.name,
+                    errorMessage: err.message,
+                    errorStack: err.stack,
+                });
+                return new Response(`Error: ${err.message}`, { status: 500 });
+            }
         }
-
 
         // Handle other requests
         return new Response('Not Found', { status: 404 });
