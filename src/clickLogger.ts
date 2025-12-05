@@ -1218,7 +1218,7 @@ export class ClickLogger extends DurableObject {
 
     // Process pending feedback and update bandit models and lambda
     private async processPendingFeedback(): Promise<void> {
-        this.logger.debug('Starting to process pending feedback.');
+        this.logger.info('Starting to process pending feedback.');
         try {
             // Get all user IDs that have feedback logs
             const { results: distinctUsersWithFeedback } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM education_logs`).all<{ user_id: string }>();
@@ -1245,7 +1245,7 @@ export class ClickLogger extends DurableObject {
                 feedbackLogsByUser.get(log.user_id)?.push(log);
             }
 
-            this.logger.debug(`Found ${feedbackLogsByUser.size} users with feedback logs to process.`, { userCount: feedbackLogsByUser.size });
+            this.logger.info(`Found ${feedbackLogsByUser.size} users with feedback logs to process.`, { userCount: feedbackLogsByUser.size });
 
             // 必要な記事の埋め込みを事前に取得するためのIDリスト
             const articleIdsToFetch = new Set<string>();
@@ -1255,15 +1255,18 @@ export class ClickLogger extends DurableObject {
                 }
             }
             const articleIdsArray = Array.from(articleIdsToFetch);
+            this.logger.info(`Preparing to fetch embeddings for ${articleIdsArray.length} articles.`, { count: articleIdsArray.length });
 
             // sent_articles と articles テーブルから必要な埋め込みを一度に取得
             const sentArticlesEmbeddings = await this.env.DB.prepare(
                 `SELECT article_id, embedding, published_at FROM sent_articles WHERE article_id IN (${articleIdsArray.map(() => "?").join(",")})`
             ).bind(...articleIdsArray).all<{ article_id: string, embedding: string, published_at: string }>();
+            this.logger.info(`Fetched ${sentArticlesEmbeddings.results.length} embeddings from sent_articles.`);
 
             const articlesEmbeddings = await this.env.DB.prepare(
                 `SELECT article_id, embedding, published_at FROM articles WHERE article_id IN (${articleIdsArray.map(() => "?").join(",")})`
             ).bind(...articleIdsArray).all<{ article_id: string, embedding: string | null, published_at: string | null }>();
+            this.logger.info(`Fetched ${articlesEmbeddings.results.length} embeddings from articles table.`);
 
             const allEmbeddingsMap = new Map<string, { embedding: number[], published_at: string }>();
 
@@ -1277,7 +1280,7 @@ export class ClickLogger extends DurableObject {
                     allEmbeddingsMap.set(article.article_id, { embedding: JSON.parse(article.embedding), published_at: article.published_at });
                 }
             }
-            this.logger.debug(`Pre-fetched ${allEmbeddingsMap.size} article embeddings for feedback processing.`, { embeddingCount: allEmbeddingsMap.size });
+            this.logger.info(`Pre-fetched ${allEmbeddingsMap.size} article embeddings for feedback processing.`, { embeddingCount: allEmbeddingsMap.size });
 
             // Identify articles missing embeddings and trigger batch generation
             const articleIdsMissingEmbeddings = articleIdsArray.filter(id => !allEmbeddingsMap.has(id));
@@ -1314,7 +1317,7 @@ export class ClickLogger extends DurableObject {
             }
 
             for (const [userId, feedbackLogsForUser] of feedbackLogsByUser.entries()) {
-                this.logger.debug(`Processing pending feedback for user: ${userId}`, { userId, feedbackCount: feedbackLogsForUser.length });
+                this.logger.info(`Processing pending feedback for user: ${userId}`, { userId, feedbackCount: feedbackLogsForUser.length });
 
                 let banditModel = this.inMemoryModels.get(userId);
                 if (!banditModel) {
@@ -1409,6 +1412,7 @@ export class ClickLogger extends DurableObject {
                 errorName: err.name,
                 errorMessage: err.message,
                 errorStack: err.stack,
+                rawError: JSON.stringify(error)
             });
         }
     }
