@@ -1109,30 +1109,10 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Internal Server Error', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/debug/process-pending-feedback') {
-            try {
-                this.logger.info('Debug: Manually triggering processPendingFeedback');
-                await this.processPendingFeedback();
-                return new Response('Processed pending feedback', { status: 200 });
-            } catch (error: unknown) {
-                const err = this.normalizeError(error);
-                this.logger.error('Debug: Error processing pending feedback:', err, {
-                    errorName: err.name,
-                    errorMessage: err.message,
-                    errorStack: err.stack,
-                });
-                return new Response(`Error: ${err.message}`, { status: 500 });
-            }
         }
 
         // Handle other requests
         return new Response('Not Found', { status: 404 });
-    }
-
-    // Debug method to trigger processPendingFeedback manually
-    async processPendingFeedbackDebug(): Promise<void> {
-        this.logger.info('Debug: Manually triggering processPendingFeedback');
-        await this.processPendingFeedback();
     }
 
     // Process unclicked articles and update bandit models
@@ -1243,7 +1223,7 @@ export class ClickLogger extends DurableObject {
 
     // Process pending feedback and update bandit models and lambda
     private async processPendingFeedback(): Promise<void> {
-        this.logger.info('Starting to process pending feedback.');
+        this.logger.debug('Starting to process pending feedback.');
         try {
             // Get all user IDs that have feedback logs
             const { results: distinctUsersWithFeedback } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM education_logs`).all<{ user_id: string }>();
@@ -1270,7 +1250,7 @@ export class ClickLogger extends DurableObject {
                 feedbackLogsByUser.get(log.user_id)?.push(log);
             }
 
-            this.logger.info(`Found ${feedbackLogsByUser.size} users with feedback logs to process.`, { userCount: feedbackLogsByUser.size });
+            this.logger.debug(`Found ${feedbackLogsByUser.size} users with feedback logs to process.`, { userCount: feedbackLogsByUser.size });
 
             // 必要な記事の埋め込みを事前に取得するためのIDリスト
             const articleIdsToFetch = new Set<string>();
@@ -1280,7 +1260,7 @@ export class ClickLogger extends DurableObject {
                 }
             }
             const articleIdsArray = Array.from(articleIdsToFetch);
-            this.logger.info(`Preparing to fetch embeddings for ${articleIdsArray.length} articles.`, { count: articleIdsArray.length });
+            this.logger.debug(`Preparing to fetch embeddings for ${articleIdsArray.length} articles.`, { count: articleIdsArray.length });
 
             // Chunking to avoid "too many SQL variables" error
             const CHUNK_SIZE = 50;
@@ -1310,8 +1290,8 @@ export class ClickLogger extends DurableObject {
                 }
             }
 
-            this.logger.info(`Fetched ${sentArticlesEmbeddingsAccumulator.length} embeddings from sent_articles.`);
-            this.logger.info(`Fetched ${articlesEmbeddingsAccumulator.length} embeddings from articles table.`);
+            this.logger.debug(`Fetched ${sentArticlesEmbeddingsAccumulator.length} embeddings from sent_articles.`);
+            this.logger.debug(`Fetched ${articlesEmbeddingsAccumulator.length} embeddings from articles table.`);
 
             const allEmbeddingsMap = new Map<string, { embedding: number[], published_at: string }>();
 
@@ -1327,7 +1307,7 @@ export class ClickLogger extends DurableObject {
                     allEmbeddingsMap.set(article.article_id, { embedding: JSON.parse(article.embedding), published_at: article.published_at || new Date().toISOString() });
                 }
             }
-            this.logger.info(`Pre-fetched ${allEmbeddingsMap.size} article embeddings for feedback processing.`, { embeddingCount: allEmbeddingsMap.size });
+            this.logger.debug(`Pre-fetched ${allEmbeddingsMap.size} article embeddings for feedback processing.`, { embeddingCount: allEmbeddingsMap.size });
 
             // Identify articles missing embeddings and trigger batch generation
             const articleIdsMissingEmbeddings = articleIdsArray.filter(id => !allEmbeddingsMap.has(id));
@@ -1364,7 +1344,7 @@ export class ClickLogger extends DurableObject {
             }
 
             for (const [userId, feedbackLogsForUser] of feedbackLogsByUser.entries()) {
-                this.logger.info(`Processing pending feedback for user: ${userId}`, { userId, feedbackCount: feedbackLogsForUser.length });
+                this.logger.debug(`Processing pending feedback for user: ${userId}`, { userId, feedbackCount: feedbackLogsForUser.length });
 
                 let banditModel = this.inMemoryModels.get(userId);
                 if (!banditModel) {
