@@ -798,7 +798,7 @@ export default {
                 logger.error('Debug: Error during OAuth URL generation:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error during OAuth URL generation', { status: 500 });
             }
-        } else if (request.method === 'GET' && path === '/debug/process-pending-feedback') {
+        } else if (request.method === 'POST' && path === '/debug/process-pending-feedback') {
             logger.debug('Debug: Process pending feedback request received');
             const debugApiKey = request.headers.get('X-Debug-Key');
             if (debugApiKey !== env.DEBUG_API_KEY) {

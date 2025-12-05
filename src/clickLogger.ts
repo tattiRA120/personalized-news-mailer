@@ -587,11 +587,16 @@ export class ClickLogger extends DurableObject {
                     this.logger.debug(`Immediate update not requested for feedback from user ${userId}, article ${articleId}. Model update will be handled periodically.`, { userId, articleId, feedback });
                 }
 
-                // 4. Log the feedback to education_logs table (for immediate training)
-                await this.env.DB.prepare(
-                    `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
-                ).bind(userId, articleId, timestamp, feedback).run();
-                this.logger.info(`Logged feedback to education_logs for user ${userId}, article ${articleId}, feedback: ${feedback}`);
+                // 4. Log the feedback to education_logs table (only if immediate update was NOT performed)
+                // If immediate update was done, we don't need to queue it for later processing.
+                if (!immediateUpdate) {
+                    await this.env.DB.prepare(
+                        `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
+                    ).bind(userId, articleId, timestamp, feedback).run();
+                    this.logger.info(`Logged feedback to education_logs for user ${userId}, article ${articleId}, feedback: ${feedback}`);
+                } else {
+                    this.logger.info(`Skipped logging to education_logs because immediate update was performed for user ${userId}, article ${articleId}`);
+                }
 
                 // 5. Record exposure in sent_articles (so it can be excluded later and counted for score)
                 // Use INSERT OR IGNORE to avoid errors if it was already sent/recorded
