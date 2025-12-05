@@ -473,6 +473,7 @@ export class ClickLogger extends DurableObject {
         } else if (request.method === 'POST' && path === '/log-feedback') {
             try {
                 const { userId, articleId, feedback, timestamp, immediateUpdate } = await request.json() as LogFeedbackRequestBody;
+                this.logger.info(`Log feedback request: userId=${userId}, articleId=${articleId}, feedback=${feedback}, immediateUpdate=${immediateUpdate}`);
 
                 if (!userId || !articleId || !feedback || !timestamp) {
                     this.logger.warn('Log feedback failed: Missing parameters.');
@@ -1108,6 +1109,12 @@ export class ClickLogger extends DurableObject {
 
         // Handle other requests
         return new Response('Not Found', { status: 404 });
+    }
+
+    // Debug method to trigger processPendingFeedback manually
+    async processPendingFeedbackDebug(): Promise<void> {
+        this.logger.info('Debug: Manually triggering processPendingFeedback');
+        await this.processPendingFeedback();
     }
 
     // Process unclicked articles and update bandit models

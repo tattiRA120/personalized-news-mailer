@@ -343,6 +343,8 @@ export default {
                     immediateUpdate?: boolean
                 };
 
+                logger.info(`Batch feedback request: userId=${userId}, count=${feedbackData?.length}, immediateUpdate=${immediateUpdate}`);
+
                 if (!userId || !Array.isArray(feedbackData)) {
                     return new Response('Missing parameters', { status: 400 });
                 }
@@ -795,6 +797,34 @@ export default {
             } catch (error) {
                 logger.error('Debug: Error during OAuth URL generation:', error, { requestUrl: request.url });
                 return new Response('Internal Server Error during OAuth URL generation', { status: 500 });
+            }
+        } else if (request.method === 'GET' && path === '/debug/process-pending-feedback') {
+            logger.debug('Debug: Process pending feedback request received');
+            const debugApiKey = request.headers.get('X-Debug-Key');
+            if (debugApiKey !== env.DEBUG_API_KEY) {
+                logger.warn('Debug: Unauthorized access attempt to /debug/process-pending-feedback', { providedKey: debugApiKey });
+                return new Response('Unauthorized', { status: 401 });
+            }
+            try {
+                const clickLoggerId = env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = env.CLICK_LOGGER.get(clickLoggerId);
+                const doResponse = await clickLogger.fetch(
+                    new Request(`${env.WORKER_BASE_URL}/debug/process-pending-feedback`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                    })
+                );
+                if (doResponse.ok) {
+                    logger.debug('Debug: Successfully triggered processPendingFeedback.');
+                    return new Response('ProcessPendingFeedback triggered successfully.', { status: 200 });
+                } else {
+                    const errorText = await doResponse.text();
+                    logger.error(`Debug: Failed to trigger processPendingFeedback: ${doResponse.statusText}`, null, { status: doResponse.status, statusText: doResponse.statusText, errorText });
+                    return new Response(`Failed to trigger processPendingFeedback: ${doResponse.statusText} - ${errorText}`, { status: doResponse.status });
+                }
+            } catch (error) {
+                logger.error('Debug: Error triggering processPendingFeedback:', error, { requestUrl: request.url });
+                return new Response('Internal Server Error during processPendingFeedback trigger', { status: 500 });
             }
         } else if (request.method === 'GET' && path === '/debug/check-exclusions') {
             logger.debug('Debug: Check exclusions request received');
