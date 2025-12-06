@@ -315,7 +315,7 @@ export default {
 
                 if (candidateArticles.length === 0) {
                     logger.info('No cached articles with embeddings found for education. Returning empty list (wait for background fetch).');
-                    return new Response(JSON.stringify([]), {
+                    return new Response(JSON.stringify({ articles: [], score: 0 }), {
                         headers: { 'Content-Type': 'application/json' },
                         status: 200,
                     });
@@ -333,7 +333,10 @@ export default {
                     sourceName: article.sourceName,
                 }));
 
-                return new Response(JSON.stringify(articlesForResponse), {
+                return new Response(JSON.stringify({
+                    articles: articlesForResponse,
+                    score: 0 // New Discoveries doesn't have a personalization score
+                }), {
                     headers: { 'Content-Type': 'application/json' },
                     status: 200,
                 });
@@ -1029,9 +1032,17 @@ export default {
                 }));
 
                 let selectedArticles: NewsArticle[] = [];
+                let avgRelevance = 0;
+
                 if (response.ok) {
-                    selectedArticles = await response.json();
-                    logger.debug(`Selected ${selectedArticles.length} personalized articles for user ${userId} via WASM DO.`, { userId, selectedCount: selectedArticles.length });
+                    const wasmResult: any = await response.json();
+                    if (Array.isArray(wasmResult)) {
+                        selectedArticles = wasmResult;
+                    } else {
+                        selectedArticles = wasmResult.articles || [];
+                        avgRelevance = wasmResult.avgRelevance || 0;
+                    }
+                    logger.debug(`Selected ${selectedArticles.length} personalized articles for user ${userId} via WASM DO. Avg Relevance: ${avgRelevance}`, { userId, selectedCount: selectedArticles.length, avgRelevance });
                 } else {
                     const errorText = await response.text();
                     logger.error(`Failed to select personalized articles for user ${userId} via WASM DO: ${response.statusText}. Error: ${errorText}`, null, { userId, status: response.status, statusText: response.statusText });
@@ -1050,7 +1061,13 @@ export default {
                     sourceName: article.sourceName,
                 }));
 
-                return new Response(JSON.stringify(articlesForResponse), {
+                // Calculate match score (0-100%)
+                const score = Math.max(0, avgRelevance) * 100;
+
+                return new Response(JSON.stringify({
+                    articles: articlesForResponse,
+                    score: score
+                }), {
                     headers: { 'Content-Type': 'application/json' },
                     status: 200,
                 });

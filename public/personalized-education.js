@@ -20,7 +20,6 @@ const submitNewFeedbackBtn = document.getElementById('submit-new-feedback'); // 
 document.addEventListener('DOMContentLoaded', async () => {
     setupTabs();
     await fetchMMRSettings();
-    await fetchPreferenceScore();
     await fetchPersonalizedArticles(); // Load recommended by default
 });
 
@@ -72,28 +71,17 @@ async function fetchMMRSettings() {
     }
 }
 
-async function fetchPreferenceScore() {
-    try {
-        const response = await fetch(`/api/preference-score?userId=${encodeURIComponent(userId)}`);
-        if (response.ok) {
-            const data = await response.json();
-            updateScoreDisplay(data.score);
-        }
-    } catch (error) {
-        console.error('Error fetching preference score:', error);
-    }
-}
 
 function updateScoreDisplay(score) {
     if (scoreValue) scoreValue.textContent = `${Math.round(score)}%`;
     if (scoreFill) {
         scoreFill.style.width = `${score}%`;
         if (score < 30) {
-            scoreFill.style.backgroundColor = '#ff4d4d';
+            scoreFill.style.backgroundColor = '#ff4d4d'; // Red
         } else if (score < 70) {
-            scoreFill.style.backgroundColor = '#ffa600';
+            scoreFill.style.backgroundColor = '#ffa600'; // Orange
         } else {
-            scoreFill.style.backgroundColor = '#4caf50';
+            scoreFill.style.backgroundColor = '#4caf50'; // Green
         }
     }
 }
@@ -103,7 +91,19 @@ async function fetchPersonalizedArticles() {
     try {
         const response = await fetch(`/get-personalized-articles?userId=${encodeURIComponent(userId)}&lambda=${lambda}`);
         if (!response.ok) throw new Error('Failed to fetch articles');
-        articles = await response.json();
+
+        const data = await response.json();
+        if (Array.isArray(data)) {
+            articles = data;
+            // Legacy handling: keep existing score or fetch it?
+            // Since backend is updated, this case shouldn't happen unless rollback.
+        } else {
+            articles = data.articles || [];
+            if (typeof data.score === 'number') {
+                updateScoreDisplay(data.score);
+            }
+        }
+
         renderArticles();
     } catch (error) {
         articlesList.innerHTML = `<div class="error">記事の読み込みに失敗しました: ${error.message}</div>`;

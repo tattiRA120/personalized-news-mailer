@@ -217,13 +217,14 @@ export class WasmDO extends DurableObject<Env> {
                         ...article,
                         ucb: ucb,
                         finalScore: finalScore,
+                        interestRelevance: interestRelevance // Preserve for calculating average later
                     };
                 });
 
                 // 最終スコアで降順にソート
                 const sortedArticles = [...articlesWithFinalScore].sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
 
-                const selected: NewsArticleWithEmbedding[] = [];
+                const selected: any[] = []; // Type should include interestRelevance
                 const remaining = [...sortedArticles];
 
                 // 最初の記事（最も最終スコアが高い）を選択
@@ -290,7 +291,13 @@ export class WasmDO extends DurableObject<Env> {
 
                 this.logger.info(`Finished personalized article selection in WASM DO. Selected ${selected.length} articles.`, { userId, selectedCount: selected.length });
 
-                return new Response(JSON.stringify(selected), { headers: { "Content-Type": "application/json" } });
+                // Calculate Average Relevance (Closeness to Profile) of Selected Articles
+                const avgRelevance = selected.reduce((sum, a) => sum + (a.interestRelevance || 0), 0) / (selected.length || 1);
+
+                return new Response(JSON.stringify({
+                    articles: selected,
+                    avgRelevance: avgRelevance
+                }), { headers: { "Content-Type": "application/json" } });
 
             } else {
                 return new Response("Invalid WASM DO endpoint. Use /bulk-cosine-similarity (POST), /single-cosine-similarity (GET), /calculate-similarity-matrix (POST), or /select-personalized-articles (POST).", { status: 404 });

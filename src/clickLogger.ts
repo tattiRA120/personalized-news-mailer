@@ -1017,9 +1017,9 @@ export class ClickLogger extends DurableObject {
                 const clickCount = clickCountResult?.count || 0;
 
                 // Calculate score based on Total Positive Feedback (Learning Depth)
-                // Using a simple progression: Each interesting article adds 4% to the score.
-                // 25 articles = 100% "Basic Profile Complete".
-                const preferenceScore = Math.min(clickCount * 4, 100);
+                // Using a simple progression: Each interesting article adds 1% to the score.
+                // 100 articles = 100% "Master Profile".
+                const preferenceScore = Math.min(clickCount, 100);
 
                 this.logger.debug(`Calculated preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (Clicks: ${clickCount}, Sent: ${sentCount})`, { userId, score: preferenceScore, clickCount, sentCount });
 
