@@ -297,25 +297,35 @@ export default {
             try {
                 const userId = url.searchParams.get('userId');
 
-                // Use helper function to collect fresh articles and save to D1 with persistent IDs
-                let availableArticles = await collectAndSaveNews(env);
+                // Trigger fresh news collection in background to keep DB updated
+                ctx.waitUntil(collectAndSaveNews(env));
 
-                // Exclude articles already sent/seen by this user
+                // Fetch candidate articles from D1 that have embeddings and haven't been seen/sent
+                // "New Discoveries" should be diverse, so we use selectDissimilarArticles on valid candidates
+                let whereClause = `embedding IS NOT NULL`;
+                const params: any[] = [];
+
                 if (userId) {
-                    const sentArticles = await env.DB.prepare(
-                        `SELECT article_id FROM sent_articles WHERE user_id = ?`
-                    ).bind(userId).all<{ article_id: string }>();
-
-                    const sentArticleIds = new Set(sentArticles.results.map(a => a.article_id));
-                    const initialCount = availableArticles.length;
-                    availableArticles = availableArticles.filter(a => !sentArticleIds.has(a.articleId));
-                    logger.debug(`Filtered out ${initialCount - availableArticles.length} already sent articles for user ${userId}.`, { userId, remaining: availableArticles.length });
+                    whereClause += ` AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?) AND article_id NOT IN (SELECT article_id FROM sent_articles WHERE user_id = ?)`;
+                    params.push(userId, userId);
                 }
 
-                // Shuffle and limit to 30
-                const shuffledArticles = availableArticles.sort(() => 0.5 - Math.random()).slice(0, 30);
+                // Get more candidates than needed to allow good diversity selection
+                const candidateArticles = await getArticlesFromD1(env, 200, 0, whereClause, params);
 
-                const articlesForEducation = shuffledArticles.map((article) => ({
+                if (candidateArticles.length === 0) {
+                    logger.info('No cached articles with embeddings found for education. Returning empty list (wait for background fetch).');
+                    return new Response(JSON.stringify([]), {
+                        headers: { 'Content-Type': 'application/json' },
+                        status: 200,
+                    });
+                }
+
+                // Select 30 dissimilar articles
+                const selectedArticles = await selectDissimilarArticles(candidateArticles, 30, env);
+                logger.debug(`Selected ${selectedArticles.length} dissimilar articles for education (New Discoveries).`, { count: selectedArticles.length });
+
+                const articlesForResponse = selectedArticles.map((article) => ({
                     articleId: article.articleId,
                     title: article.title,
                     summary: article.summary,
@@ -323,7 +333,7 @@ export default {
                     sourceName: article.sourceName,
                 }));
 
-                return new Response(JSON.stringify(articlesForEducation), {
+                return new Response(JSON.stringify(articlesForResponse), {
                     headers: { 'Content-Type': 'application/json' },
                     status: 200,
                 });
@@ -863,9 +873,9 @@ export default {
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事を除外
-                const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?)`;
-                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId]);
+                // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事および配信済み記事を除外
+                const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?) AND article_id NOT IN (SELECT article_id FROM sent_articles WHERE user_id = ?)`;
+                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId, userId]);
                 logger.debug(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 (excluding feedbacked articles for user ${userId}).`, { count: allArticlesWithEmbeddings.length, userId });
 
                 // 類似度の低い記事を20件選択
@@ -912,8 +922,8 @@ export default {
                 if (!userProfile) {
                     logger.warn(`User profile not found for ${userId}. Falling back to dissimilar articles.`, { userId });
                     // プロファイルがない場合はdissimilar articlesを返す
-                    const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?)`;
-                    const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId]);
+                    const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?) AND article_id NOT IN (SELECT article_id FROM sent_articles WHERE user_id = ?)`;
+                    const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId, userId]);
                     const dissimilarArticles = await selectDissimilarArticles(allArticlesWithEmbeddings, 20, env);
                     const articlesForResponse = dissimilarArticles.map((article: NewsArticle) => ({
                         articleId: article.articleId,
@@ -928,14 +938,14 @@ export default {
                     });
                 }
 
-                // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事を除外
+                // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事（education_logs）および配信済み/即時フィードバック済み記事（sent_articles）を除外
                 // 24時間以内の記事のみを対象とする
                 const cutoffDate = new Date();
                 cutoffDate.setHours(cutoffDate.getHours() - 24);
                 const cutoffTimestamp = cutoffDate.getTime();
 
-                const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?) AND published_at >= ?`;
-                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId, cutoffTimestamp]);
+                const whereClause = `embedding IS NOT NULL AND article_id NOT IN (SELECT article_id FROM education_logs WHERE user_id = ?) AND article_id NOT IN (SELECT article_id FROM sent_articles WHERE user_id = ?) AND published_at >= ?`;
+                const allArticlesWithEmbeddings = await getArticlesFromD1(env, 1000, 0, whereClause, [userId, userId, cutoffTimestamp]);
 
                 // 除外された記事の数を確認するためのログ (デバッグ用)
                 const totalArticlesCount = await env.DB.prepare(`SELECT COUNT(*) as count FROM articles WHERE embedding IS NOT NULL AND published_at >= ?`).bind(cutoffTimestamp).first<{ count: number }>();

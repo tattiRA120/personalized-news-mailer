@@ -270,7 +270,9 @@ export class WasmDO extends DurableObject<Env> {
                         // MMR スコアの計算: lambda * Relevance - (1 - lambda) * Similarity
                         // Relevance は finalScore を使用
                         const relevance = currentArticle.finalScore || 0;
-                        const mmrScore = lambda * relevance - (1 - lambda) * maxSimilarityWithSelected;
+                        // Similarity は 0-1 の範囲だが、finalScoreはより大きな値を取りうるため、
+                        // 類似度ペナルティをスケールアップして効果を保証する (係数 5.0)
+                        const mmrScore = lambda * relevance - (1 - lambda) * maxSimilarityWithSelected * 5.0;
 
                         if (mmrScore > bestMMRScore) {
                             bestMMRScore = mmrScore;

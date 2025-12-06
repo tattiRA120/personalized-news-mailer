@@ -482,8 +482,8 @@ export class ClickLogger extends DurableObject {
 
                 // 1. Determine reward based on feedback
                 // 教育ページからの明示的なフィードバックは強いシグナルとして扱う
-                // 興味あり: 5.0, 興味なし: -5.0 (以前は-1.0だったが、抑制効果を強めるために増強)
-                const reward = feedback === 'interested' ? 5.0 : -5.0;
+                // 興味あり: 20.0, 興味なし: -20.0 (学習効率を上げるために大幅に増強)
+                const reward = feedback === 'interested' ? 20.0 : -20.0;
 
                 // 2. Get the article's embedding from D1
                 // First, try to get from sent_articles (for regular email feedback)
@@ -1016,13 +1016,10 @@ export class ClickLogger extends DurableObject {
                 const sentCount = sentCountResult?.count || 0;
                 const clickCount = clickCountResult?.count || 0;
 
-                let preferenceScore = 0;
-                if (sentCount > 0) {
-                    preferenceScore = (clickCount / sentCount) * 100;
-                }
-
-                // Cap at 100% just in case
-                preferenceScore = Math.min(preferenceScore, 100);
+                // Calculate score based on Total Positive Feedback (Learning Depth)
+                // Using a simple progression: Each interesting article adds 4% to the score.
+                // 25 articles = 100% "Basic Profile Complete".
+                const preferenceScore = Math.min(clickCount * 4, 100);
 
                 this.logger.debug(`Calculated preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (Clicks: ${clickCount}, Sent: ${sentCount})`, { userId, score: preferenceScore, clickCount, sentCount });
 
@@ -1387,8 +1384,8 @@ export class ClickLogger extends DurableObject {
 
                         if (embedding && embedding.length === banditModel.dimension) {
                             // 教育ページからの明示的なフィードバックは強いシグナルとして扱う
-                            // 興味あり: 5.0, 興味なし: -5.0
-                            const reward = log.action === 'interested' ? 5.0 : -5.0;
+                            // 興味あり: 20.0, 興味なし: -20.0
+                            const reward = log.action === 'interested' ? 20.0 : -20.0;
                             await this.updateBanditModel(banditModel, embedding, reward, userId, true);
                             this.dirty = true;
                             updatedCount++;
