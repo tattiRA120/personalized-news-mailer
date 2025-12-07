@@ -244,8 +244,9 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     let selectedArticles: NewsArticleWithEmbedding[] = [];
                     if (response.ok) {
-                        selectedArticles = await response.json();
-                        logger.debug(`Selected ${selectedArticles.length} articles for user ${userId} via WASM DO.`, { userId, selectedCount: selectedArticles.length });
+                        const result = await response.json() as { articles: NewsArticleWithEmbedding[], avgRelevance: number };
+                        selectedArticles = result.articles;
+                        logger.debug(`Selected ${selectedArticles.length} articles for user ${userId} via WASM DO. Avg Relevance: ${result.avgRelevance}`, { userId, selectedCount: selectedArticles.length, avgRelevance: result.avgRelevance });
                     } else {
                         const errorText = await response.text();
                         logger.error(`Failed to select personalized articles for user ${userId} via WASM DO: ${response.statusText}. Error: ${errorText}`, null, { userId, status: response.status, statusText: response.statusText });
