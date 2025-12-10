@@ -114,20 +114,20 @@ export async function selectDissimilarArticles(
     selected.push(firstArticle);
     logger.debug(`Selected first article randomly: "${firstArticle.title}"`, { articleTitle: firstArticle.title });
 
-    // 残りから類似度が低い記事を選択
+    const allArticleEmbeddings = articles.filter(article => article.embedding !== undefined).map(article => article.embedding!);
+    // 全記事間の類似度行列を事前に計算 (ループの外で1回だけ実行)
+    const similarityMatrix = allArticleEmbeddings.length > 0
+        ? await calculateSimilarityMatrix(allArticleEmbeddings, logger, env)
+        : [];
+
+    const articleIdToIndexMap = new Map<string, number>();
+    articles.forEach((article, index) => {
+        articleIdToIndexMap.set(article.articleId, index);
+    });
+
     while (selected.length < count && remaining.length > 0) {
         let bestDissimilarityScore = -Infinity;
         let bestArticleIndex = -1;
-
-        const allArticleEmbeddings = articles.filter(article => article.embedding !== undefined).map(article => article.embedding!);
-        const similarityMatrix = allArticleEmbeddings.length > 0
-            ? await calculateSimilarityMatrix(allArticleEmbeddings, logger, env)
-            : [];
-
-        const articleIdToIndexMap = new Map<string, number>();
-        articles.forEach((article, index) => {
-            articleIdToIndexMap.set(article.articleId, index);
-        });
 
         for (let i = 0; i < remaining.length; i++) {
             const currentArticle = remaining[i];
