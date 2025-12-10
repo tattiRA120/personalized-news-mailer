@@ -335,8 +335,14 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                     } else {
                         sourceName = 'Google News'; // Fallback
                     }
-                } else if (sourceName.includes('assets.wor.jp') && url.includes('bloomberg')) {
-                    sourceName = 'Bloomberg';
+                } else if (sourceName.includes('assets.wor.jp')) {
+                    if (url.includes('bloomberg')) {
+                        sourceName = 'Bloomberg';
+                    } else if (url.includes('reuters')) {
+                        sourceName = 'ロイター';
+                    } else {
+                      'via RSS愛好会';
+                    }
                 } else if (sourceName.includes('zenn.dev')) {
                     sourceName = 'Zenn';
                 } else if (sourceName.includes('qiita.com')) {
@@ -376,8 +382,8 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                 const articles = await parseFeedWithFastXmlParser(xml, url, env);
                 const articlesWithSource = articles.map(article => {
                     let finalTitle = article.title;
-                    // Reuters以外の記事にメディア名を追加
-                    if (sourceName !== 'Reuters' && !finalTitle.endsWith(` - ${sourceName}`)) {
+                    // news.google.comのRSSから受け取ったときは除外して、それ以外はメディア名を追加
+                    if (!sourceName.includes('news.google.com') && !finalTitle.endsWith(` - ${sourceName}`)) {
                         finalTitle = `${finalTitle} – ${sourceName}`;
                     }
                     return {

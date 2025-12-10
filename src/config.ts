@@ -1,7 +1,13 @@
 export const NEWS_RSS_URLS: string[] = [
     // マスメディア系
-    'https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com&ceid=JP:ja&hl=ja&gl=JP', // Reuters News via Google News
-    'https://assets.wor.jp/rss/rdf/bloomberg/top.rdf', // Bloomberg via RSS愛好会
+    // 'https://news.google.com/rss/search?q=when:24h+allinurl:reuters.com&ceid=JP:ja&hl=ja&gl=JP', // Reuters News via Google News
+    'https://assets.wor.jp/rss/rdf/reuters/top.rdf', // ロイター via RSS愛好会
+    'https://assets.wor.jp/rss/rdf/bloomberg/economics.rdf', // Bloomberg via RSS愛好会
+    'https://assets.wor.jp/rss/rdf/bloomberg/technology.rdf',
+    'https://assets.wor.jp/rss/rdf/bloomberg/companies.rdf',
+    'https://assets.wor.jp/rss/rdf/bloomberg/international.rdf',
+    'https://assets.wor.jp/rss/rdf/bloomberg/finance.rdf',
+    'https://assets.wor.jp/rss/rdf/bloomberg/markets.rdf',
     'https://news.web.nhk/n-data/conf/na/rss/cat0.xml', // NHKニュース
     // ネットメディア(テック・ガジェット系)
     'https://rss.itmedia.co.jp/rss/2.0/news_bursts.xml', // ITmedia NEWS
