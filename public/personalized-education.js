@@ -289,7 +289,12 @@ async function fetchNewArticles() {
         if (!response.ok) {
             throw new Error('Failed to fetch new articles');
         }
-        newArticles = await response.json();
+        const data = await response.json();
+        if (Array.isArray(data)) {
+            newArticles = data;
+        } else {
+            newArticles = data.articles || [];
+        }
         renderNewArticles();
     } catch (error) {
         console.error('Error fetching new articles:', error);
