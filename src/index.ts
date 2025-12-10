@@ -298,7 +298,8 @@ export default {
                 const userId = url.searchParams.get('userId');
 
                 // Trigger fresh news collection in background to keep DB updated
-                ctx.waitUntil(collectAndSaveNews(env));
+                // Removed to prevent resource contention during user request (rely on scheduled collection)
+                // ctx.waitUntil(collectAndSaveNews(env));
 
                 // Fetch candidate articles from D1 that have embeddings and haven't been seen/sent
                 // "New Discoveries" should be diverse, so we use selectDissimilarArticles on valid candidates

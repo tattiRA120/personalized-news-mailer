@@ -293,7 +293,7 @@ async function fetchNewArticles() {
         renderNewArticles();
     } catch (error) {
         console.error('Error fetching new articles:', error);
-        newArticlesList.innerHTML = '<div class="error">記事の読み込みに失敗しました。</div>';
+        newArticlesList.innerHTML = `<div class="error">記事の読み込みに失敗しました: ${error.message}</div>`;
     }
 }
 
