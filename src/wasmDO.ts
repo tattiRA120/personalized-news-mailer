@@ -106,7 +106,7 @@ export class WasmDO extends DurableObject<Env> {
                     return new Response("Missing required parameters for personalized article selection.", { status: 400 });
                 }
 
-                this.logger.info(`Selecting personalized articles for user ${userId} in WASM DO.`, { userId, articleCount: articles.length, count });
+                this.logger.info(`Selecting personalized articles for user ${userId} in WASM DO (Optimized).`, { userId, articleCount: articles.length, count });
 
                 // Durable Object から記事のUCB値を取得
                 const articlesWithEmbeddingsForUCB = articles
@@ -127,19 +127,17 @@ export class WasmDO extends DurableObject<Env> {
 
                         if (response.ok) {
                             ucbValues = await response.json();
-                            this.logger.info(`Received ${ucbValues.length} UCB values from ClickLogger in WASM DO.`, { userId, ucbCount: ucbValues.length });
+                            this.logger.info(`Received ${ucbValues.length} UCB values from ClickLogger.`, { userId });
                         } else {
-                            const errorText = await response.text();
-                            this.logger.error(`Failed to get UCB values from ClickLogger in WASM DO: ${response.statusText}. Error: ${errorText}`, undefined, { userId, status: response.status, statusText: response.statusText, errorText });
+                            const text = await response.text();
+                            this.logger.error(`Failed to get UCB values: ${response.status} ${text}`);
                         }
                     } catch (error) {
                         this.logger.error('Error fetching UCB values from ClickLogger in WASM DO:', error, { userId });
                     }
-                } else {
-                    this.logger.warn("No articles with embeddings to send to ClickLogger for UCB calculation in WASM DO.", { userId });
                 }
 
-                // ユーザーの興味関心との関連度をバッチで計算 (コサイン類似度を使用)
+                // ユーザー興味関心との関連度計算
                 const vec1sForInterestRelevance: number[][] = [];
                 const vec2sForInterestRelevance: number[][] = [];
                 const articleIndicesForInterestRelevance: number[] = [];
@@ -156,16 +154,19 @@ export class WasmDO extends DurableObject<Env> {
                     ? cosine_similarity_bulk(vec1sForInterestRelevance, vec2sForInterestRelevance)
                     : [];
 
-                // Pre-calculate negative feedback similarities
+                // Negative Feedback Penalty Pre-calculation
                 const negativePenaltyMap = new Map<string, number>();
                 if (negativeFeedbackEmbeddings && negativeFeedbackEmbeddings.length > 0) {
+                    // Optimization: Use bulk similarity or loop? Since negative feedback is usually small, loop is okay.
+                    // Or better, use our new one-to-many?
+                    // For now, keep simple JS loop as "negativeFeedbackEmbeddings" is likely small (<10).
                     articles.forEach(article => {
                         if (article.embedding) {
-                            let maxSim = -1.0; // Initialize with lowest possible similarity
+                            let maxSim = 0.0;
                             for (const negEmb of negativeFeedbackEmbeddings) {
-                                // Ensure dimensions match (ignoring freshness dimension difference if any, but ideally they match)
-                                // Assuming both are extended or both are not, or at least compatible for dot product
                                 if (article.embedding.length === negEmb.length) {
+                                    // Use simple dot product if normalized, or cosine_similarity from wasm import
+                                    // We imported cosine_similarity from pkg
                                     const sim = cosine_similarity(article.embedding, negEmb);
                                     if (sim > maxSim) maxSim = sim;
                                 }
@@ -175,6 +176,7 @@ export class WasmDO extends DurableObject<Env> {
                     });
                 }
 
+                // Calculate Initial Scores
                 const articlesWithFinalScore = articles.map((article, index) => {
                     const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.articleId);
                     const ucb = ucbInfo ? ucbInfo.ucb : 0;
@@ -185,113 +187,147 @@ export class WasmDO extends DurableObject<Env> {
                         interestRelevance = interestRelevanceResults[relevanceIndex];
                     }
 
+                    // Weights
+                    // Interest is most important for "Smartness".
+                    // UCB helps verify exploration.
                     const interestWeight = 3.0;
                     const baseUcbWeight = 1.0;
                     const ucbWeight = baseUcbWeight + (1 - userCTR) * 0.5;
 
-                    // --- Freshness Boost ---
-                    const freshnessWeight = 0.5;
-                    // embeddingの最後の要素が鮮度情報 (0.0 - 1.0, 1.0が最新)
-                    // ただし、embeddingの次元が拡張されている場合のみ
+                    // Freshness
                     let freshnessScore = 0;
                     if (article.embedding && article.embedding.length > 0) {
-                        // 最後の要素を取得
-                        const normalizedAge = article.embedding[article.embedding.length - 1];
-                        // normalizedAgeは 0(最新) -> 1(古い) なので、 1 - normalizedAge でスコア化
-                        freshnessScore = 1.0 - normalizedAge;
+                        const normalizedAge = article.embedding[article.embedding.length - 1]; // 0=New, 1=Old
+                        // Exponential decay: e^(-5 * age) to prioritize very fresh content heavily
+                        // normalizedAge is roughly (hours / 24) * some_factor ?
+                        // Assuming normalizedAge is 0.0 to 1.0 mapping linearly to 24-48 hours.
+                        // Let's use linear for now but sharper.
+                        freshnessScore = Math.max(0, 1.0 - normalizedAge);
                     }
+                    const freshnessWeight = 0.8; // Increased slightly
 
-                    // --- Negative Feedback Penalty ---
-                    const penaltyWeight = 2.0;
+                    // Penalty
+                    const penaltyWeight = 5.0; // Strong penalty for disallowed content
                     const maxSimilarityWithNegative = negativePenaltyMap.get(article.articleId) || 0;
 
-                    let finalScore = interestRelevance * interestWeight + ucb * ucbWeight + freshnessScore * freshnessWeight;
+                    let finalScore = (interestRelevance * interestWeight) + (ucb * ucbWeight) + (freshnessScore * freshnessWeight);
 
-                    // Apply penalty if similarity is significant (e.g., > 0.5)
-                    if (maxSimilarityWithNegative > 0.5) {
-                        finalScore -= maxSimilarityWithNegative * penaltyWeight;
+                    if (maxSimilarityWithNegative > 0.6) {
+                        // Soft penalty 0.6-0.8, Hard penalty > 0.8
+                        const penaltyFactor = maxSimilarityWithNegative > 0.85 ? 10.0 : 1.0;
+                        finalScore -= maxSimilarityWithNegative * penaltyWeight * penaltyFactor;
                     }
-
 
                     return {
                         ...article,
-                        ucb: ucb,
-                        finalScore: finalScore,
-                        interestRelevance: interestRelevance // Preserve for calculating average later
+                        ucb,
+                        finalScore,
+                        interestRelevance,
+                        embedding: article.embedding // Ensure embedding is kept for MMR
                     };
                 });
 
-                // 最終スコアで降順にソート
-                const sortedArticles = [...articlesWithFinalScore].sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
+                // Filter out invalid scores or highly negative ones effectively
+                const validCandidates = articlesWithFinalScore.filter(a => a.embedding && a.finalScore > -100);
 
-                const selected: any[] = []; // Type should include interestRelevance
-                const remaining = [...sortedArticles];
+                // Sort by initial score to pick the first best candidate
+                validCandidates.sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
 
-                // 最初の記事（最も最終スコアが高い）を選択
-                const firstArticle = remaining.shift();
-                if (firstArticle) {
-                    selected.push(firstArticle);
+                const selected: any[] = [];
+                const candidates = [...validCandidates];
+
+                // --- Optimized MMR Loop with O(k*N) complexity ---
+
+                // 1. Pick top 1
+                if (candidates.length > 0) {
+                    selected.push(candidates.shift());
                 }
 
-                // MMRのための全記事間の類似度行列を事前に計算
-                const allArticleEmbeddings = articles.filter(article => article.embedding !== undefined).map(article => article.embedding!);
-                const similarityMatrix = allArticleEmbeddings.length > 0
-                    ? calculate_similarity_matrix(allArticleEmbeddings)
-                    : [];
+                // Initialize maxSimilarityWithSelected for all candidates
+                // Map candidate index to its max similarity with any selected article
+                // Since candidates array changes (shift/splice), we can just store this property on the object or parallel array.
+                // Let's use a Map<articleId, number> for current max similarity.
+                const maxSimMap = new Map<string, number>();
 
-                // 記事IDとインデックスのマッピングを作成
-                const articleIdToIndexMap = new Map<string, number>();
-                articles.forEach((article: NewsArticleWithEmbedding, index: number) => {
-                    articleIdToIndexMap.set(article.articleId, index);
-                });
+                // Import dynamically added function
+                const { cosine_similarity_one_to_many } = await import('../linalg-wasm/pkg/linalg_wasm');
 
-                // 残りからMMRに基づいて記事を選択
-                while (selected.length < count && remaining.length > 0) {
-                    let bestMMRScore = -Infinity;
-                    let bestArticleIndex = -1;
+                while (selected.length < count && candidates.length > 0) {
+                    const lastSelected = selected[selected.length - 1];
 
-                    for (let i = 0; i < remaining.length; i++) {
-                        const currentArticle = remaining[i];
-                        if (!currentArticle.embedding) {
-                            continue;
-                        }
+                    // Optimization: Only calculate similarity between `lastSelected` and all `candidates`.
+                    // Then update `maxSimMap`.
 
-                        let maxSimilarityWithSelected = 0;
-                        const currentArticleOriginalIndex = articleIdToIndexMap.get(currentArticle.articleId);
+                    if (lastSelected && lastSelected.embedding) {
+                        const candidateEmbeddings = candidates.map(c => c.embedding!);
 
-                        if (currentArticleOriginalIndex !== undefined) {
-                            for (const selectedArticle of selected) {
-                                const selectedArticleOriginalIndex = articleIdToIndexMap.get(selectedArticle.articleId);
-                                if (selectedArticleOriginalIndex !== undefined && similarityMatrix[currentArticleOriginalIndex] && similarityMatrix[currentArticleOriginalIndex][selectedArticleOriginalIndex] !== undefined) {
-                                    maxSimilarityWithSelected = Math.max(maxSimilarityWithSelected, similarityMatrix[currentArticleOriginalIndex][selectedArticleOriginalIndex]);
+                        // Calls new Rust function: one-to-many
+                        let newSims: number[] = [];
+                        try {
+                            newSims = cosine_similarity_one_to_many(lastSelected.embedding, candidateEmbeddings) as number[];
+                        } catch (e) {
+                            this.logger.error("Failed to use cosine_similarity_one_to_many, falling back to TS loop", e);
+                            // Fallback TS loop
+                            const target = lastSelected.embedding;
+                            newSims = candidateEmbeddings.map(cand => {
+                                // Simple cosine sim
+                                let dot = 0; let m1 = 0; let m2 = 0;
+                                for (let k = 0; k < target.length; k++) {
+                                    dot += target[k] * cand[k];
+                                    m1 += target[k] ** 2;
+                                    m2 += cand[k] ** 2;
                                 }
-                            }
+                                return (m1 && m2) ? dot / (Math.sqrt(m1) * Math.sqrt(m2)) : 0;
+                            });
                         }
 
-                        // MMR スコアの計算: lambda * Relevance - (1 - lambda) * Similarity
-                        // Relevance は finalScore を使用
-                        const relevance = currentArticle.finalScore || 0;
-                        // Similarity は 0-1 の範囲だが、finalScoreはより大きな値を取りうるため、
-                        // 類似度ペナルティをスケールアップして効果を保証する (係数 5.0)
-                        const mmrScore = lambda * relevance - (1 - lambda) * maxSimilarityWithSelected * 5.0;
+                        // Update maxSimMap
+                        candidates.forEach((cand, idx) => {
+                            const newSim = newSims[idx];
+                            const currentMax = maxSimMap.get(cand.articleId) || 0;
+                            if (newSim > currentMax) {
+                                maxSimMap.set(cand.articleId, newSim);
+                            }
+                        });
+                    }
 
-                        if (mmrScore > bestMMRScore) {
-                            bestMMRScore = mmrScore;
-                            bestArticleIndex = i;
+                    // Now find best MMR score
+                    let bestScore = -Infinity;
+                    let bestIndex = -1;
+
+                    for (let i = 0; i < candidates.length; i++) {
+                        const cand = candidates[i];
+                        const sim = maxSimMap.get(cand.articleId) || 0;
+                        const relevance = cand.finalScore;
+
+                        // Dynamic Penalty:
+                        // if sim > 0.9 -> huge penalty (duplicate)
+                        // if sim > 0.7 -> moderate penalty (very similar)
+                        // else -> standard penalty
+
+                        let redundancyPenalty = 0;
+                        if (sim > 0.95) redundancyPenalty = 100.0;
+                        else if (sim > 0.8) redundancyPenalty = 10.0 * sim;
+                        else redundancyPenalty = (1.0 - lambda) * sim * 5.0; // original factor 
+
+                        const mmr = lambda * relevance - redundancyPenalty;
+
+                        if (mmr > bestScore) {
+                            bestScore = mmr;
+                            bestIndex = i;
                         }
                     }
 
-                    if (bestArticleIndex !== -1) {
-                        const [nextArticle] = remaining.splice(bestArticleIndex, 1);
-                        selected.push(nextArticle);
+                    if (bestIndex !== -1) {
+                        selected.push(candidates.splice(bestIndex, 1)[0]);
                     } else {
+                        // Should not happen if candidates > 0, but break just in case
                         break;
                     }
                 }
 
-                this.logger.info(`Finished personalized article selection in WASM DO. Selected ${selected.length} articles.`, { userId, selectedCount: selected.length });
+                this.logger.info(`Finished personalized article selection via Optimized MMR. Selected ${selected.length} articles.`, { userId, selectedCount: selected.length });
 
-                // Calculate Average Relevance (Closeness to Profile) of Selected Articles
                 const avgRelevance = selected.reduce((sum, a) => sum + (a.interestRelevance || 0), 0) / (selected.length || 1);
 
                 return new Response(JSON.stringify({
@@ -300,9 +336,8 @@ export class WasmDO extends DurableObject<Env> {
                 }), { headers: { "Content-Type": "application/json" } });
 
             } else {
-                return new Response("Invalid WASM DO endpoint. Use /bulk-cosine-similarity (POST), /single-cosine-similarity (GET), /calculate-similarity-matrix (POST), or /select-personalized-articles (POST).", { status: 404 });
+                return new Response("Invalid WASM DO endpoint.", { status: 404 });
             }
-
         } catch (e: any) {
             this.logger.error(`Error executing WASM function:`, e);
             return new Response(JSON.stringify({

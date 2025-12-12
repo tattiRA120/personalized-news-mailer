@@ -304,5 +304,60 @@ pub fn calculate_similarity_matrix(
         }
     }
 
+
     Ok(serde_wasm_bindgen::to_value(&similarity_matrix)?)
+}
+
+#[wasm_bindgen]
+pub fn cosine_similarity_one_to_many(
+    target_vec_js: JsValue,
+    candidate_vecs_js: JsValue,
+) -> Result<JsValue, JsValue> {
+    utils::set_panic_hook();
+
+    let target_vec: Vec<f64> = serde_wasm_bindgen::from_value(target_vec_js)
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize target_vec: {}", e)))?;
+    let candidates: Vec<Vec<f64>> = serde_wasm_bindgen::from_value(candidate_vecs_js)
+        .map_err(|e| JsValue::from_str(&format!("Failed to deserialize candidate_vecs: {}", e)))?;
+
+    if target_vec.is_empty() {
+         return Err(JsValue::from_str("Target vector is empty."));
+    }
+
+    let mut results = Vec::with_capacity(candidates.len());
+    
+    // Pre-calculate target vector magnitude
+    let target_mag_sq: f64 = target_vec.iter().map(|&a| a * a).sum();
+    let target_mag = target_mag_sq.sqrt();
+
+    if target_mag == 0.0 {
+         // If target vector is zero, all similarities are 0
+         results.resize(candidates.len(), 0.0);
+         return Ok(serde_wasm_bindgen::to_value(&results)?);
+    }
+
+    for candidate in candidates {
+        if candidate.len() != target_vec.len() {
+             results.push(0.0); // Dimension mismatch
+             continue;
+        }
+
+        let mut dot_product = 0.0;
+        let mut cand_mag_sq = 0.0;
+
+        for (a, b) in target_vec.iter().zip(candidate.iter()) {
+            dot_product += a * b;
+            cand_mag_sq += b * b;
+        }
+
+        let cand_mag = cand_mag_sq.sqrt();
+        
+        if cand_mag == 0.0 {
+            results.push(0.0);
+        } else {
+            results.push(dot_product / (target_mag * cand_mag));
+        }
+    }
+
+    Ok(serde_wasm_bindgen::to_value(&results)?)
 }
