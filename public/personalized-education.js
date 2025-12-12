@@ -265,6 +265,13 @@ submitButton.addEventListener('click', async () => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userId, selectedArticleIds })
             });
+
+            // Save selected articles to localStorage for display in the new tab
+            const selectedArticles = articles.filter(a => selectedArticleIds.includes(a.articleId));
+            localStorage.setItem('selectedArticles', JSON.stringify(selectedArticles));
+
+            // Open selected articles in a new tab
+            window.open(`selected-articles.html?userId=${userId}`, '_blank');
         }
 
         // Reload to refresh recommendations
@@ -363,7 +370,8 @@ submitNewFeedbackBtn.addEventListener('click', async () => {
 
             localStorage.setItem('selectedArticles', JSON.stringify(interestedArticles));
 
-            window.location.href = `selected-articles.html?userId=${userId}`;
+            window.open(`selected-articles.html?userId=${userId}`, '_blank');
+            window.location.reload();
         } else {
             alert('フィードバックの送信に失敗しました。もう一度お試しください。');
             submitNewFeedbackBtn.classList.remove('loading');
