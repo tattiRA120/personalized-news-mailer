@@ -14,3 +14,31 @@ updates:
     directory: /
     schedule:
       interval: daily
+    groups:
+      development-dependencies:
+        dependency-type: "development"
+        update-types:
+          - "minor"
+          - "patch"
+      production-dependencies:
+        dependency-type: "production"
+        update-types:
+          - "patch"
+
+automerged_updates:
+  - match:
+      dependency_type: "all"
+      update_type: "all"
+      dependency_name: "actions/*"
+  - match:
+      dependency_type: "all"
+      update_type: "all"
+      dependency_name: "github/*"
+  - match:
+      dependency_type: "development"
+      update_type: "all"
+  - match:
+      dependency_type: "production"
+      update_type: "semver:patch"
+
+open-pull-requests-limit: 5
