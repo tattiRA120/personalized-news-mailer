@@ -185,8 +185,8 @@ pub fn update_bandit_model(
     b = b + x_scaled;
 
     // finalize
-    model.a_inv = a_inv.into_raw_vec();
-    model.b = b.into_raw_vec();
+    model.a_inv = a_inv.into_raw_vec_and_offset().0;
+    model.b = b.into_raw_vec_and_offset().0;
 
     Ok(serde_wasm_bindgen::to_value(&model).map_err(|e| JsValue::from_str(&e.to_string()))?)
 }
