@@ -21,6 +21,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
+      - name: Check if branch needs update
+        id: check-update
+        run: |
+          MERGE_STATE=$(gh pr view "$PR_URL" --json mergeStateStatus -q .mergeStateStatus)
+          if [ "$MERGE_STATE" = "BEHIND" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update branch
+        if: steps.check-update.outputs.needs_update == 'true'
+        run: gh pr update-branch "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Enable auto-merge
         run: gh pr merge --auto --merge "$PR_URL"
         env:
