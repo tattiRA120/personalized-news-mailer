@@ -2,6 +2,9 @@
 name = "linalg-wasm"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+description = "WebAssembly module for linear algebra operations optimized for Contextual Bandit algorithms"
+repository = "https://github.com/tattiRA120/personalized-news-mailer"
 
 [lib]
 crate-type = ["cdylib"]

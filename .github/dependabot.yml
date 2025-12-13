@@ -14,8 +14,6 @@ updates:
     directory: /
     schedule:
       interval: daily
-    ignore:
-      - dependency-name: "linalg-wasm"
     groups:
       development-dependencies:
         dependency-type: "development"
