@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened]
 
 jobs:
+  name: pr-safe-chain
   ci:
     if: |
       github.actor == 'dependabot[bot]' &&
