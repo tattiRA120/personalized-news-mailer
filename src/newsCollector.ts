@@ -116,7 +116,7 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
     return null; // すべてのリトライが失敗した場合
 }
 
-async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
+export async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
     const logger = new Logger(env);
     const articles: NewsArticle[] = [];
 
@@ -141,7 +141,17 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             if (item.title && item.link) {
                 let rawSummary = item.description?.__cdata || item.description || '';
                 let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
-                const pubDate = new Date().toISOString(); // Always use current date
+
+                // Date parsing and filtering
+                const dateStr = item.pubDate || item['dc:date'] || '';
+                const pubDate = dateStr ? new Date(dateStr) : new Date();
+                const now = new Date();
+                const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+
+                if (dateStr && !isNaN(pubDate.getTime()) && pubDate < twoDaysAgo) {
+                    continue; // Skip articles older than 2 days
+                }
+
                 let title = decodeHtmlEntities(stripHtmlTags((item.title as any).__cdata || item.title));
                 title = cleanArticleText(title);
 
@@ -205,9 +215,18 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
                     link = (entry.link as any)['@_href'];
                 }
             }
-                let rawSummary = entry.summary?.__cdata || entry.summary || '';
+            let rawSummary = entry.summary?.__cdata || entry.summary || '';
             let rawContent = entry.content?.__cdata || entry.content || rawSummary; // contentを優先、なければsummary
-            const pubDate = new Date().toISOString(); // Always use current date
+
+            // Date parsing and filtering for Atom
+            const dateStr = entry.published || entry.updated || '';
+            const pubDate = dateStr ? new Date(dateStr) : new Date();
+            const now = new Date();
+            const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+
+            if (dateStr && !isNaN(pubDate.getTime()) && pubDate < twoDaysAgo) {
+                continue; // Skip articles older than 2 days
+            }
 
             if (title && link) {
                 let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
@@ -256,9 +275,18 @@ async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): P
             const item = items[i];
             const title = (item['dc:title'] as any)?.__cdata || item['dc:title'] || (item.title as any)?.__cdata || item.title;
             const link = item['link'] || item['@_rdf:about']; // linkまたはrdf:aboutを使用
-                let rawSummary = item.description?.__cdata || item.description || '';
+            let rawSummary = item.description?.__cdata || item.description || '';
             let rawContent = item['content:encoded']?.__cdata || item['content:encoded'] || rawSummary; // content:encodedを優先、なければdescription
-            const pubDate = new Date().toISOString(); // Always use current date
+
+            // Date parsing and filtering for RDF
+            const dateStr = item['dc:date'] || item.date || ''; // dc:date is common in RDF
+            const pubDate = dateStr ? new Date(dateStr) : new Date();
+            const now = new Date();
+            const twoDaysAgo = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+
+            if (dateStr && !isNaN(pubDate.getTime()) && pubDate < twoDaysAgo) {
+                continue; // Skip articles older than 2 days
+            }
 
             if (title && link) {
                 let cleanedTitle = decodeHtmlEntities(stripHtmlTags(title));
@@ -341,7 +369,7 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                     } else if (url.includes('reuters')) {
                         sourceName = 'ロイター';
                     } else {
-                      'via RSS愛好会';
+                        'via RSS愛好会';
                     }
                 } else if (sourceName.includes('zenn.dev')) {
                     sourceName = 'Zenn';
