@@ -25,7 +25,20 @@ app.all('/wasm-do/*', async (c) => {
             body: c.req.raw.body,
         });
 
+        logger.info(`Forwarding to WASM DO`, {
+            originalPath: path,
+            transformedPath: wasmPath,
+            wasmUrl: wasmUrl.toString(),
+            method: c.req.method
+        });
+
         const doResponse = await wasmDOStub.fetch(wasmRequest); // リクエストをDOに転送
+
+        logger.info(`WASM DO response received`, {
+            status: doResponse.status,
+            statusText: doResponse.statusText,
+            path: path
+        });
 
         return doResponse;
 

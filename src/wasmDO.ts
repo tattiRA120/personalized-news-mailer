@@ -334,9 +334,33 @@ export class WasmDO extends DurableObject<Env> {
                 }, 500);
             }
         });
+
+        // Not Found Handler
+        this.app.notFound((c) => {
+            this.logger.error(`WASM DO: Route not found`, {
+                method: c.req.method,
+                path: c.req.path,
+                url: c.req.url
+            });
+            return c.text('Not Found', 404);
+        });
     }
 
     async fetch(request: Request): Promise<Response> {
-        return this.app.fetch(request, this.env);
+        const url = new URL(request.url);
+        this.logger.info(`WASM DO received request: ${request.method} ${url.pathname}`, {
+            method: request.method,
+            pathname: url.pathname,
+            fullUrl: request.url
+        });
+
+        const response = await this.app.fetch(request, this.env);
+
+        this.logger.info(`WASM DO response status: ${response.status}`, {
+            status: response.status,
+            pathname: url.pathname
+        });
+
+        return response;
     }
 }

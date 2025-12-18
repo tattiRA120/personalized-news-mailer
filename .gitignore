@@ -1,6 +1,5 @@
 memory-bank/
 .clinerules
-decode-google-news-url/
 
 # Node.js dependencies
 node_modules/
