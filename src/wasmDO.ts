@@ -10,14 +10,18 @@ import { ClickLogger } from './clickLogger';
 import { Logger } from './logger';
 import { NewsArticleWithEmbedding, SelectPersonalizedArticlesRequest } from './types/wasm';
 import { Env } from './index';
+import { Hono } from 'hono';
 
 export class WasmDO extends DurableObject<Env> {
     private wasmInitialized: boolean = false;
     private logger: Logger; // Loggerインスタンスを保持
+    private app: Hono<{ Bindings: Env }>;
 
     constructor(ctx: DurableObjectState, env: Env) {
         super(ctx, env);
         this.logger = new Logger(env); // Loggerを初期化
+        this.app = new Hono<{ Bindings: Env }>();
+        this.setupRoutes();
         ctx.waitUntil(this.initializeWasm());
     }
 
@@ -34,76 +38,95 @@ export class WasmDO extends DurableObject<Env> {
         }
     }
 
-    async fetch(request: Request): Promise<Response> {
-        const url = new URL(request.url);
-        let path = url.pathname;
+    private setupRoutes() {
+        // Middleware to check WASM initialization
+        this.app.use('*', async (c, next) => {
+            if (!this.wasmInitialized) {
+                return c.text("WASM is not initialized yet. Please try again.", 503);
+            }
+            await next();
+        });
 
-        // Durable Object が期待するパスに変換するため、/wasm-do を削除
-        if (path.startsWith('/wasm-do')) {
-            path = path.replace('/wasm-do', '');
-        }
-
-        if (!this.wasmInitialized) {
-            return new Response("WASM is not initialized yet. Please try again.", { status: 503 });
-        }
-
-        try {
-            if (path === '/bulk-cosine-similarity') {
-                const { vec1s, vec2s } = await request.json() as { vec1s: number[][], vec2s: number[][] };
+        // POST /bulk-cosine-similarity
+        this.app.post('/bulk-cosine-similarity', async (c) => {
+            try {
+                const { vec1s, vec2s } = await c.req.json<{ vec1s: number[][], vec2s: number[][] }>();
 
                 if (!vec1s || !vec2s || !Array.isArray(vec1s) || !Array.isArray(vec2s)) {
-                    return new Response("Missing or invalid vec1s or vec2s in request body. Please provide JSON arrays of arrays.", { status: 400 });
+                    return c.text("Missing or invalid vec1s or vec2s in request body. Please provide JSON arrays of arrays.", 400);
                 }
 
                 const results = cosine_similarity_bulk(vec1s, vec2s);
 
-                return new Response(JSON.stringify({
+                return c.json({
                     results: results,
                     message: `WASM cosine_similarity_bulk function executed in Durable Object.`
-                }), { headers: { "Content-Type": "application/json" } });
+                });
+            } catch (e) {
+                this.logger.error('Error in /bulk-cosine-similarity:', e);
+                return c.text('Internal Server Error', 500);
+            }
+        });
 
-            } else if (path === '/single-cosine-similarity') {
-                const vec1Param = url.searchParams.get("vec1");
-                const vec2Param = url.searchParams.get("vec2");
+        // GET /single-cosine-similarity
+        this.app.get('/single-cosine-similarity', async (c) => {
+            try {
+                const vec1Param = c.req.query("vec1");
+                const vec2Param = c.req.query("vec2");
 
                 if (!vec1Param || !vec2Param) {
-                    return new Response("Missing vec1 or vec2 parameters. Please provide JSON arrays.", { status: 400 });
+                    return c.text("Missing vec1 or vec2 parameters. Please provide JSON arrays.", 400);
                 }
 
                 const vec1 = JSON.parse(vec1Param);
                 const vec2 = JSON.parse(vec2Param);
 
                 if (!Array.isArray(vec1) || !Array.isArray(vec2)) {
-                    return new Response("vec1 and vec2 must be JSON arrays.", { status: 400 });
+                    return c.text("vec1 and vec2 must be JSON arrays.", 400);
                 }
 
                 const result = cosine_similarity(vec1, vec2);
 
-                return new Response(JSON.stringify({
+                return c.json({
                     vec1: vec1,
                     vec2: vec2,
                     result: result,
                     message: `WASM cosine_similarity function executed in Durable Object.`
-                }), { headers: { "Content-Type": "application/json" } });
-            } else if (path === '/calculate-similarity-matrix') {
-                const { vectors } = await request.json() as { vectors: number[][] };
+                });
+            } catch (e) {
+                this.logger.error('Error in /single-cosine-similarity:', e);
+                return c.text('Internal Server Error', 500);
+            }
+        });
+
+        // POST /calculate-similarity-matrix
+        this.app.post('/calculate-similarity-matrix', async (c) => {
+            try {
+                const { vectors } = await c.req.json<{ vectors: number[][] }>();
 
                 if (!vectors || !Array.isArray(vectors)) {
-                    return new Response("Missing or invalid 'vectors' in request body. Please provide a JSON array of arrays.", { status: 400 });
+                    return c.text("Missing or invalid 'vectors' in request body. Please provide a JSON array of arrays.", 400);
                 }
 
                 const results = calculate_similarity_matrix(vectors);
 
-                return new Response(JSON.stringify({
+                return c.json({
                     results: results,
                     message: `WASM calculate_similarity_matrix function executed in Durable Object.`
-                }), { headers: { "Content-Type": "application/json" } });
+                });
+            } catch (e) {
+                this.logger.error('Error in /calculate-similarity-matrix:', e);
+                return c.text('Internal Server Error', 500);
+            }
+        });
 
-            } else if (path === '/select-personalized-articles') {
-                const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl, negativeFeedbackEmbeddings } = await request.json() as SelectPersonalizedArticlesRequest;
+        // POST /select-personalized-articles
+        this.app.post('/select-personalized-articles', async (c) => {
+            try {
+                const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl, negativeFeedbackEmbeddings } = await c.req.json<SelectPersonalizedArticlesRequest>();
 
                 if (!articles || !userProfileEmbeddingForSelection || !userId || !count || userCTR === undefined) {
-                    return new Response("Missing required parameters for personalized article selection.", { status: 400 });
+                    return c.text("Missing required parameters for personalized article selection.", 400);
                 }
 
                 this.logger.info(`Selecting personalized articles for user ${userId} in WASM DO (Optimized).`, { userId, articleCount: articles.length, count });
@@ -157,16 +180,11 @@ export class WasmDO extends DurableObject<Env> {
                 // Negative Feedback Penalty Pre-calculation
                 const negativePenaltyMap = new Map<string, number>();
                 if (negativeFeedbackEmbeddings && negativeFeedbackEmbeddings.length > 0) {
-                    // Optimization: Use bulk similarity or loop? Since negative feedback is usually small, loop is okay.
-                    // Or better, use our new one-to-many?
-                    // For now, keep simple JS loop as "negativeFeedbackEmbeddings" is likely small (<10).
                     articles.forEach(article => {
                         if (article.embedding) {
                             let maxSim = 0.0;
                             for (const negEmb of negativeFeedbackEmbeddings) {
                                 if (article.embedding.length === negEmb.length) {
-                                    // Use simple dot product if normalized, or cosine_similarity from wasm import
-                                    // We imported cosine_similarity from pkg
                                     const sim = cosine_similarity(article.embedding, negEmb);
                                     if (sim > maxSim) maxSim = sim;
                                 }
@@ -188,8 +206,6 @@ export class WasmDO extends DurableObject<Env> {
                     }
 
                     // Weights
-                    // Interest is most important for "Smartness".
-                    // UCB helps verify exploration.
                     const interestWeight = 3.0;
                     const baseUcbWeight = 1.0;
                     const ucbWeight = baseUcbWeight + (1 - userCTR) * 0.5;
@@ -198,22 +214,17 @@ export class WasmDO extends DurableObject<Env> {
                     let freshnessScore = 0;
                     if (article.embedding && article.embedding.length > 0) {
                         const normalizedAge = article.embedding[article.embedding.length - 1]; // 0=New, 1=Old
-                        // Exponential decay: e^(-5 * age) to prioritize very fresh content heavily
-                        // normalizedAge is roughly (hours / 24) * some_factor ?
-                        // Assuming normalizedAge is 0.0 to 1.0 mapping linearly to 24-48 hours.
-                        // Let's use linear for now but sharper.
                         freshnessScore = Math.max(0, 1.0 - normalizedAge);
                     }
-                    const freshnessWeight = 0.8; // Increased slightly
+                    const freshnessWeight = 0.8;
 
                     // Penalty
-                    const penaltyWeight = 5.0; // Strong penalty for disallowed content
+                    const penaltyWeight = 5.0;
                     const maxSimilarityWithNegative = negativePenaltyMap.get(article.articleId) || 0;
 
                     let finalScore = (interestRelevance * interestWeight) + (ucb * ucbWeight) + (freshnessScore * freshnessWeight);
 
                     if (maxSimilarityWithNegative > 0.6) {
-                        // Soft penalty 0.6-0.8, Hard penalty > 0.8
                         const penaltyFactor = maxSimilarityWithNegative > 0.85 ? 10.0 : 1.0;
                         finalScore -= maxSimilarityWithNegative * penaltyWeight * penaltyFactor;
                     }
@@ -223,7 +234,7 @@ export class WasmDO extends DurableObject<Env> {
                         ucb,
                         finalScore,
                         interestRelevance,
-                        embedding: article.embedding // Ensure embedding is kept for MMR
+                        embedding: article.embedding
                     };
                 });
 
@@ -243,34 +254,23 @@ export class WasmDO extends DurableObject<Env> {
                     selected.push(candidates.shift());
                 }
 
-                // Initialize maxSimilarityWithSelected for all candidates
-                // Map candidate index to its max similarity with any selected article
-                // Since candidates array changes (shift/splice), we can just store this property on the object or parallel array.
-                // Let's use a Map<articleId, number> for current max similarity.
                 const maxSimMap = new Map<string, number>();
 
-                // Import dynamically added function
                 const { cosine_similarity_one_to_many } = await import('../linalg-wasm/pkg/linalg_wasm');
 
                 while (selected.length < count && candidates.length > 0) {
                     const lastSelected = selected[selected.length - 1];
 
-                    // Optimization: Only calculate similarity between `lastSelected` and all `candidates`.
-                    // Then update `maxSimMap`.
-
                     if (lastSelected && lastSelected.embedding) {
                         const candidateEmbeddings = candidates.map(c => c.embedding!);
 
-                        // Calls new Rust function: one-to-many
                         let newSims: number[] = [];
                         try {
                             newSims = cosine_similarity_one_to_many(lastSelected.embedding, candidateEmbeddings) as number[];
                         } catch (e) {
                             this.logger.error("Failed to use cosine_similarity_one_to_many, falling back to TS loop", e);
-                            // Fallback TS loop
                             const target = lastSelected.embedding;
                             newSims = candidateEmbeddings.map(cand => {
-                                // Simple cosine sim
                                 let dot = 0; let m1 = 0; let m2 = 0;
                                 for (let k = 0; k < target.length; k++) {
                                     dot += target[k] * cand[k];
@@ -281,7 +281,6 @@ export class WasmDO extends DurableObject<Env> {
                             });
                         }
 
-                        // Update maxSimMap
                         candidates.forEach((cand, idx) => {
                             const newSim = newSims[idx];
                             const currentMax = maxSimMap.get(cand.articleId) || 0;
@@ -291,7 +290,6 @@ export class WasmDO extends DurableObject<Env> {
                         });
                     }
 
-                    // Now find best MMR score
                     let bestScore = -Infinity;
                     let bestIndex = -1;
 
@@ -300,15 +298,10 @@ export class WasmDO extends DurableObject<Env> {
                         const sim = maxSimMap.get(cand.articleId) || 0;
                         const relevance = cand.finalScore;
 
-                        // Dynamic Penalty:
-                        // if sim > 0.9 -> huge penalty (duplicate)
-                        // if sim > 0.7 -> moderate penalty (very similar)
-                        // else -> standard penalty
-
                         let redundancyPenalty = 0;
                         if (sim > 0.95) redundancyPenalty = 100.0;
                         else if (sim > 0.8) redundancyPenalty = 10.0 * sim;
-                        else redundancyPenalty = (1.0 - lambda) * sim * 5.0; // original factor 
+                        else redundancyPenalty = (1.0 - lambda) * sim * 5.0;
 
                         const mmr = lambda * relevance - redundancyPenalty;
 
@@ -321,7 +314,6 @@ export class WasmDO extends DurableObject<Env> {
                     if (bestIndex !== -1) {
                         selected.push(candidates.splice(bestIndex, 1)[0]);
                     } else {
-                        // Should not happen if candidates > 0, but break just in case
                         break;
                     }
                 }
@@ -330,19 +322,21 @@ export class WasmDO extends DurableObject<Env> {
 
                 const avgRelevance = selected.reduce((sum, a) => sum + (a.interestRelevance || 0), 0) / (selected.length || 1);
 
-                return new Response(JSON.stringify({
+                return c.json({
                     articles: selected,
                     avgRelevance: avgRelevance
-                }), { headers: { "Content-Type": "application/json" } });
+                });
 
-            } else {
-                return new Response("Invalid WASM DO endpoint.", { status: 404 });
+            } catch (e: any) {
+                this.logger.error(`Error executing WASM function:`, e);
+                return c.json({
+                    error: `Failed to execute WASM function: ${e.message || e}`
+                }, 500);
             }
-        } catch (e: any) {
-            this.logger.error(`Error executing WASM function:`, e);
-            return new Response(JSON.stringify({
-                error: `Failed to execute WASM function: ${e.message || e}`
-            }), { status: 500, headers: { "Content-Type": "application/json" } });
-        }
+        });
+    }
+
+    async fetch(request: Request): Promise<Response> {
+        return this.app.fetch(request, this.env);
     }
 }

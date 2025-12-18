@@ -5,6 +5,7 @@ import { Env } from "./index";
 import { DurableObject } from 'cloudflare:workers';
 import { ClickLogger } from "./clickLogger";
 import { OPENAI_EMBEDDING_DIMENSION } from "./config";
+import { Hono } from 'hono';
 
 interface BatchChunk {
   chunkIndex: number;
@@ -31,35 +32,35 @@ interface PendingCallback {
 }
 
 interface BatchResultItem {
-    id?: string; // リクエストID
-    custom_id: string; // JSON.stringify({ articleId: article.articleId }) された文字列
-    response?: { // 成功時の応答
-        status_code: number;
-        body: {
-            object: string;
-            data: Array<{
-                object: string;
-                embedding: number[];
-                index: number;
-            }>;
-            model: string;
-            usage: {
-                prompt_tokens: number;
-                total_tokens: number;
-            };
-        };
+  id?: string; // リクエストID
+  custom_id: string; // JSON.stringify({ articleId: article.articleId }) された文字列
+  response?: { // 成功時の応答
+    status_code: number;
+    body: {
+      object: string;
+      data: Array<{
+        object: string;
+        embedding: number[];
+        index: number;
+      }>;
+      model: string;
+      usage: {
+        prompt_tokens: number;
+        total_tokens: number;
+      };
     };
-    error?: { // エラー時の応答
-        code: string;
-        message: string;
-        param: string;
-        type: string;
-    };
+  };
+  error?: { // エラー時の応答
+    code: string;
+    message: string;
+    param: string;
+    type: string;
+  };
 }
 
 // BatchQueueDO が必要とする Env の拡張
 interface BatchQueueDOEnv extends Env {
-    CLICK_LOGGER: DurableObjectNamespace<ClickLogger>;
+  CLICK_LOGGER: DurableObjectNamespace<ClickLogger>;
 }
 
 export class BatchQueueDO extends DurableObject { // DurableObject を継承
@@ -67,12 +68,15 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
   env: BatchQueueDOEnv;
   private processingPromise: Promise<void> | null = null;
   private logger: Logger;
+  private app: Hono<{ Bindings: BatchQueueDOEnv }>;
 
   constructor(state: DurableObjectState, env: BatchQueueDOEnv) {
     super(state, env); // 親クラスのコンストラクタを呼び出す
     this.state = state;
     this.env = env;
     this.logger = new Logger(env);
+    this.app = new Hono<{ Bindings: BatchQueueDOEnv }>();
+    this.setupRoutes();
     this.state.blockConcurrencyWhile(async () => {
       // DOが初期化される際に、未処理のチャンクがあれば処理を開始
       const storedChunks = await this.state.storage.get<BatchChunk[]>("chunks") || [];
@@ -107,13 +111,10 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     });
   }
 
-  async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    if (path === "/queue-chunks" && request.method === "POST") {
+  private setupRoutes() {
+    this.app.post('/queue-chunks', async (c) => {
       try {
-        const { chunks } = await request.json<{ chunks: BatchChunk[] }>();
+        const { chunks } = await c.req.json<{ chunks: BatchChunk[] }>();
         if (!chunks || chunks.length === 0) {
           return new Response("No chunks provided", { status: 400 });
         }
@@ -123,7 +124,6 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         await this.state.storage.put("chunks", currentChunks);
         this.logger.debug(`Added ${chunks.length} chunks to queue. Total: ${currentChunks.length}`);
 
-        // 処理が実行中でない場合のみ開始
         if (!this.processingPromise) {
           this.processingPromise = this.processQueue();
         }
@@ -133,24 +133,25 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         this.logger.error("Failed to queue chunks in BatchQueueDO", error);
         return new Response("Internal Server Error", { status: 500 });
       }
-    } else if (path === "/start-polling" && request.method === "POST") {
+    });
+
+    this.app.post('/start-polling', async (c) => {
       try {
-        const { batchId, inputFileId, userId } = await request.json<{ batchId: string; inputFileId: string; userId?: string }>();
+        const { batchId, inputFileId, userId } = await c.req.json<{ batchId: string; inputFileId: string; userId?: string }>();
         if (!batchId || !inputFileId) {
           return new Response("Missing batchId or inputFileId", { status: 400 });
         }
 
         let batchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
-        batchJobs.push({ batchId, inputFileId, status: "pending", retryCount: 0, userId: userId }); // userIdを保存
+        batchJobs.push({ batchId, inputFileId, status: "pending", retryCount: 0, userId: userId });
         await this.state.storage.put("batchJobs", batchJobs);
         this.logger.debug(`Added batch job ${batchId} to polling queue for user ${userId || 'N/A'}.`);
 
-        // アラームが設定されていない場合のみ設定
         if (!await this.state.storage.getAlarm()) {
           const now = Date.now();
           await this.state.storage.put("pollingStartTime", now);
-          await this.state.storage.put("currentPollingInterval", 60 * 1000); // 1分
-          await this.state.storage.setAlarm(now + 60 * 1000); // 1分後にアラームを設定
+          await this.state.storage.put("currentPollingInterval", 60 * 1000);
+          await this.state.storage.setAlarm(now + 60 * 1000);
           this.logger.debug("Set initial alarm for batch job polling.");
         }
 
@@ -159,13 +160,17 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         this.logger.error("Failed to start polling in BatchQueueDO", error);
         return new Response("Internal Server Error", { status: 500 });
       }
-    } else if (path === "/debug/trigger-alarm" && request.method === "POST") {
-      this.logger.debug("BatchQueueDO: Debug alarm trigger request received.");
-      await this.alarm(); // 直接 alarm() メソッドを呼び出す
-      return new Response("Alarm triggered manually.", { status: 200 });
-    }
+    });
 
-    return new Response("Not found", { status: 404 });
+    this.app.post('/debug/trigger-alarm', async (c) => {
+      this.logger.debug("BatchQueueDO: Debug alarm trigger request received.");
+      await this.alarm();
+      return new Response("Alarm triggered manually.", { status: 200 });
+    });
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    return this.app.fetch(request, this.env);
   }
 
   async alarm() {
@@ -180,40 +185,40 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
     // まず、ペンディング中のコールバックを処理
     if (pendingCallbacks.length > 0) {
-        this.logger.debug(`Processing ${pendingCallbacks.length} pending callbacks.`);
-        const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
-        const clickLogger = this.env.CLICK_LOGGER.get(clickLoggerId);
-        const MAX_CALLBACK_RETRIES = 5;
-        const INITIAL_RETRY_DELAY_MS = 1000; // 1秒
+      this.logger.debug(`Processing ${pendingCallbacks.length} pending callbacks.`);
+      const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+      const clickLogger = this.env.CLICK_LOGGER.get(clickLoggerId);
+      const MAX_CALLBACK_RETRIES = 5;
+      const INITIAL_RETRY_DELAY_MS = 1000; // 1秒
 
-        for (const callback of pendingCallbacks) {
-            try {
-                const response = await clickLogger.fetch(
-                    new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ embeddings: callback.embeddings, userId: callback.userId }),
-                    })
-                );
-                if (!response.ok) {
-                    throw new Error(`Callback failed with status ${response.status}: ${response.statusText}`);
-                }
-                this.logger.debug(`Successfully re-sent pending callback for user ${callback.userId || 'N/A'}.`);
-            } catch (e: unknown) {
-                callback.retryCount++;
-                if (callback.retryCount <= MAX_CALLBACK_RETRIES) {
-                    const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, callback.retryCount - 1) + Math.random() * 1000; // 指数バックオフ + ジッター
-                    this.logger.warn(`Retrying pending callback for user ${callback.userId || 'N/A'}, attempt ${callback.retryCount}/${MAX_CALLBACK_RETRIES}. Delaying for ${delay}ms.`, e, { userId: callback.userId, retryCount: callback.retryCount });
-                    pendingCallbacksToProcess.push(callback); // リトライのためにキューに戻す
-                } else {
-                    const err = e instanceof Error ? e : new Error(String(e));
-                    this.logger.error(`Max retries exceeded for pending callback for user ${callback.userId || 'N/A'}. Skipping.`, err, { userId: callback.userId, errorName: err.name, errorMessage: err.message });
-                }
-            }
+      for (const callback of pendingCallbacks) {
+        try {
+          const response = await clickLogger.fetch(
+            new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ embeddings: callback.embeddings, userId: callback.userId }),
+            })
+          );
+          if (!response.ok) {
+            throw new Error(`Callback failed with status ${response.status}: ${response.statusText}`);
+          }
+          this.logger.debug(`Successfully re-sent pending callback for user ${callback.userId || 'N/A'}.`);
+        } catch (e: unknown) {
+          callback.retryCount++;
+          if (callback.retryCount <= MAX_CALLBACK_RETRIES) {
+            const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, callback.retryCount - 1) + Math.random() * 1000; // 指数バックオフ + ジッター
+            this.logger.warn(`Retrying pending callback for user ${callback.userId || 'N/A'}, attempt ${callback.retryCount}/${MAX_CALLBACK_RETRIES}. Delaying for ${delay}ms.`, e, { userId: callback.userId, retryCount: callback.retryCount });
+            pendingCallbacksToProcess.push(callback); // リトライのためにキューに戻す
+          } else {
+            const err = e instanceof Error ? e : new Error(String(e));
+            this.logger.error(`Max retries exceeded for pending callback for user ${callback.userId || 'N/A'}. Skipping.`, err, { userId: callback.userId, errorName: err.name, errorMessage: err.message });
+          }
         }
-        await this.state.storage.put("pendingCallbacks", pendingCallbacksToProcess); // 処理後のペンディングコールバックを保存
+      }
+      await this.state.storage.put("pendingCallbacks", pendingCallbacksToProcess); // 処理後のペンディングコールバックを保存
     }
-    
+
     // バッチジョブの処理
 
     const pollingStartTime = await this.state.storage.get<number>("pollingStartTime");
@@ -243,18 +248,18 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     for (const jobInfo of batchJobs) {
       try {
         const statusResponse = await getOpenAIBatchJobStatus(jobInfo.batchId, this.env);
-        
+
         if (!statusResponse) {
-            this.logger.warn(`Batch job ${jobInfo.batchId} status response was null. Retrying.`, { jobId: jobInfo.batchId });
-            jobInfo.retryCount = (jobInfo.retryCount || 0) + 1;
-            const MAX_POLLING_RETRIES = 5;
-            if (jobInfo.retryCount <= MAX_POLLING_RETRIES) {
-                pendingBatchJobs.push(jobInfo);
-            } else {
-                this.logger.error(`Max polling retries exceeded for batch job ${jobInfo.batchId} due to null response. Skipping.`, new Error('Null status response'), { jobId: jobInfo.batchId });
-                failedJobs.push(jobInfo);
-            }
-            continue;
+          this.logger.warn(`Batch job ${jobInfo.batchId} status response was null. Retrying.`, { jobId: jobInfo.batchId });
+          jobInfo.retryCount = (jobInfo.retryCount || 0) + 1;
+          const MAX_POLLING_RETRIES = 5;
+          if (jobInfo.retryCount <= MAX_POLLING_RETRIES) {
+            pendingBatchJobs.push(jobInfo);
+          } else {
+            this.logger.error(`Max polling retries exceeded for batch job ${jobInfo.batchId} due to null response. Skipping.`, new Error('Null status response'), { jobId: jobInfo.batchId });
+            failedJobs.push(jobInfo);
+          }
+          continue;
         }
 
         jobInfo.status = statusResponse.status; // ステータスを更新
@@ -264,114 +269,114 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
         if (jobInfo.status === "completed") {
           this.logger.debug(`Batch job ${jobInfo.batchId} completed. Fetching results.`);
           const resultsContent = await getOpenAIBatchJobResults(statusResponse.output_file_id!, this.env); // output_file_id は completed 時には存在するはず
-          
+
           if (resultsContent) {
             const results: BatchResultItem[] = resultsContent.split('\n')
-                .filter(line => line.trim() !== '')
-                .map(line => JSON.parse(line));
+              .filter(line => line.trim() !== '')
+              .map(line => JSON.parse(line));
 
             if (results && results.length > 0) {
-                const embeddingsToUpdate = results.map(r => {
-                    if (r.error) {
-                        this.logger.warn(`Batch result item contains an error. Skipping.`, { error: r.error, custom_id: r.custom_id });
-                        return null;
-                    }
-
-                    const articleId: string = r.custom_id; // custom_id は既に articleId の文字列
-
-                    const embedding = r.response?.body?.data?.[0]?.embedding;
-
-                    if (embedding === undefined || articleId === undefined) {
-                        this.logger.warn(`Batch result item missing embedding or articleId after parsing. Skipping.`, { custom_id: r.custom_id, embeddingExists: embedding !== undefined, articleIdExists: articleId !== undefined });
-                        return null;
-                    }
-                    // OpenAIから受け取った512次元のembeddingに鮮度情報のプレースホルダー(0.0)を追加して513次元にする
-                    const extendedEmbedding = [...embedding, 0.0];
-                    return {
-                        articleId: articleId,
-                        embedding: extendedEmbedding
-                    };
-                }).filter(item => item !== null) as { articleId: string; embedding: number[]; }[];
-
-                if (embeddingsToUpdate.length > 0) {
-                    await this.updateArticleEmbeddingsInD1(embeddingsToUpdate, this.env);
-                    this.logger.debug(`Updated D1 with 513-dimensional embeddings for batch job ${jobInfo.batchId}.`);
-
-                    // ClickLoggerにコールバックを送信
-                    const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
-                    const clickLogger = this.env.CLICK_LOGGER.get(clickLoggerId);
-                    
-                    // WORKER_BASE_URL が設定されているか確認
-                    if (!this.env.WORKER_BASE_URL) {
-                        this.logger.error(`WORKER_BASE_URL is not set in environment variables. Cannot send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId}.`, null, { jobId: jobInfo.batchId });
-                        // このジョブは失敗として扱い、再試行しない
-                        failedJobs.push(jobInfo);
-                        continue;
-                    }
-
-                    // ClickLoggerにコールバックを送信 (waitUntilで非同期実行)
-                    this.state.waitUntil( (async () => {
-                        const MAX_CALLBACK_RETRIES = 5;
-                        const INITIAL_RETRY_DELAY_MS = 1000; // 1秒
-
-                        const retryFetch = async (attempt: number = 0): Promise<Response> => {
-                            try {
-                                const response = await clickLogger.fetch(
-                                    new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ embeddings: embeddingsToUpdate, userId: jobInfo.userId }),
-                                    })
-                                );
-                                if (!response.ok) {
-                                    throw new Error(`Callback failed with status ${response.status}: ${response.statusText}`);
-                                }
-                                return response;
-                            } catch (e) {
-                                if (attempt < MAX_CALLBACK_RETRIES) {
-                                    const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 1000; // 指数バックオフ + ジッター
-                                    this.logger.warn(`Retrying embedding completion callback for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}), attempt ${attempt + 1}/${MAX_CALLBACK_RETRIES}. Delaying for ${delay}ms.`, e, { jobId: jobInfo.batchId });
-                                    await new Promise(resolve => setTimeout(resolve, delay));
-                                    return retryFetch(attempt + 1);
-                                }
-                                throw e; // 最大リトライ回数を超えたらエラーを再スロー
-                            }
-                        };
-
-                        try {
-                            await retryFetch();
-                            this.logger.debug(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
-                        } catch (callbackError: unknown) {
-                            const err = callbackError instanceof Error ? callbackError : new Error(String(callbackError));
-                            this.logger.error(`Failed to send embedding completion callback to ClickLogger after ${MAX_CALLBACK_RETRIES} retries for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, err, {
-                                jobId: jobInfo.batchId,
-                                errorName: err.name,
-                                errorMessage: err.message,
-                                errorStack: err.stack,
-                            });
-                            // リトライ後も失敗した場合は、このジョブは失敗として扱い、ペンディングコールバックとして保存
-                            this.logger.warn(`Failed to send embedding completion callback to ClickLogger after ${MAX_CALLBACK_RETRIES} retries for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}). Saving as pending callback.`, err, {
-                                jobId: jobInfo.batchId,
-                                errorName: err.name,
-                                errorMessage: err.message,
-                                errorStack: err.stack,
-                            });
-                            const currentPendingCallbacks = await this.state.storage.get<PendingCallback[]>("pendingCallbacks") || [];
-                            currentPendingCallbacks.push({
-                                embeddings: embeddingsToUpdate,
-                                userId: jobInfo.userId,
-                                retryCount: 0, // 新しいペンディングコールバックなのでリトライカウントは0から
-                                timestamp: Date.now(),
-                            });
-                            await this.state.storage.put("pendingCallbacks", currentPendingCallbacks);
-                        }
-                    })());
-
-                } else {
-                    this.logger.warn(`Batch job ${jobInfo.batchId} completed but no valid embeddings to update after filtering.`, { jobId: jobInfo.batchId });
+              const embeddingsToUpdate = results.map(r => {
+                if (r.error) {
+                  this.logger.warn(`Batch result item contains an error. Skipping.`, { error: r.error, custom_id: r.custom_id });
+                  return null;
                 }
+
+                const articleId: string = r.custom_id; // custom_id は既に articleId の文字列
+
+                const embedding = r.response?.body?.data?.[0]?.embedding;
+
+                if (embedding === undefined || articleId === undefined) {
+                  this.logger.warn(`Batch result item missing embedding or articleId after parsing. Skipping.`, { custom_id: r.custom_id, embeddingExists: embedding !== undefined, articleIdExists: articleId !== undefined });
+                  return null;
+                }
+                // OpenAIから受け取った512次元のembeddingに鮮度情報のプレースホルダー(0.0)を追加して513次元にする
+                const extendedEmbedding = [...embedding, 0.0];
+                return {
+                  articleId: articleId,
+                  embedding: extendedEmbedding
+                };
+              }).filter(item => item !== null) as { articleId: string; embedding: number[]; }[];
+
+              if (embeddingsToUpdate.length > 0) {
+                await this.updateArticleEmbeddingsInD1(embeddingsToUpdate, this.env);
+                this.logger.debug(`Updated D1 with 513-dimensional embeddings for batch job ${jobInfo.batchId}.`);
+
+                // ClickLoggerにコールバックを送信
+                const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+                const clickLogger = this.env.CLICK_LOGGER.get(clickLoggerId);
+
+                // WORKER_BASE_URL が設定されているか確認
+                if (!this.env.WORKER_BASE_URL) {
+                  this.logger.error(`WORKER_BASE_URL is not set in environment variables. Cannot send embedding completion callback to ClickLogger for batch job ${jobInfo.batchId}.`, null, { jobId: jobInfo.batchId });
+                  // このジョブは失敗として扱い、再試行しない
+                  failedJobs.push(jobInfo);
+                  continue;
+                }
+
+                // ClickLoggerにコールバックを送信 (waitUntilで非同期実行)
+                this.state.waitUntil((async () => {
+                  const MAX_CALLBACK_RETRIES = 5;
+                  const INITIAL_RETRY_DELAY_MS = 1000; // 1秒
+
+                  const retryFetch = async (attempt: number = 0): Promise<Response> => {
+                    try {
+                      const response = await clickLogger.fetch(
+                        new Request(`${this.env.WORKER_BASE_URL}/embedding-completed-callback`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ embeddings: embeddingsToUpdate, userId: jobInfo.userId }),
+                        })
+                      );
+                      if (!response.ok) {
+                        throw new Error(`Callback failed with status ${response.status}: ${response.statusText}`);
+                      }
+                      return response;
+                    } catch (e) {
+                      if (attempt < MAX_CALLBACK_RETRIES) {
+                        const delay = INITIAL_RETRY_DELAY_MS * Math.pow(2, attempt) + Math.random() * 1000; // 指数バックオフ + ジッター
+                        this.logger.warn(`Retrying embedding completion callback for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}), attempt ${attempt + 1}/${MAX_CALLBACK_RETRIES}. Delaying for ${delay}ms.`, e, { jobId: jobInfo.batchId });
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        return retryFetch(attempt + 1);
+                      }
+                      throw e; // 最大リトライ回数を超えたらエラーを再スロー
+                    }
+                  };
+
+                  try {
+                    await retryFetch();
+                    this.logger.debug(`Successfully sent embedding completion callback to ClickLogger for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`);
+                  } catch (callbackError: unknown) {
+                    const err = callbackError instanceof Error ? callbackError : new Error(String(callbackError));
+                    this.logger.error(`Failed to send embedding completion callback to ClickLogger after ${MAX_CALLBACK_RETRIES} retries for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}).`, err, {
+                      jobId: jobInfo.batchId,
+                      errorName: err.name,
+                      errorMessage: err.message,
+                      errorStack: err.stack,
+                    });
+                    // リトライ後も失敗した場合は、このジョブは失敗として扱い、ペンディングコールバックとして保存
+                    this.logger.warn(`Failed to send embedding completion callback to ClickLogger after ${MAX_CALLBACK_RETRIES} retries for batch job ${jobInfo.batchId} (user: ${jobInfo.userId || 'N/A'}). Saving as pending callback.`, err, {
+                      jobId: jobInfo.batchId,
+                      errorName: err.name,
+                      errorMessage: err.message,
+                      errorStack: err.stack,
+                    });
+                    const currentPendingCallbacks = await this.state.storage.get<PendingCallback[]>("pendingCallbacks") || [];
+                    currentPendingCallbacks.push({
+                      embeddings: embeddingsToUpdate,
+                      userId: jobInfo.userId,
+                      retryCount: 0, // 新しいペンディングコールバックなのでリトライカウントは0から
+                      timestamp: Date.now(),
+                    });
+                    await this.state.storage.put("pendingCallbacks", currentPendingCallbacks);
+                  }
+                })());
+
+              } else {
+                this.logger.warn(`Batch job ${jobInfo.batchId} completed but no valid embeddings to update after filtering.`, { jobId: jobInfo.batchId });
+              }
             } else {
-                this.logger.warn(`Batch job ${jobInfo.batchId} completed but no results found after parsing.`, { jobId: jobInfo.batchId });
+              this.logger.warn(`Batch job ${jobInfo.batchId} completed but no results found after parsing.`, { jobId: jobInfo.batchId });
             }
           } else {
             this.logger.warn(`Batch job ${jobInfo.batchId} completed but no results content received.`, { jobId: jobInfo.batchId });
@@ -541,13 +546,13 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
 
     // 更新された行数をチェックし、更新されなかった記事があればエラーログを出力
     for (let i = 0; i < batchResult.length; i++) {
-        const result = batchResult[i];
-        const articleId = records[i].articleId;
-        if (result.success && result.meta?.changes === 0) {
-            this.logger.error(`Failed to update embedding for article ${articleId} in D1: Article not found or no changes made.`, null, { articleId });
-        } else if (!result.success) {
-            this.logger.error(`Failed to update embedding for article ${articleId} in D1: ${result.error}`, null, { articleId, error: result.error });
-        }
+      const result = batchResult[i];
+      const articleId = records[i].articleId;
+      if (result.success && result.meta?.changes === 0) {
+        this.logger.error(`Failed to update embedding for article ${articleId} in D1: Article not found or no changes made.`, null, { articleId });
+      } else if (!result.success) {
+        this.logger.error(`Failed to update embedding for article ${articleId} in D1: ${result.error}`, null, { articleId, error: result.error });
+      }
     }
   }
 }

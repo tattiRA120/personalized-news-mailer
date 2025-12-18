@@ -1,6 +1,7 @@
 // src/clickLogger.ts
 
 import { Logger } from './logger';
+import { Hono } from 'hono';
 import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './index';
@@ -39,6 +40,7 @@ export class ClickLogger extends DurableObject {
 
     // ロガーインスタンスを保持
     private logger: Logger;
+    private app: Hono<{ Bindings: ClickLoggerEnv }>;
 
     constructor(state: DurableObjectState, env: ClickLoggerEnv) {
         super(state, env);
@@ -49,6 +51,8 @@ export class ClickLogger extends DurableObject {
 
         // ロガーを初期化し、インスタンス変数に割り当てる
         this.logger = new Logger(env);
+        this.app = new Hono<{ Bindings: ClickLoggerEnv }>();
+        this.setupRoutes();
 
         // Load all models from R2 into memory on startup.
         this.state.blockConcurrencyWhile(async () => {
@@ -377,36 +381,33 @@ export class ClickLogger extends DurableObject {
     }
 
     // Handle requests to the Durable Object
-    async fetch(request: Request): Promise<Response> {
-        // Ensure an alarm is set to periodically save data.
-        // This is crucial for ensuring alarm() is called even if the DO is idle for a long time.
-        await this.ensureAlarmIsSet();
-        await this.ensureModelsLoaded(); // 各リクエストの前にモデルがロードされていることを確認
 
-        const url = new URL(request.url);
-        const path = url.pathname;
+    private setupRoutes() {
+        // Middleware to ensure alarm and models are loaded
+        this.app.use('*', async (c, next) => {
+            await this.ensureAlarmIsSet();
+            await this.ensureModelsLoaded();
+            await next();
+        });
 
-        // /get-ucb-values エンドポイントのリクエストボディの型定義
+        // Interfaces for Request Bodies
         interface GetUcbValuesRequestBody {
             userId: string;
             articlesWithEmbeddings: { articleId: string, embedding: number[] }[];
             userCTR: number;
         }
 
-        // /log-sent-articles エンドポイントのリクエストボディの型定義
         interface LogSentArticlesRequestBody {
             userId: string;
             sentArticles: { articleId: string, timestamp: number, embedding: number[], publishedAt: string }[];
         }
 
-        // /log-click エンドポイントのリクエストボディの型定義
         interface LogClickRequestBody {
             userId: string;
             articleId: string;
             timestamp: number;
         }
 
-        // /update-bandit-from-click エンドポイントのリクエストボディの型定義
         interface UpdateBanditFromClickRequestBody {
             userId: string;
             articleId: string;
@@ -414,28 +415,27 @@ export class ClickLogger extends DurableObject {
             reward: number;
         }
 
-        // /log-feedback エンドポイントのリクエストボディの型定義
         interface LogFeedbackRequestBody {
             userId: string;
             articleId: string;
             feedback: 'interested' | 'not_interested';
             timestamp: number;
-            immediateUpdate?: boolean; // 即時更新フラグ
+            immediateUpdate?: boolean;
         }
 
-        // /learn-from-education エンドポイントのリクエストボディの型定義
         interface LearnFromEducationRequestBody {
             userId: string;
             selectedArticles: { articleId: string, embedding: number[], reward: number }[];
         }
 
-        // /embedding-completed-callback エンドポイントのリクエストボディの型定義
         interface EmbeddingCompletedCallbackRequestBody {
-            userId: string; // userIdを追加
+            userId: string;
             embeddings: { articleId: string; embedding: number[]; }[];
         }
 
-        if (request.method === 'POST' && path === '/log-click') {
+        // POST /log-click
+        this.app.post('/log-click', async (c) => {
+            const request = c.req.raw;
             let userId: string | undefined;
             let articleId: string | undefined;
             try {
@@ -470,7 +470,11 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Error logging click', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/log-feedback') {
+        });
+
+        // POST /log-feedback
+        this.app.post('/log-feedback', async (c) => {
+            const request = c.req.raw;
             try {
                 const { userId, articleId, feedback, timestamp, immediateUpdate } = await request.json() as LogFeedbackRequestBody;
                 this.logger.info(`Log feedback request: userId=${userId}, articleId=${articleId}, feedback=${feedback}, immediateUpdate=${immediateUpdate}`);
@@ -480,13 +484,8 @@ export class ClickLogger extends DurableObject {
                     return new Response('Missing parameters', { status: 400 });
                 }
 
-                // 1. Determine reward based on feedback
-                // 教育ページからの明示的なフィードバックは強いシグナルとして扱う
-                // 興味あり: 20.0, 興味なし: -20.0 (学習効率を上げるために大幅に増強)
                 const reward = feedback === 'interested' ? 20.0 : -20.0;
 
-                // 2. Get the article's embedding from D1
-                // First, try to get from sent_articles (for regular email feedback)
                 let embedding: number[] | undefined;
                 let source = 'unknown';
 
@@ -500,7 +499,6 @@ export class ClickLogger extends DurableObject {
                     source = 'sent_articles';
                 } else {
                     this.logger.debug(`Embedding not found in sent_articles for article ${articleId} for user ${userId}. Fetching from articles table.`, { userId, articleId });
-                    // For education program feedback, get from articles table
                     const originalArticle = await this.env.DB.prepare(
                         `SELECT embedding, published_at FROM articles WHERE article_id = ?`
                     ).bind(articleId).first<{ embedding: string | null, published_at: string | null }>();
@@ -520,7 +518,6 @@ export class ClickLogger extends DurableObject {
                                 normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
                             }
 
-                            // embeddingの次元をチェックし、必要に応じて鮮度情報を追加または更新
                             if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
                                 embedding = [...originalEmbedding, normalizedAge];
                             } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
@@ -545,31 +542,22 @@ export class ClickLogger extends DurableObject {
                             embeddingExists: !!originalArticle?.embedding,
                             publishedAtExists: !!originalArticle?.published_at
                         });
-                        // embeddingが見つからない場合でも、エラーをログに記録し、200 OKを返すことで、
-                        // クライアント側でフィードバック処理がブロックされるのを防ぎます。
-                        // ただし、バンディットモデルの更新はスキップされます。
                         this.logger.error(`Failed to find embedding for article ${articleId} for user ${userId}. Cannot update bandit model.`, undefined, {
                             userId,
                             articleId,
-                            sentArticlesExists: !!sentArticleResult,
-                            articlesExists: !!originalArticle,
-                            embeddingExists: !!originalArticle?.embedding,
-                            publishedAtExists: !!originalArticle?.published_at,
                             timestamp: new Date().toISOString()
                         });
                         return new Response('Feedback logged (embedding not found, model not updated)', { status: 200 });
                     }
                 }
 
-                // 3. Update the bandit model if immediate update is requested
-                if (immediateUpdate && embedding) { // embedding が存在する場合のみモデルを更新
+                if (immediateUpdate && embedding) {
                     let banditModel = this.inMemoryModels.get(userId);
                     if (!banditModel) {
                         this.logger.warn(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
                         banditModel = this.initializeNewBanditModel(userId);
                     }
 
-                    // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理 (既に上記で処理済みだが念のため)
                     if (embedding.length !== banditModel.dimension) {
                         this.logger.error(`Final embedding dimension mismatch for article ${articleId}. Expected ${banditModel.dimension}, got ${embedding.length}. Cannot update bandit model.`, null, {
                             userId,
@@ -587,8 +575,6 @@ export class ClickLogger extends DurableObject {
                     this.logger.debug(`Immediate update not requested for feedback from user ${userId}, article ${articleId}. Model update will be handled periodically.`, { userId, articleId, feedback });
                 }
 
-                // 4. Log the feedback to education_logs table (only if immediate update was NOT performed)
-                // If immediate update was done, we don't need to queue it for later processing.
                 if (!immediateUpdate) {
                     await this.env.DB.prepare(
                         `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
@@ -598,20 +584,16 @@ export class ClickLogger extends DurableObject {
                     this.logger.info(`Skipped logging to education_logs because immediate update was performed for user ${userId}, article ${articleId}`);
                 }
 
-                // 5. Record exposure in sent_articles (so it can be excluded later and counted for score)
-                // Use INSERT OR IGNORE to avoid errors if it was already sent/recorded
                 if (embedding) {
                     await this.env.DB.prepare(
                         `INSERT OR IGNORE INTO sent_articles (user_id, article_id, timestamp, embedding, published_at) VALUES (?, ?, ?, ?, ?)`
-                    ).bind(userId, articleId, timestamp, JSON.stringify(embedding), new Date().toISOString()).run(); // published_at is approximate here if not fetched, but acceptable for exclusion
+                    ).bind(userId, articleId, timestamp, JSON.stringify(embedding), new Date().toISOString()).run();
                 } else {
-                    // Try to insert without embedding if we don't have it, just for ID exclusion
                     await this.env.DB.prepare(
                         `INSERT OR IGNORE INTO sent_articles (user_id, article_id, timestamp) VALUES (?, ?, ?)`
                     ).bind(userId, articleId, timestamp).run();
                 }
 
-                // 6. If interested, record as a click in click_logs (for score calculation)
                 if (feedback === 'interested') {
                     await this.env.DB.prepare(
                         `INSERT INTO click_logs (user_id, article_id, timestamp) VALUES (?, ?, ?)`
@@ -631,7 +613,11 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Error logging feedback', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/get-ucb-values') {
+        });
+
+        // POST /get-ucb-values
+        this.app.post('/get-ucb-values', async (c) => {
+            const request = c.req.raw;
             try {
                 const { userId, articlesWithEmbeddings, userCTR } = await request.json() as GetUcbValuesRequestBody;
                 if (!userId || !Array.isArray(articlesWithEmbeddings) || userCTR === undefined) {
@@ -645,7 +631,6 @@ export class ClickLogger extends DurableObject {
                 }
 
                 const ucbValues = await this.getUCBValues(userId, banditModel, articlesWithEmbeddings, userCTR);
-                // Limit logging to the first 10 UCB values for performance
                 const limitedUcbValues = ucbValues.slice(0, 10).map(u => ({ articleId: u.articleId, ucb: u.ucb.toFixed(4) }));
                 this.logger.debug(
                     `Calculated UCB values for user ${userId} (showing up to 10): ${JSON.stringify(limitedUcbValues)}`,
@@ -665,7 +650,11 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Error getting UCB values', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/log-sent-articles') {
+        });
+
+        // POST /log-sent-articles
+        this.app.post('/log-sent-articles', async (c) => {
+            const request = c.req.raw;
             try {
                 const { userId, sentArticles } = await request.json() as LogSentArticlesRequestBody;
                 if (!userId || !Array.isArray(sentArticles)) {
@@ -674,7 +663,6 @@ export class ClickLogger extends DurableObject {
 
                 const statements = [];
                 for (const article of sentArticles) {
-                    // sent_articles に挿入する前に、articles テーブルに article_id が存在するか確認
                     const articleExists = await this.env.DB.prepare(`SELECT article_id FROM articles WHERE article_id = ?`).bind(article.articleId).all();
                     if (articleExists.results && articleExists.results.length > 0) {
                         statements.push(
@@ -705,10 +693,17 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Error logging sent articles', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/decay-rewards') {
+        });
+
+        // POST /decay-rewards (Deprecated)
+        this.app.post('/decay-rewards', async (c) => {
             this.logger.warn('/decay-rewards endpoint is deprecated.');
             return new Response('Deprecated endpoint', { status: 410 });
-        } else if (request.method === 'POST' && path === '/learn-from-education') {
+        });
+
+        // POST /learn-from-education
+        this.app.post('/learn-from-education', async (c) => {
+            const request = c.req.raw;
             try {
                 const { userId, selectedArticles } = await request.json() as LearnFromEducationRequestBody;
                 if (!userId || !Array.isArray(selectedArticles)) {
@@ -726,7 +721,6 @@ export class ClickLogger extends DurableObject {
                     if (article.embedding && article.reward !== undefined) {
                         let embeddingToUse = article.embedding;
 
-                        // embeddingの次元がモデルの次元と一致しない場合のフォールバック処理
                         if (embeddingToUse.length !== banditModel.dimension) {
                             this.logger.warn(`Embedding dimension mismatch for article ${article.articleId} from selectedArticles. Attempting to re-fetch and extend.`, {
                                 userId,
@@ -735,7 +729,6 @@ export class ClickLogger extends DurableObject {
                                 modelDimension: banditModel.dimension
                             });
 
-                            // D1のarticlesテーブルから元のembeddingとpublished_atを再取得
                             const originalArticle = await this.env.DB.prepare(
                                 `SELECT embedding, published_at FROM articles WHERE article_id = ?`
                             ).bind(article.articleId).first<{ embedding: string, published_at: string | null }>()
@@ -754,7 +747,6 @@ export class ClickLogger extends DurableObject {
                                     normalizedAge = Math.min(ageInHours / (24 * 7), 1.0);
                                 }
 
-                                // embeddingの次元をチェックし、必要に応じて鮮度情報を追加または更新
                                 if (originalEmbedding.length === OPENAI_EMBEDDING_DIMENSION) {
                                     embeddingToUse = [...originalEmbedding, normalizedAge];
                                 } else if (originalEmbedding.length === EXTENDED_EMBEDDING_DIMENSION) {
@@ -764,11 +756,9 @@ export class ClickLogger extends DurableObject {
                                     this.logger.warn(`Article ${article.articleId} from articles table has unexpected embedding dimension ${originalEmbedding.length} during learn-from-education. Expected ${OPENAI_EMBEDDING_DIMENSION} or ${EXTENDED_EMBEDDING_DIMENSION}. Skipping.`, { userId, articleId: article.articleId, embeddingLength: originalEmbedding.length });
                                     continue;
                                 }
-
                                 this.logger.debug(`Successfully re-fetched and extended embedding for article ${article.articleId}. New dimension: ${embeddingToUse.length}`, { userId, articleId: article.articleId, newEmbeddingLength: embeddingToUse.length });
                             } else {
                                 this.logger.error(`Failed to re-fetch original embedding for article ${article.articleId} from articles table during learn-from-education. Cannot update bandit model.`, null, { userId, articleId: article.articleId });
-                                // エラーが発生した場合でも、この記事の学習はスキップし、次の記事に進む
                                 continue;
                             }
                         }
@@ -786,8 +776,8 @@ export class ClickLogger extends DurableObject {
                     this.state.waitUntil(this.env.DB.batch(logStatements));
                     this.dirty = true;
                     this.logger.debug(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
-                    await this.updateUserProfileEmbeddingInD1(userId, banditModel); // プロファイル更新
-                    await this.saveModelsToR2(); // モデルの変更を即座にR2へ保存
+                    await this.updateUserProfileEmbeddingInD1(userId, banditModel);
+                    await this.saveModelsToR2();
                 }
                 return new Response('Learning from education completed', { status: 200 });
 
@@ -801,7 +791,11 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Error learning from education', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/embedding-completed-callback') {
+        });
+
+        // POST /embedding-completed-callback
+        this.app.post('/embedding-completed-callback', async (c) => {
+            const request = c.req.raw;
             try {
                 const { userId, embeddings } = await request.json() as EmbeddingCompletedCallbackRequestBody;
                 if (!Array.isArray(embeddings) || embeddings.length === 0) {
@@ -809,7 +803,7 @@ export class ClickLogger extends DurableObject {
                     return new Response('No embeddings provided', { status: 400 });
                 }
 
-                if (userId) { // userId が存在する場合のみバンディットモデルを更新
+                if (userId) {
                     let banditModel = this.inMemoryModels.get(userId);
                     if (!banditModel) {
                         this.logger.warn(`No model found for user ${userId} during embedding callback. Initializing a new one.`);
@@ -817,15 +811,11 @@ export class ClickLogger extends DurableObject {
                     }
 
                     for (const embed of embeddings) {
-                        // embedding-completed-callback は OpenAI Batch API からのコールバックであり、
-                        // BatchQueueDOで既に257次元に拡張されたembeddingを受け取り、D1にも保存済みであるため、
-                        // ここではバンディットモデルの更新のみを行う。
-                        await this.updateBanditModel(banditModel, embed.embedding, 1.0, userId, true); // 報酬は1.0, プロファイル更新はスキップ
+                        await this.updateBanditModel(banditModel, embed.embedding, 1.0, userId, true);
                         this.logger.debug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
-                    // バッチ処理完了後に一度だけユーザープロファイルを更新
                     await this.updateUserProfileEmbeddingInD1(userId, banditModel);
-                    this.dirty = true; // モデルが変更されたことをマーク
+                    this.dirty = true;
                 } else {
                     this.logger.debug('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
                 }
@@ -841,7 +831,11 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Error processing callback', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/update-bandit-from-click') {
+        });
+
+        // POST /update-bandit-from-click
+        this.app.post('/update-bandit-from-click', async (c) => {
+            const request = c.req.raw;
             try {
                 const { userId, articleId, embedding, reward } = await request.json() as UpdateBanditFromClickRequestBody;
                 if (!userId || !articleId || !embedding || reward === undefined) {
@@ -869,9 +863,11 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Error updating bandit model from click', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/delete-all-data') {
-            // This is a destructive operation and should be used with caution.
-            // It now deletes the entire R2 object.
+        });
+
+        // POST /delete-all-data
+        this.app.post('/delete-all-data', async (c) => {
+            const request = c.req.raw;
             try {
                 this.logger.info(`Deleting all bandit models from R2.`);
                 await this.env.BANDIT_MODELS.delete(this.modelsR2Key);
@@ -889,7 +885,11 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Error deleting all models', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/calculate-preference-score') {
+        });
+
+        // POST /calculate-preference-score
+        this.app.post('/calculate-preference-score', async (c) => {
+            const request = c.req.raw;
             try {
                 const { userId, selectedArticleIds } = await request.json() as { userId: string, selectedArticleIds: string[] };
 
@@ -904,10 +904,8 @@ export class ClickLogger extends DurableObject {
                     banditModel = this.initializeNewBanditModel(userId);
                 }
 
-                // ユーザーの好みベクトル (bベクトル) を取得
                 const userPreferenceVector = Array.from(banditModel.b);
 
-                // 選択された記事の埋め込みベクトルを取得し、平均ベクトルを計算
                 const articlesWithEmbeddings = await getArticlesFromD1(this.env, selectedArticleIds.length, 0, `article_id IN (${selectedArticleIds.map(() => '?').join(',')}) AND embedding IS NOT NULL`, selectedArticleIds);
 
                 if (articlesWithEmbeddings.length === 0) {
@@ -959,7 +957,6 @@ export class ClickLogger extends DurableObject {
                     return new Response('No valid article embeddings found', { status: 404 });
                 }
 
-                // 選択された記事の平均ベクトルを計算
                 const averageArticleVector = new Array(banditModel.dimension).fill(0);
                 for (let i = 0; i < banditModel.dimension; i++) {
                     for (const embedding of articleEmbeddings) {
@@ -968,13 +965,11 @@ export class ClickLogger extends DurableObject {
                     averageArticleVector[i] /= articleEmbeddings.length;
                 }
 
-                // コサイン類似度を計算
                 const similarity = cosine_similarity(
                     userPreferenceVector,
                     averageArticleVector,
                 );
 
-                // スコアを0-100のパーセンテージに変換 (類似度は-1から1の範囲なので、0から1に正規化してから100倍)
                 const preferenceScore = ((similarity + 1) / 2) * 100;
 
                 this.logger.debug(`Calculated preference score for user ${userId}: ${preferenceScore.toFixed(2)}%`, { userId, score: preferenceScore });
@@ -994,17 +989,19 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Internal Server Error', { status: 500 });
             }
-        } else if (request.method === 'GET' && path === '/get-preference-score') {
+        });
+
+        // GET /get-preference-score
+        this.app.get('/get-preference-score', async (c) => {
+            const request = c.req.raw;
             try {
-                const url = new URL(request.url);
-                const userId = url.searchParams.get('userId');
+                const userId = c.req.query('userId');
 
                 if (!userId) {
                     this.logger.warn('Get preference score failed: Missing userId.');
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                // Calculate score based on Interest Rate: (Clicks / Sent) * 100
                 const sentCountResult = await this.env.DB.prepare(
                     `SELECT COUNT(*) as count FROM sent_articles WHERE user_id = ?`
                 ).bind(userId).first<{ count: number }>();
@@ -1016,9 +1013,6 @@ export class ClickLogger extends DurableObject {
                 const sentCount = sentCountResult?.count || 0;
                 const clickCount = clickCountResult?.count || 0;
 
-                // Calculate score based on Total Positive Feedback (Learning Depth)
-                // Using a simple progression: Each interesting article adds 1% to the score.
-                // 100 articles = 100% "Master Profile".
                 const preferenceScore = Math.min(clickCount, 100);
 
                 this.logger.debug(`Calculated preference score for user ${userId}: ${preferenceScore.toFixed(2)}% (Clicks: ${clickCount}, Sent: ${sentCount})`, { userId, score: preferenceScore, clickCount, sentCount });
@@ -1038,17 +1032,19 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Internal Server Error', { status: 500 });
             }
-        } else if (request.method === 'GET' && path === '/get-mmr-lambda') {
+        });
+
+        // GET /get-mmr-lambda
+        this.app.get('/get-mmr-lambda', async (c) => {
+            const request = c.req.raw;
             try {
-                const url = new URL(request.url);
-                const userId = url.searchParams.get('userId');
+                const userId = c.req.query('userId');
 
                 if (!userId) {
                     this.logger.warn('Get MMR lambda failed: Missing userId.');
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                // ユーザーの保存されたlambdaを取得
                 const userProfile = await this.env.DB.prepare(
                     `SELECT mmr_lambda FROM users WHERE user_id = ?`
                 ).bind(userId).first<{ mmr_lambda: number | null }>();
@@ -1072,7 +1068,11 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Internal Server Error', { status: 500 });
             }
-        } else if (request.method === 'POST' && path === '/calculate-mmr-lambda') {
+        });
+
+        // POST /calculate-mmr-lambda
+        this.app.post('/calculate-mmr-lambda', async (c) => {
+            const request = c.req.raw;
             try {
                 const { userId, immediate } = await request.json() as { userId: string, immediate?: boolean };
 
@@ -1084,7 +1084,6 @@ export class ClickLogger extends DurableObject {
                 const lambda = await this.calculateMMRLambda(userId);
 
                 if (immediate) {
-                    // 即時更新の場合、lambdaを保存
                     this.state.waitUntil(this.env.DB.prepare(
                         `UPDATE users SET mmr_lambda = ? WHERE user_id = ?`
                     ).bind(lambda, userId).run());
@@ -1106,10 +1105,12 @@ export class ClickLogger extends DurableObject {
                 });
                 return new Response('Internal Server Error', { status: 500 });
             }
-        }
+        });
 
-        // Handle other requests
-        return new Response('Not Found', { status: 404 });
+    }
+
+    async fetch(request: Request): Promise<Response> {
+        return this.app.fetch(request, this.env);
     }
 
     // Process unclicked articles and update bandit models
