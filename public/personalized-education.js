@@ -364,15 +364,27 @@ submitNewFeedbackBtn.addEventListener('click', async () => {
         });
 
         if (response.ok) {
+            const result = await response.json();
+
+            // 部分的な成功の場合の処理
+            if (result.errors && result.errors > 0) {
+                const message = result.message || `フィードバックを受け付けました。${result.processed}件中${result.learned}件の学習を完了しました。`;
+                alert(message);
+            }
+
             const interestedArticles = feedbackData
                 .filter(item => item.feedback === 'interested')
                 .map(item => item.article);
 
-            localStorage.setItem('selectedArticles', JSON.stringify(interestedArticles));
+            if (interestedArticles.length > 0) {
+                localStorage.setItem('selectedArticles', JSON.stringify(interestedArticles));
+                window.open(`selected-articles.html?userId=${userId}`, '_blank');
+            }
 
-            window.open(`selected-articles.html?userId=${userId}`, '_blank');
             window.location.reload();
         } else {
+            const errorText = await response.text();
+            console.error('Error response:', errorText);
             alert('フィードバックの送信に失敗しました。もう一度お試しください。');
             submitNewFeedbackBtn.classList.remove('loading');
             submitNewFeedbackBtn.disabled = false;

@@ -35,3 +35,6 @@ archive/
 
 # 
 linalg-wasm/target/
+
+#
+.agent/

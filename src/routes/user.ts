@@ -75,6 +75,9 @@ app.post('/submit-education-feedback', async (c) => {
         }
 
         // 4. バンディットモデルの更新 (embeddingがある記事のみ)
+        let learnSuccessCount = 0;
+        let learnErrorCount = 0;
+
         if (articlesToLearn.length > 0) {
             const clickLoggerId = c.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
             const clickLogger = c.env.CLICK_LOGGER.get(clickLoggerId);
@@ -82,20 +85,52 @@ app.post('/submit-education-feedback', async (c) => {
             const batchSize = 10;
             for (let i = 0; i < articlesToLearn.length; i += batchSize) {
                 const batch = articlesToLearn.slice(i, i + batchSize);
-                await clickLogger.fetch(
-                    new Request(`${c.env.WORKER_BASE_URL}/learn-from-education`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            userId: userId,
-                            selectedArticles: batch
-                        }),
-                    })
-                );
+                try {
+                    const learnResponse = await clickLogger.fetch(
+                        new Request(`${c.env.WORKER_BASE_URL}/learn-from-education`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                userId: userId,
+                                selectedArticles: batch
+                            }),
+                        })
+                    );
+
+                    if (learnResponse.ok) {
+                        learnSuccessCount += batch.length;
+                        logger.debug(`Successfully sent batch for learning to ClickLogger for user ${userId}.`, { userId, batchSize: batch.length });
+                    } else {
+                        learnErrorCount += batch.length;
+                        const errorText = await learnResponse.text();
+                        logger.warn(`Failed to send batch for learning to ClickLogger for user ${userId}: ${learnResponse.statusText}`, null, { userId, status: learnResponse.status, statusText: learnResponse.statusText, errorText });
+                    }
+                } catch (error) {
+                    learnErrorCount += batch.length;
+                    logger.error(`Exception when sending batch for learning to ClickLogger for user ${userId}:`, error, { userId, batchSize: batch.length });
+                }
             }
         }
 
-        return c.json({ message: 'フィードバックを受け付けました。' }, 200);
+        const totalProcessed = articlesNeedingEmbedding.length + articlesToLearn.length;
+        const message = learnErrorCount > 0
+            ? `フィードバックを受け付けました。${totalProcessed}件中${learnSuccessCount}件の学習を完了しました。`
+            : 'フィードバックを受け付けました。';
+
+        logger.info(`Education feedback processed for user ${userId}. Total: ${totalProcessed}, Learned: ${learnSuccessCount}, Errors: ${learnErrorCount}, NeedEmbedding: ${articlesNeedingEmbedding.length}`, {
+            userId,
+            totalProcessed,
+            learnSuccessCount,
+            learnErrorCount,
+            needEmbedding: articlesNeedingEmbedding.length
+        });
+
+        return c.json({
+            message: message,
+            processed: totalProcessed,
+            learned: learnSuccessCount,
+            errors: learnErrorCount
+        }, 200);
 
     } catch (error) {
         logger.error('Error submitting education feedback:', error, { requestUrl: c.req.url });
