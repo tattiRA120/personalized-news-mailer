@@ -20,12 +20,16 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
-      "linalg-wasm": ["./linalg-wasm/pkg"]
-    }
+      "linalg-wasm": [
+        "./linalg-wasm/pkg"
+      ]
+    },
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx"
   },
-    "include": [
-        "src/**/*.ts",
-        "src/**/*.d.ts",
-        "linalg-wasm/pkg/**/*.d.ts"
-    ]
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.d.ts",
+    "linalg-wasm/pkg/**/*.d.ts"
+  ]
 }
