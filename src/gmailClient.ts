@@ -1,6 +1,6 @@
 // Gmail API を使用してメールを送信するクライアント
 import { Logger } from './logger'; // Loggerクラスをインポート
-import { Env } from './index'; 
+import { Env } from './types/bindings'; 
 
 interface SendEmailParams {
   to: string; // Gmail APIではtoは単一のメールアドレスまたはカンマ区切り文字列

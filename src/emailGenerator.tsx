@@ -1,6 +1,6 @@
 import { Logger } from './logger';
 import { sendEmail as sendEmailWithGmail, GmailClientEnv } from './gmailClient';
-import { Env } from './index';
+import { Env } from './types/bindings';
 import { getOgpImageUrl } from './utils/ogpScraper';
 import { getRssImageUrl } from './utils/rssImageExtractor';
 import { NEWS_RSS_URLS, NEWS_SOURCE_LOGOS } from './config';

@@ -3,7 +3,7 @@ import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, getOpenAIBatchJobResul
 import { Logger } from '../logger';
 import { chunkArray } from '../utils/textProcessor';
 import { CHUNK_SIZE } from '../config';
-import { Env } from '../index';
+import { Env } from '../types/bindings';
 import { updateArticleEmbeddingInD1 } from './d1Service'; // d1ServiceからupdateArticleEmbeddingInD1をインポート
 
 // NewsArticle型を拡張してembeddingプロパティを持つように定義

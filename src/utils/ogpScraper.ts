@@ -1,5 +1,5 @@
 import { Logger } from '../logger';
-import { Env } from '../index';
+import { Env } from '../types/bindings';
 
 export async function getOgpImageUrl(articleUrl: string, env: Env): Promise<string | undefined> {
     const logger = new Logger(env);

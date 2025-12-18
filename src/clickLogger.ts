@@ -4,7 +4,7 @@ import { Logger } from './logger';
 import { Hono } from 'hono';
 import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
-import { Env } from './index';
+import { Env } from './types/bindings';
 import init, { get_ucb_values_bulk, update_bandit_model, cosine_similarity } from '../linalg-wasm/pkg/linalg_wasm';
 import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 import { updateUserProfile } from './userProfile';

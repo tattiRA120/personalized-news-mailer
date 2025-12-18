@@ -1,4 +1,4 @@
-import { Env } from '../index';
+import { Env } from '../types/bindings';
 import { collectNews, NewsArticle } from '../newsCollector';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
 import { saveArticlesToD1, getArticlesFromD1, getArticleByIdFromD1, deleteOldArticlesFromD1, cleanupOldUserLogs, getClickLogsForUser, deleteProcessedClickLogs, getUserCTR } from '../services/d1Service';

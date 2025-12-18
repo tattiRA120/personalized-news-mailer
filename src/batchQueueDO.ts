@@ -1,7 +1,7 @@
 import { Logger } from "./logger";
 import { uploadOpenAIFile, createOpenAIBatchEmbeddingJob, prepareBatchInputFileContent, getOpenAIBatchJobStatus, getOpenAIBatchJobResults } from "./openaiClient";
 import { NewsArticle } from "./newsCollector";
-import { Env } from "./index";
+import { Env } from "./types/bindings";
 import { DurableObject } from 'cloudflare:workers';
 import { ClickLogger } from "./clickLogger";
 import { OPENAI_EMBEDDING_DIMENSION } from "./config";

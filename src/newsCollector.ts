@@ -3,7 +3,7 @@ import { Logger } from './logger';
 import { XMLParser } from 'fast-xml-parser';
 import { cleanArticleText } from './utils/textProcessor';
 import { decodeHtmlEntities } from './utils/htmlDecoder';
-import { Env } from './index';
+import { Env } from './types/bindings';
 
 // 一般的なUser-Agentのリスト
 const USER_AGENTS = [

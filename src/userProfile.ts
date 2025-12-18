@@ -1,7 +1,7 @@
 // src/userProfile.ts
 
 import { Logger } from './logger';
-import { Env } from './index';
+import { Env } from './types/bindings';
 
 export interface UserProfile {
     userId: string;

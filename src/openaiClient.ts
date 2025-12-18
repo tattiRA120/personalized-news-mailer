@@ -7,7 +7,7 @@
 import { Logger } from './logger';
 import { OPENAI_EMBEDDING_MODEL, OPENAI_EMBEDDING_DIMENSION } from './config';
 import { NewsArticle } from './newsCollector';
-import { Env } from './index';
+import { Env } from './types/bindings';
 
 interface OpenAIEmbeddingResponse {
     data: Array<{

@@ -2,7 +2,7 @@ import { D1Database } from '@cloudflare/workers-types';
 import { Logger } from '../logger';
 import { NewsArticle } from '../newsCollector';
 import { chunkArray } from '../utils/textProcessor';
-import { Env } from '../index';
+import { Env } from '../types/bindings';
 
 export interface ArticleWithEmbedding extends NewsArticle {
     embedding?: number[];

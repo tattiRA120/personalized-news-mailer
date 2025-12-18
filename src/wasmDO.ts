@@ -9,7 +9,7 @@ import { cosine_similarity_bulk, calculate_similarity_matrix } from '../linalg-w
 import { ClickLogger } from './clickLogger';
 import { Logger } from './logger';
 import { NewsArticleWithEmbedding, SelectPersonalizedArticlesRequest } from './types/wasm';
-import { Env } from './index';
+import { Env } from './types/bindings';
 import { Hono } from 'hono';
 
 export class WasmDO extends DurableObject<Env> {

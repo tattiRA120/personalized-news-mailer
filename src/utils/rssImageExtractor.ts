@@ -1,6 +1,6 @@
 import { Logger } from '../logger';
 import { XMLParser } from 'fast-xml-parser';
-import { Env } from '../index';
+import { Env } from '../types/bindings';
 
 export async function getRssImageUrl(rssFeedUrl: string, articleLink: string, env: Env): Promise<string | undefined> {
     const logger = new Logger(env);
