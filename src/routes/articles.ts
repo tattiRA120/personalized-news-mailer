@@ -201,7 +201,7 @@ app.get('/get-personalized-articles', async (c) => {
                 };
             });
 
-        const response = await wasmDOStub.fetch(new Request(`${c.env.WORKER_BASE_URL}/wasm-do/select-personalized-articles`, {
+        const response = await wasmDOStub.fetch(new Request(`${c.env.WORKER_BASE_URL}/select-personalized-articles`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

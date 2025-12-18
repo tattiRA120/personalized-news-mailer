@@ -21,7 +21,7 @@ app.all('/wasm-do/*', async (c) => {
 
         const wasmRequest = new Request(wasmUrl, {
             method: c.req.method,
-            headers: c.req.header(),
+            headers: c.req.raw.headers,
             body: c.req.raw.body,
         });
 

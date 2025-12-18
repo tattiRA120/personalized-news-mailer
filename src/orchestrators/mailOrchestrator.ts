@@ -227,7 +227,7 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
                     const wasmDOStub = env.WASM_DO.get(wasmDOId);
 
-                    const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/wasm-do/select-personalized-articles`, {
+                    const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/select-personalized-articles`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({

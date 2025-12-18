@@ -41,7 +41,14 @@ export class WasmDO extends DurableObject<Env> {
     private setupRoutes() {
         // Middleware to check WASM initialization
         this.app.use('*', async (c, next) => {
+            this.logger.info(`WASM DO middleware check`, {
+                wasmInitialized: this.wasmInitialized,
+                path: c.req.path,
+                method: c.req.method
+            });
+
             if (!this.wasmInitialized) {
+                this.logger.warn(`WASM not initialized yet for request: ${c.req.method} ${c.req.path}`);
                 return c.text("WASM is not initialized yet. Please try again.", 503);
             }
             await next();

@@ -23,7 +23,7 @@ export async function cosineSimilarityBulk(vec1s: number[][], vec2s: number[][],
         const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
         const wasmDOStub = env.WASM_DO.get(wasmDOId);
 
-        const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/wasm-do/bulk-cosine-similarity`, {
+        const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/bulk-cosine-similarity`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ vec1s, vec2s }),
@@ -55,7 +55,7 @@ export async function calculateSimilarityMatrix(vectors: number[][], logger: Log
         const wasmDOId = env.WASM_DO.idFromName("wasm-calculator");
         const wasmDOStub = env.WASM_DO.get(wasmDOId);
 
-        const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/wasm-do/calculate-similarity-matrix`, {
+        const response = await wasmDOStub.fetch(new Request(`${env.WORKER_BASE_URL}/calculate-similarity-matrix`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ vectors }),
