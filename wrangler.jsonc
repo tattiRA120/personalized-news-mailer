@@ -101,6 +101,12 @@
 		"directory": "./public/",
 		"binding": "ASSETS"
 	},
+	"env": {
+		"production": {
+			// Environment configuration for production (allows 'wrangler dev --env production')
+			// Inherits all settings from top-level
+		}
+	},
 	/**
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings

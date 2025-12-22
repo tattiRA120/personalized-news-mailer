@@ -83,7 +83,7 @@ jobs:
           echo "Starting Wrangler Dev Server (Remote mode)..."
           # バックグラウンドで起動 (&)
           # --ip 127.0.0.1 を指定してIPv4で確実にリッスンさせる
-          # --env production を追加して本番リソースの使用を強制する（プレビューチェックを回避）
+          # --env production を使用して本番リソースを使用する（wrangler.jsoncにenv.productionを追加したため動作するはず）
           npx wrangler dev --remote --env production --port 8787 --ip 127.0.0.1 > wrangler.log 2>&1 &
           PID=$!
           echo "Wrangler PID: $PID"
