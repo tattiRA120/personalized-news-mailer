@@ -129,7 +129,10 @@ app.get('/get-personalized-articles', async (c) => {
                 link: article.link,
                 sourceName: article.sourceName,
             }));
-            return c.json(articlesForResponse, 200);
+            return c.json({
+                articles: articlesForResponse,
+                score: 0
+            }, 200);
         }
 
         // D1からembeddingを持つ記事を取得し、ユーザーがフィードバックした記事（education_logs）および配信済み/即時フィードバック済み記事（sent_articles）を除外
