@@ -76,13 +76,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          # 環境変数の存在確認（値は表示せず、長さや有無だけチェック）
+          # 環境変数の存在確認
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "::error::CLOUDFLARE_API_TOKEN is missing or empty. Please check your GitHub Repository Secrets."
-            echo "Debug: CLOUDFLARE_API_TOKEN is empty"
             exit 1
-          else
-            echo "Debug: CLOUDFLARE_API_TOKEN is set (length: ${#CLOUDFLARE_API_TOKEN})"
           fi
 
           if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
@@ -92,21 +89,25 @@ jobs:
 
           echo "Uploading version with alias 'ci-preview'..."
           
-          # 失敗しても出力を確認できるように || true をつける
+          # JSON形式での取得を試みるが、失敗した場合は標準出力から解析
           OUTPUT=$(npx wrangler versions upload --preview-alias ci-preview 2>&1 || true)
           echo "Wrangler Output:"
           echo "$OUTPUT"
           
-          # エイリアスURLを抽出 (ci-previewが含まれるURL)
+          # 1. ログから直接URLを探す
           PREVIEW_URL=$(echo "$OUTPUT" | grep -o 'https://ci-preview-[^ ]*\.workers\.dev' | head -n 1)
           
+          # 2. 見つからない場合、versions listから取得を試みる
           if [ -z "$PREVIEW_URL" ]; then
-             # もしエイリアスURLが見つからない場合、通常のPreview URLパターンで試行
-             PREVIEW_URL=$(echo "$OUTPUT" | grep -o 'https://[^ ]*\.workers\.dev' | head -n 1)
+             echo "Preview URL not found in output, checking versions list..."
+             # ci-previewタグの付いた最新バージョンを探す
+             VERSIONS_JSON=$(npx wrangler versions list --json || true)
+             # jqでパース: tagsにci-previewを含むもののpreview_urlを取得
+             PREVIEW_URL=$(echo "$VERSIONS_JSON" | jq -r '.[] | select(.tags[]? == "ci-preview") | .preview_url' | head -n 1)
           fi
           
-          if [ -z "$PREVIEW_URL" ]; then
-            echo "Failed to extract preview URL."
+          if [ -z "$PREVIEW_URL" ] || [ "$PREVIEW_URL" == "null" ]; then
+            echo "Failed to extract preview URL. Please check if 'preview_urls' is effective."
             exit 1
           fi
           
