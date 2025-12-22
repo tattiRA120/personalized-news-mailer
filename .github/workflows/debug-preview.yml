@@ -57,20 +57,39 @@ jobs:
       - name: Build WASM module
         run: npm run build:wasm
 
-      - name: Deploy to preview
-        id: deploy
-        run: |
-          echo "Deploying to Cloudflare Workers preview..."
-          npx wrangler deploy
+      - name: Upload Version and Get Preview URL
+        id: upload-version
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "Uploading version to generate preview URL..."
+          # JSON形式でアップロード結果を取得
+          OUTPUT=$(npx wrangler versions upload --json)
+          echo "Wrangler Output: $OUTPUT"
+          
+          # output.preview_url または output.versions[0].preview_url からURLを抽出 (Wranglerのバージョンによる)
+          # jqを使って安全にパース
+          PREVIEW_URL=$(echo "$OUTPUT" | jq -r '.preview_url // .versions[0].preview_url')
+          
+          if [ -z "$PREVIEW_URL" ] || [ "$PREVIEW_URL" == "null" ]; then
+            echo "Failed to extract preview URL from output."
+            exit 1
+          fi
+          
+          echo "Generated Preview URL: $PREVIEW_URL"
+          echo "BASE_URL=$PREVIEW_URL" >> $GITHUB_ENV
+
+      - name: Wait for Preview URL to be ready
+        run: |
+          echo "Waiting for $BASE_URL to be ready..."
+          timeout 60 bash -c 'until curl -s $BASE_URL/personalized-education.html > /dev/null; do sleep 2; done' || (echo "Preview URL failed to respond" && exit 1)
+          echo "Preview URL is ready!"
 
       - name: Set base URL
         id: set-url
         run: |
-          # プレビューURLを設定（実際のWorkerのURLを使用）
-          echo "BASE_URL=${{ vars.WORKER_BASE_URL }}" >> $GITHUB_OUTPUT
+          echo "BASE_URL=${{ env.BASE_URL }}" >> $GITHUB_OUTPUT
 
       - name: Verify Endpoints
         id: verify

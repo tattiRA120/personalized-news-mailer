@@ -7,7 +7,7 @@
 	"name": "mail-news-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-07-09",
-	"preview_urls": false,
+	"preview_urls": true,
 	"observability": {
 		"enabled": true
 	},
@@ -18,7 +18,6 @@
 			"0 23 * * *"
 		]
 	},
-
 	"kv_namespaces": [
 		{
 			"binding": "mail-news-gmail-tokens", // Binding name for Gmail refresh tokens
@@ -29,7 +28,6 @@
 			"id": "df13a4b73ec24a4d99f0b3edb908f8d8"
 		}
 	],
-
 	"durable_objects": {
 		"bindings": [
 			{
@@ -61,7 +59,6 @@
 			]
 		}
 	],
-
 	"d1_databases": [
 		{
 			"binding": "DB",
@@ -70,20 +67,17 @@
 			"migrations_dir": "./migrations"
 		}
 	],
-
 	"r2_buckets": [
 		{
 			"binding": "BANDIT_MODELS",
 			"bucket_name": "mail-news-bandit-models"
 		}
 	],
-
 	/**
 	 * Sart Pacment
 	 * Docsmehttps://devetopers.coudflre.coworers/confiurato/smrt-pcement/#art-plceent
 	 */
 	// "placement": { "mode": "smart" },"placement": { "mode": "smart" },
-
 	/**
 	 * Bindings
 	 * Bindings allow your Worker to interact with resources on the Cloudflare Developer Platform, including
@@ -99,7 +93,6 @@
 	 * Note: Use secrets to store sensitive data.
 	 * https://developers.cloudflare.com/workers/configuration/secrets/
 	 */
-
 	/**
 	 * Static Assets
 	 * https://developers.cloudflare.com/workers/static-assets/binding/
