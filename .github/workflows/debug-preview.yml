@@ -94,7 +94,7 @@ jobs:
 
       - name: Verify Endpoints
         id: verify
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           BASE_URL: http://127.0.0.1:8787
         with:
