@@ -64,15 +64,17 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           echo "Uploading version to generate preview URL..."
-          # JSON形式でアップロード結果を取得
-          OUTPUT=$(npx wrangler versions upload --json)
-          echo "Wrangler Output: $OUTPUT"
+          # --jsonはサポートされていない可能性があるため、標準出力を取得
+          # 成功時と失敗時の両方の出力をキャプチャするために 2>&1 を使用
+          OUTPUT=$(npx wrangler versions upload 2>&1)
+          echo "Wrangler Output:"
+          echo "$OUTPUT"
           
-          # output.preview_url または output.versions[0].preview_url からURLを抽出 (Wranglerのバージョンによる)
-          # jqを使って安全にパース
-          PREVIEW_URL=$(echo "$OUTPUT" | jq -r '.preview_url // .versions[0].preview_url')
+          # URLを正規表現で抽出 (https://...workers.dev)
+          # grep -oP はLinuxランナーで使用可能
+          PREVIEW_URL=$(echo "$OUTPUT" | grep -o 'https://[^ ]*\.workers\.dev' | head -n 1)
           
-          if [ -z "$PREVIEW_URL" ] || [ "$PREVIEW_URL" == "null" ]; then
+          if [ -z "$PREVIEW_URL" ]; then
             echo "Failed to extract preview URL from output."
             exit 1
           fi
