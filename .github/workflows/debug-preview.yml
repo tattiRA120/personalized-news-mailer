@@ -1,0 +1,230 @@
+name: Test Preview Deployment
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test-preview-deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76 # v2.14.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install safe-chain
+        run: curl -fsSL https://raw.githubusercontent.com/AikidoSec/safe-chain/main/install-scripts/install-safe-chain.sh | sh -s -- --ci
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Cargo registry + target
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6d9817901c499d6b02debbb57edb38d33daa680b # stable
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: |
+          curl -L https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz -o wasm-pack.tar.gz
+          tar xzf wasm-pack.tar.gz
+          sudo mv wasm-pack-v0.13.1-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/
+          wasm-pack --version
+
+      - name: Build WASM module
+        run: npm run build:wasm
+
+      - name: Deploy to preview
+        id: deploy
+        run: |
+          echo "Deploying to Cloudflare Workers preview..."
+          npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Set base URL
+        id: set-url
+        run: |
+          # プレビューURLを設定（実際のWorkerのURLを使用）
+          echo "BASE_URL=${{ vars.WORKER_BASE_URL }}" >> $GITHUB_OUTPUT
+
+      - name: Verify Endpoints
+        id: verify
+        uses: actions/github-script@v7
+        env:
+          BASE_URL: ${{ steps.set-url.outputs.BASE_URL }}
+        with:
+          script: |
+            const baseUrl = process.env.BASE_URL;
+            console.log(`Starting verification against: ${baseUrl}`);
+
+            // Helper to make requests
+            const fetch = async (path, options = {}) => {
+              const url = `${baseUrl}${path}`;
+              console.log(`Fetching ${url}...`);
+              const response = await ((await import('node-fetch')).default || global.fetch)(url, options);
+              return response;
+            };
+
+            // Test 1: Static File
+            // ----------------------------------------------------------------
+            try {
+              console.log('Test 1: GET /personalized-education.html');
+              const res = await fetch('/personalized-education.html');
+              if (!res.ok) throw new Error(`Failed to fetch static file: ${res.status} ${res.statusText}`);
+              const text = await res.text();
+              
+              if (!text.includes('<title>パーソナライズド記事選択</title>')) {
+                 console.log('Response body:', text.substring(0, 200) + '...');
+                 throw new Error('Static file does not contain expected title');
+              }
+              console.log('✅ Static file verification passed');
+            } catch (error) {
+              console.error('❌ Static file verification failed:', error.message);
+              core.setFailed('Static file verification failed');
+            }
+
+            // Test 2: Get Articles for Education
+            // ----------------------------------------------------------------
+            try {
+              console.log('Test 2: GET /get-articles-for-education');
+              const res = await fetch('/get-articles-for-education?userId=test-debug-user');
+              if (!res.ok) throw new Error(`Failed to fetch articles: ${res.status} ${res.statusText}`);
+              
+              const json = await res.json();
+              console.log('Response:', JSON.stringify(json).substring(0, 200) + '...');
+
+              if (typeof json !== 'object' || json === null) throw new Error('Response is not an object');
+              if (!Array.isArray(json.articles)) throw new Error('articles field is not an array');
+              if (typeof json.score !== 'number') throw new Error('score field is not a number');
+              
+              console.log('✅ Articles API verification passed');
+            } catch (error) {
+               console.error('❌ Articles API verification failed:', error.message);
+               core.setFailed('Articles API verification failed');
+            }
+
+            // Test 3: Get Dissimilar Articles
+            // ----------------------------------------------------------------
+            try {
+              console.log('Test 3: GET /get-dissimilar-articles');
+              const res = await fetch('/get-dissimilar-articles?userId=test-debug-user');
+              if (!res.ok) throw new Error(`Failed to fetch dissimilar articles: ${res.status} ${res.statusText}`);
+              
+              const json = await res.json();
+              console.log('Response:', JSON.stringify(json).substring(0, 200) + '...');
+
+              if (!Array.isArray(json)) throw new Error('Response is not an array');
+              
+              console.log('✅ Dissimilar articles API verification passed');
+            } catch (error) {
+               console.error('❌ Dissimilar articles API verification failed:', error.message);
+               core.setFailed('Dissimilar articles API verification failed');
+            }
+
+            // Test 4: Get Personalized Articles
+            // ----------------------------------------------------------------
+            try {
+              console.log('Test 4: GET /get-personalized-articles');
+              const res = await fetch('/get-personalized-articles?userId=test-debug-user&lambda=0.5');
+              if (!res.ok) throw new Error(`Failed to fetch personalized articles: ${res.status} ${res.statusText}`);
+
+              const json = await res.json();
+              console.log('Response:', JSON.stringify(json).substring(0, 200) + '...');
+
+              if (typeof json !== 'object' || json === null) throw new Error('Response is not an object');
+              if (!Array.isArray(json.articles)) throw new Error('articles field is not an array');
+              if (typeof json.score !== 'number') throw new Error('score field is not a number');
+              if (json.score < 0 || json.score > 100) throw new Error(`score ${json.score} is out of range (0-100)`);
+
+              console.log('✅ Personalized API verification passed');
+            } catch (error) {
+              console.error('❌ Personalized API verification failed:', error.message);
+              core.setFailed('Personalized API verification failed');
+            }
+
+            // Test 5: Click Tracking
+            // ----------------------------------------------------------------
+            try {
+              console.log('Test 5: GET /track-click');
+              const redirectTarget = 'http://example.com/';
+              const encodedUrl = encodeURIComponent(redirectTarget);
+              const res = await fetch(`/track-click?userId=test-debug-user&articleId=test-link&redirectUrl=${encodedUrl}`, {
+                redirect: 'manual'
+              });
+              
+              if (res.status !== 302) throw new Error(`Expected 302 redirect, got ${res.status}`);
+              const location = res.headers.get('Location');
+              if (location !== redirectTarget) throw new Error(`Expected Location: ${redirectTarget}, got ${location}`);
+              
+              console.log('✅ Click tracking verification passed');
+            } catch (error) {
+              console.error('❌ Click tracking verification failed:', error.message);
+              core.setFailed('Click tracking verification failed');
+            }
+
+            // Test 6: Single Feedback
+            // ----------------------------------------------------------------
+            try {
+              console.log('Test 6: GET /track-feedback');
+              const res = await fetch('/track-feedback?userId=test-debug-user&articleId=test-article-single&feedback=interested');
+              if (!res.ok) throw new Error(`Failed to track feedback: ${res.status} ${res.statusText}`);
+
+              console.log('✅ Single feedback verification passed');
+            } catch (error) {
+              console.error('❌ Single feedback verification failed:', error.message);
+              core.setFailed('Single feedback verification failed');
+            }
+
+            // Test 7: Batch Feedback
+            // ----------------------------------------------------------------
+            try {
+              console.log('Test 7: POST /track-feedback-batch');
+              const payload = {
+                userId: "test-debug-user",
+                feedbackData: [{ articleId: "test-article-1", feedback: "interested" }],
+                immediateUpdate: false
+              };
+              
+              const res = await fetch('/track-feedback-batch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
+              
+              if (!res.ok) throw new Error(`Failed to post feedback: ${res.status} ${res.statusText}`);
+              const json = await res.json();
+               console.log('Response:', JSON.stringify(json));
+              
+              if (!json) throw new Error('Empty response from feedback endpoint');
+
+              console.log('✅ Batch feedback verification passed');
+            } catch (error) {
+              console.error('❌ Batch feedback verification failed:', error.message);
+              core.setFailed('Batch feedback verification failed');
+            }
+
