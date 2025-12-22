@@ -1,13 +1,22 @@
 name: Test Preview Deployment
 
 on:
-  pull_request:
+  pull_request_target: # PRでシークレットにアクセスするためにターゲットを変更
     branches:
       - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: write
+  statuses: write
 
 jobs:
   test-preview-deployment:
     runs-on: ubuntu-latest
+    # pull_request_targetの場合、environmentを指定しないとデフォルトの環境変数は使えるはずだが
+    # 明示的に指定することも検討。今回はなしで進める。
+    
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76 # v2.14.0
@@ -16,6 +25,10 @@ jobs:
 
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          # pull_request_targetはデフォルトでベースブランチ(main)をチェックアウトするため、
+          # PRの内容をテストするには明確にrefを指定する必要がある。
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
