@@ -63,10 +63,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-        run: |
           echo "Uploading version with alias 'ci-preview'..."
           
-          # ユーザー指摘の正しいコマンド形式を使用 (--preview-alias)
           # 失敗しても出力を確認できるように || true をつける
           OUTPUT=$(npx wrangler versions upload --preview-alias ci-preview 2>&1 || true)
           echo "Wrangler Output:"
