@@ -57,41 +57,50 @@ jobs:
       - name: Build WASM module
         run: npm run build:wasm
 
-      - name: Upload Version and Get Preview URL
+      - name: Upload Version with Alias
         id: upload-version
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          echo "Uploading version to generate preview URL..."
-          # --jsonはサポートされていない可能性があるため、標準出力を取得
-          # 成功時と失敗時の両方の出力をキャプチャするために 2>&1 を使用
-          OUTPUT=$(npx wrangler versions upload 2>&1)
+        run: |
+          echo "Uploading version with alias 'ci-preview'..."
+          
+          # ユーザー指摘の正しいコマンド形式を使用 (--preview-alias)
+          # 失敗しても出力を確認できるように || true をつける
+          OUTPUT=$(npx wrangler versions upload --preview-alias ci-preview 2>&1 || true)
           echo "Wrangler Output:"
           echo "$OUTPUT"
           
-          # URLを正規表現で抽出 (https://...workers.dev)
-          # grep -oP はLinuxランナーで使用可能
-          PREVIEW_URL=$(echo "$OUTPUT" | grep -o 'https://[^ ]*\.workers\.dev' | head -n 1)
+          # エイリアスURLを抽出 (ci-previewが含まれるURL)
+          PREVIEW_URL=$(echo "$OUTPUT" | grep -o 'https://ci-preview-[^ ]*\.workers\.dev' | head -n 1)
           
           if [ -z "$PREVIEW_URL" ]; then
-            echo "Failed to extract preview URL from output."
+             # もしエイリアスURLが見つからない場合、通常のPreview URLパターンで試行
+             PREVIEW_URL=$(echo "$OUTPUT" | grep -o 'https://[^ ]*\.workers\.dev' | head -n 1)
+          fi
+          
+          if [ -z "$PREVIEW_URL" ]; then
+            echo "Failed to extract preview URL."
             exit 1
           fi
           
           echo "Generated Preview URL: $PREVIEW_URL"
-          echo "BASE_URL=$PREVIEW_URL" >> $GITHUB_ENV
+          echo "PREVIEW_URL=$PREVIEW_URL" >> $GITHUB_ENV
+          echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
 
       - name: Wait for Preview URL to be ready
+        env:
+          PREVIEW_URL: ${{ steps.upload-version.outputs.preview_url }}
         run: |
-          echo "Waiting for $BASE_URL to be ready..."
-          timeout 60 bash -c 'until curl -s $BASE_URL/personalized-education.html > /dev/null; do sleep 2; done' || (echo "Preview URL failed to respond" && exit 1)
+          echo "Waiting for $PREVIEW_URL to be ready..."
+          timeout 60 bash -c 'until curl -s $PREVIEW_URL/personalized-education.html > /dev/null; do sleep 2; done' || (echo "Preview URL failed to respond" && exit 1)
           echo "Preview URL is ready!"
 
       - name: Set base URL
         id: set-url
         run: |
-          echo "BASE_URL=${{ env.BASE_URL }}" >> $GITHUB_OUTPUT
+          echo "BASE_URL=${{ steps.upload-version.outputs.preview_url }}" >> $GITHUB_OUTPUT
 
       - name: Verify Endpoints
         id: verify
