@@ -80,22 +80,46 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: '4.56.0'
-          secrets: |
-            OPENAI_API_KEY
-            GOOGLE_CLIENT_ID
-            GOOGLE_REDIRECT_URI
-            GOOGLE_CLIENT_SECRET
-            DEBUG_API_KEY
-            DECODER_SECRET
           vars: |
             WORKER_BASE_URL
             LOG_LEVEL
         env:
           WORKER_BASE_URL: ${{ vars.WORKER_BASE_URL }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_REDIRECT_URI: ${{ secrets.GOOGLE_REDIRECT_URI }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          DEBUG_API_KEY: ${{ secrets.DEBUG_API_KEY }}
-          DECODER_SECRET: ${{ secrets.DECODER_SECRET }}
+
+      # Workers Secrets 設定 (デプロイ後に実行して確実にバージョンに関連付ける)
+      - name: Set OPENAI_API_KEY Secret
+        run: echo "${{ secrets.OPENAI_API_KEY }}" | npx wrangler secret put OPENAI_API_KEY --env ""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Set GOOGLE_CLIENT_ID Secret
+        run: echo "${{ secrets.GOOGLE_CLIENT_ID }}" | npx wrangler secret put GOOGLE_CLIENT_ID --env ""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Set GOOGLE_REDIRECT_URI Secret
+        run: echo "${{ secrets.GOOGLE_REDIRECT_URI }}" | npx wrangler secret put GOOGLE_REDIRECT_URI --env ""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Set GOOGLE_CLIENT_SECRET Secret
+        run: echo "${{ secrets.GOOGLE_CLIENT_SECRET }}" | npx wrangler secret put GOOGLE_CLIENT_SECRET --env ""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Set DEBUG_API_KEY Secret
+        run: echo "${{ secrets.DEBUG_API_KEY }}" | npx wrangler secret put DEBUG_API_KEY --env ""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Set DECODER_SECRET Secret
+        run: echo "${{ secrets.DECODER_SECRET }}" | npx wrangler secret put DECODER_SECRET --env ""
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

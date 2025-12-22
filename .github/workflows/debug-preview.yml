@@ -81,7 +81,7 @@ jobs:
           
           echo "WORKER_BASE_URL=http://127.0.0.1:8787" > .dev.vars
 
-          npx wrangler dev --remote --port 8787 --ip 127.0.0.1 > wrangler.log 2>&1 &
+          npx wrangler dev --remote --env production --port 8787 --ip 127.0.0.1 > wrangler.log 2>&1 &
           PID=$!
           echo "Wrangler PID: $PID"
           

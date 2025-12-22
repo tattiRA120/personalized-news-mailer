@@ -103,6 +103,52 @@
 		"directory": "./public/",
 		"binding": "ASSETS"
 	},
+	"env": {
+		"production": {
+			// Environment configuration for production (allows 'wrangler dev --env production')
+			// Currently explicit inheritance is needed for bindings
+			"kv_namespaces": [
+				{
+					"binding": "mail-news-gmail-tokens",
+					"id": "f393b495a80a4d23bd7f2e77450e0027",
+					// "preview_id" is automatically ignored in production env, but explicit ID is safer
+				},
+				{
+					"binding": "BATCH_CALLBACK_TOKENS",
+					"id": "df13a4b73ec24a4d99f0b3edb908f8d8"
+				}
+			],
+			"durable_objects": {
+				"bindings": [
+					{
+						"name": "CLICK_LOGGER",
+						"class_name": "ClickLogger"
+					},
+					{
+						"name": "BATCH_QUEUE_DO",
+						"class_name": "BatchQueueDO"
+					},
+					{
+						"name": "WASM_DO",
+						"class_name": "WasmDO"
+					}
+				]
+			},
+			"d1_databases": [
+				{
+					"binding": "DB",
+					"database_name": "mail-news-articles-db",
+					"database_id": "e27bfda7-000c-4d9d-9a3e-b147cbe1b2dc"
+				}
+			],
+			"r2_buckets": [
+				{
+					"binding": "BANDIT_MODELS",
+					"bucket_name": "mail-news-bandit-models"
+				}
+			]
+		}
+	},
 	/**
 	 * Service Bindings (communicate between multiple Workers)
 	 * https://developers.cloudflare.com/workers/wrangler/configuration/#service-bindings
