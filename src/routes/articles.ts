@@ -149,7 +149,7 @@ app.get('/get-personalized-articles', async (c) => {
 
         if (allArticlesWithEmbeddings.length === 0) {
             logger.warn('No articles with embeddings found. Returning empty list.', { userId });
-            return c.json([], 200);
+            return c.json({ articles: [], score: 0 }, 200);
         }
 
         // ユーザーのCTRを取得

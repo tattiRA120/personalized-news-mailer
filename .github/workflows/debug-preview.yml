@@ -1,7 +1,7 @@
 name: Test Preview Deployment
 
 on:
-  pull_request_target: # PRでシークレットにアクセスするためにターゲットを変更
+  pull_request_target:
     branches:
       - main
   workflow_dispatch:
@@ -19,8 +19,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
-          # pull_request_targetはデフォルトでベースブランチ(main)をチェックアウトするため、
-          # PRの内容をテストするには明確にrefを指定する必要がある。
           ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Setup Node.js
@@ -69,7 +67,6 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          # 環境変数の存在確認
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
             echo "::error::CLOUDFLARE_API_TOKEN is missing or empty."
             exit 1
@@ -81,14 +78,13 @@ jobs:
           fi
 
           echo "Starting Wrangler Dev Server (Remote mode)..."
-          # バックグラウンドで起動 (&)
-          # --ip 127.0.0.1 を指定してIPv4で確実にリッスンさせる
-          # --env production を使用して本番リソースを使用する（wrangler.jsoncにenv.productionを追加したため動作するはず）
+          
+          echo "WORKER_BASE_URL=http://127.0.0.1:8787" > .dev.vars
+
           npx wrangler dev --remote --env production --port 8787 --ip 127.0.0.1 > wrangler.log 2>&1 &
           PID=$!
           echo "Wrangler PID: $PID"
           
-          # サーバーが起動するまで待機 (最大60秒)
           echo "Waiting for server to be ready on port 8787..."
           timeout 60 bash -c 'until curl -s http://127.0.0.1:8787/personalized-education.html > /dev/null; do sleep 2; done' || (echo "Server failed to start" && cat wrangler.log && exit 1)
           
