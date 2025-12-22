@@ -6,16 +6,9 @@ on:
       - main
   workflow_dispatch:
 
-permissions:
-  contents: read
-  checks: write
-  statuses: write
-
 jobs:
   test-preview-deployment:
     runs-on: ubuntu-latest
-    # pull_request_targetの場合、environmentを指定しないとデフォルトの環境変数は使えるはずだが
-    # 明示的に指定することも検討。今回はなしで進める。
     
     steps:
       - name: Harden the runner
@@ -70,15 +63,15 @@ jobs:
       - name: Build WASM module
         run: npm run build:wasm
 
-      - name: Upload Version with Alias
-        id: upload-version
+      - name: Start Wrangler Dev Server
+        id: start-server
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           # 環境変数の存在確認
           if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
-            echo "::error::CLOUDFLARE_API_TOKEN is missing or empty. Please check your GitHub Repository Secrets."
+            echo "::error::CLOUDFLARE_API_TOKEN is missing or empty."
             exit 1
           fi
 
@@ -87,70 +80,26 @@ jobs:
             exit 1
           fi
 
-          echo "Uploading version with alias 'ci-preview'..."
+          echo "Starting Wrangler Dev Server (Remote mode)..."
+          # バックグラウンドで起動 (&)
+          # --ip 127.0.0.1 を指定してIPv4で確実にリッスンさせる
+          npx wrangler dev --remote --port 8787 --ip 127.0.0.1 > wrangler.log 2>&1 &
+          PID=$!
+          echo "Wrangler PID: $PID"
           
-          # JSON形式での取得を試みるが、失敗した場合は標準出力から解析
-          OUTPUT=$(npx wrangler versions upload --preview-alias ci-preview 2>&1 || true)
-          echo "Wrangler Output:"
-          echo "$OUTPUT"
+          # サーバーが起動するまで待機 (最大60秒)
+          echo "Waiting for server to be ready on port 8787..."
+          timeout 60 bash -c 'until curl -s http://127.0.0.1:8787/personalized-education.html > /dev/null; do sleep 2; done' || (echo "Server failed to start" && cat wrangler.log && exit 1)
           
-          # 1. ログから直接URLを探す
-          PREVIEW_URL=$(echo "$OUTPUT" | grep -o 'https://ci-preview-[^ ]*\.workers\.dev' | head -n 1)
-          
-          # 2. 見つからない場合、versions listから取得を試みる
-          if [ -z "$PREVIEW_URL" ]; then
-             echo "Preview URL not found in output, checking versions list..."
-             # ci-previewタグの付いた最新バージョンを探す
-             # --jsonの出力にログが混ざる場合があるため、標準エラーを捨て、標準出力の [ から始まる部分だけを取り出す
-             RAW_JSON=$(npx wrangler versions list --json 2>/dev/null || true)
-             
-             # JSON部分だけ抽出（最初の [ から最後まで）
-             VERSIONS_JSON=$(echo "$RAW_JSON" | sed -n '/^\[/,$p')
-             
-             if [ -z "$VERSIONS_JSON" ]; then
-                echo "Failed to iterate versions json. Raw output:"
-                echo "$RAW_JSON"
-             else
-                PREVIEW_URL=$(echo "$VERSIONS_JSON" | jq -r '.[] | select(.tags[]? == "ci-preview") | .preview_url' | head -n 1)
-             fi
-          fi
-
-          # 3. それでも見つからない場合（DOの影響などでURLが返ってこない場合）、
-          # Aliased Preview URLsの仕様に基づいてURLを強制的に構築する
-          if [ -z "$PREVIEW_URL" ] || [ "$PREVIEW_URL" == "null" ]; then
-             echo "Preview URL not found via Wrangler command. Constructing static alias URL..."
-             CONSTRUCTED_URL="https://ci-preview-mail-news-worker.tattira120.workers.dev"
-             echo "Using constructed URL: $CONSTRUCTED_URL"
-             PREVIEW_URL="$CONSTRUCTED_URL"
-          fi
-          
-          if [ -z "$PREVIEW_URL" ]; then
-            echo "Failed to determine preview URL."
-            exit 1
-          fi
-          
-          echo "Generated Preview URL: $PREVIEW_URL"
-          echo "PREVIEW_URL=$PREVIEW_URL" >> $GITHUB_ENV
-          echo "preview_url=$PREVIEW_URL" >> $GITHUB_OUTPUT
-
-      - name: Wait for Preview URL to be ready
-        env:
-          PREVIEW_URL: ${{ steps.upload-version.outputs.preview_url }}
-        run: |
-          echo "Waiting for $PREVIEW_URL to be ready..."
-          timeout 60 bash -c 'until curl -s $PREVIEW_URL/personalized-education.html > /dev/null; do sleep 2; done' || (echo "Preview URL failed to respond" && exit 1)
-          echo "Preview URL is ready!"
-
-      - name: Set base URL
-        id: set-url
-        run: |
-          echo "BASE_URL=${{ steps.upload-version.outputs.preview_url }}" >> $GITHUB_OUTPUT
+          echo "Server is ready!"
+          echo "BASE_URL=http://127.0.0.1:8787" >> $GITHUB_ENV
+          echo "BASE_URL=http://127.0.0.1:8787" >> $GITHUB_OUTPUT
 
       - name: Verify Endpoints
         id: verify
         uses: actions/github-script@v7
         env:
-          BASE_URL: ${{ steps.set-url.outputs.BASE_URL }}
+          BASE_URL: http://127.0.0.1:8787
         with:
           script: |
             const baseUrl = process.env.BASE_URL;
@@ -301,4 +250,3 @@ jobs:
               console.error('❌ Batch feedback verification failed:', error.message);
               core.setFailed('Batch feedback verification failed');
             }
-

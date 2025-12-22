@@ -7,7 +7,7 @@
 	"name": "mail-news-worker",
 	"main": "src/index.ts",
 	"compatibility_date": "2025-07-09",
-	"preview_urls": true,
+	"preview_urls": false,
 	"observability": {
 		"enabled": true
 	},
