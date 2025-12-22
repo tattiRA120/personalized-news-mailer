@@ -115,17 +115,10 @@ jobs:
              fi
           fi
 
-
           # 3. それでも見つからない場合（DOの影響などでURLが返ってこない場合）、
           # Aliased Preview URLsの仕様に基づいてURLを強制的に構築する
           if [ -z "$PREVIEW_URL" ] || [ "$PREVIEW_URL" == "null" ]; then
              echo "Preview URL not found via Wrangler command. Constructing static alias URL..."
-             
-             # ユーザー情報:
-             # Worker名: mail-news-worker
-             # サブドメイン: tattira120
-             # Alias: ci-preview
-             
              CONSTRUCTED_URL="https://ci-preview-mail-news-worker.tattira120.workers.dev"
              echo "Using constructed URL: $CONSTRUCTED_URL"
              PREVIEW_URL="$CONSTRUCTED_URL"
@@ -167,8 +160,8 @@ jobs:
             const fetch = async (path, options = {}) => {
               const url = `${baseUrl}${path}`;
               console.log(`Fetching ${url}...`);
-              const response = await ((await import('node-fetch')).default || global.fetch)(url, options);
-              return response;
+              // Use native fetch (available in Node.js 18+)
+              return await global.fetch(url, options);
             };
 
             // Test 1: Static File
