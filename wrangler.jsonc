@@ -66,13 +66,15 @@
 			"binding": "DB",
 			"database_name": "mail-news-articles-db",
 			"database_id": "e27bfda7-000c-4d9d-9a3e-b147cbe1b2dc",
+			"preview_database_id": "dd61f345-bea6-453e-86d4-a3b8ac08d196",
 			"migrations_dir": "./migrations"
 		}
 	],
 	"r2_buckets": [
 		{
 			"binding": "BANDIT_MODELS",
-			"bucket_name": "mail-news-bandit-models"
+			"bucket_name": "mail-news-bandit-models",
+			"preview_bucket_name": "mail-news-bandit-models-preview"
 		}
 	],
 	/**

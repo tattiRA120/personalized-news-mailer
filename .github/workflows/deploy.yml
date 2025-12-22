@@ -73,21 +73,7 @@ jobs:
       - name: Build WASM module
         run: npm run build:wasm
 
-      # Worker デプロイ
-      - name: Publish Cloudflare Worker
-        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: '4.56.0'
-          vars: |
-            WORKER_BASE_URL
-            LOG_LEVEL
-        env:
-          WORKER_BASE_URL: ${{ vars.WORKER_BASE_URL }}
-          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
-
-      # Workers Secrets 設定 (デプロイ後に実行して確実にバージョンに関連付ける)
+      # Workers Secrets 設定
       - name: Set OPENAI_API_KEY Secret
         run: echo "${{ secrets.OPENAI_API_KEY }}" | npx wrangler secret put OPENAI_API_KEY --env ""
         env:
@@ -123,3 +109,15 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Worker デプロイ
+      - name: Publish Cloudflare Worker
+        uses: cloudflare/wrangler-action@da0e0dfe58b7a431659754fdf3f186c529afbe65 # v3.14.1
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          vars: |
+            WORKER_BASE_URL
+            LOG_LEVEL
+        env:
+          WORKER_BASE_URL: ${{ vars.WORKER_BASE_URL }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
