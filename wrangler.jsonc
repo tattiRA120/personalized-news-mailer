@@ -21,11 +21,13 @@
 	"kv_namespaces": [
 		{
 			"binding": "mail-news-gmail-tokens", // Binding name for Gmail refresh tokens
-			"id": "f393b495a80a4d23bd7f2e77450e0027"
+			"id": "f393b495a80a4d23bd7f2e77450e0027",
+			"preview_id": "f393b495a80a4d23bd7f2e77450e0027"
 		},
 		{
 			"binding": "BATCH_CALLBACK_TOKENS", // Binding name for OpenAI Batch API callback tokens
-			"id": "df13a4b73ec24a4d99f0b3edb908f8d8"
+			"id": "df13a4b73ec24a4d99f0b3edb908f8d8",
+			"preview_id": "df13a4b73ec24a4d99f0b3edb908f8d8"
 		}
 	],
 	"durable_objects": {
@@ -64,13 +66,15 @@
 			"binding": "DB",
 			"database_name": "mail-news-articles-db",
 			"database_id": "e27bfda7-000c-4d9d-9a3e-b147cbe1b2dc",
+			"preview_database_id": "e27bfda7-000c-4d9d-9a3e-b147cbe1b2dc",
 			"migrations_dir": "./migrations"
 		}
 	],
 	"r2_buckets": [
 		{
 			"binding": "BANDIT_MODELS",
-			"bucket_name": "mail-news-bandit-models"
+			"bucket_name": "mail-news-bandit-models",
+			"preview_bucket_name": "mail-news-bandit-models"
 		}
 	],
 	/**
