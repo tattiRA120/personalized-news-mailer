@@ -63,6 +63,20 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          # 環境変数の存在確認（値は表示せず、長さや有無だけチェック）
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is missing or empty. Please check your GitHub Repository Secrets."
+            echo "Debug: CLOUDFLARE_API_TOKEN is empty"
+            exit 1
+          else
+            echo "Debug: CLOUDFLARE_API_TOKEN is set (length: ${#CLOUDFLARE_API_TOKEN})"
+          fi
+
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID is missing or empty."
+            exit 1
+          fi
+
           echo "Uploading version with alias 'ci-preview'..."
           
           # 失敗しても出力を確認できるように || true をつける
