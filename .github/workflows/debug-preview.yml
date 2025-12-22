@@ -2,13 +2,12 @@ name: Test Preview Deployment
 
 on:
   pull_request_target:
-    branches:
-      - main
-  workflow_dispatch:
+    types: [labeled]
 
 jobs:
   test-preview-deployment:
     runs-on: ubuntu-latest
+    if: contains(github.event.pull_request.labels.*.name, 'safe-to-preview')
     
     steps:
       - name: Harden the runner

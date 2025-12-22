@@ -1,0 +1,74 @@
+name: Auto Label Safe Preview
+
+on:
+  workflow_run:
+    workflows: ["CodeQL", "Dependency Review"]
+    types:
+      - completed
+
+permissions:
+  pull-requests: write
+  actions: read
+
+jobs:
+  label-if-secure:
+    name: Label Safe Preview
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Check Security Workflows
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const head_sha = context.payload.workflow_run.head_sha;
+            console.log(`Checking workflows for commit: ${head_sha}`);
+
+            // 1. Get all workflow runs for this commit
+            const runs = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head_sha: head_sha,
+              status: 'success'
+            });
+
+            // 2. Check if we have success for both required workflows
+            const requiredWorkflows = ['CodeQL', 'Dependency Review'];
+            const finishedWorkflows = new Set(
+              runs.data.workflow_runs
+                .map(run => run.name)
+            );
+
+            console.log('Successful workflows found:', Array.from(finishedWorkflows));
+
+            const allPassed = requiredWorkflows.every(name => finishedWorkflows.has(name));
+
+            if (allPassed) {
+              console.log('All security checks passed. Proceeding to label PR.');
+              
+              // 3. Find the PR associated with this commit
+              // workflow_run payload usually contains pull_requests, but it's often empty for 'push' triggers
+              // We search for PRs associated with the commit
+              const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                commit_sha: head_sha,
+              });
+
+              if (prs.data.length > 0) {
+                const pr = prs.data[0];
+                console.log(`Found PR #${pr.number}: ${pr.title}`);
+                
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  labels: ['safe-to-preview']
+                });
+                console.log(`Added 'safe-to-preview' label to PR #${pr.number}`);
+              } else {
+                console.log('No PR found for this commit.');
+              }
+            } else {
+              console.log('Not all security checks have passed yet.');
+              console.log(`Missing: ${requiredWorkflows.filter(name => !finishedWorkflows.has(name)).join(', ')}`);
+            }
