@@ -79,7 +79,7 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          wranglerVersion: 'latest'
+          wranglerVersion: '4.56.0'
           secrets: |
             OPENAI_API_KEY
             GOOGLE_CLIENT_ID

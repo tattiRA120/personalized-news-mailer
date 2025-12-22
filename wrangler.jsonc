@@ -21,11 +21,13 @@
 	"kv_namespaces": [
 		{
 			"binding": "mail-news-gmail-tokens", // Binding name for Gmail refresh tokens
-			"id": "f393b495a80a4d23bd7f2e77450e0027"
+			"id": "f393b495a80a4d23bd7f2e77450e0027",
+			"preview_id": "659a81c09c7d4679956886667d81dccb"
 		},
 		{
 			"binding": "BATCH_CALLBACK_TOKENS", // Binding name for OpenAI Batch API callback tokens
-			"id": "df13a4b73ec24a4d99f0b3edb908f8d8"
+			"id": "df13a4b73ec24a4d99f0b3edb908f8d8",
+			"preview_id": "b14431d83cc243ce81e86258abb43903"
 		}
 	],
 	"durable_objects": {
