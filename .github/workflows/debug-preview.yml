@@ -101,9 +101,20 @@ jobs:
           if [ -z "$PREVIEW_URL" ]; then
              echo "Preview URL not found in output, checking versions list..."
              # ci-previewタグの付いた最新バージョンを探す
-             VERSIONS_JSON=$(npx wrangler versions list --json || true)
-             # jqでパース: tagsにci-previewを含むもののpreview_urlを取得
-             PREVIEW_URL=$(echo "$VERSIONS_JSON" | jq -r '.[] | select(.tags[]? == "ci-preview") | .preview_url' | head -n 1)
+             # --jsonの出力にログが混ざる場合があるため、標準エラーを捨て、標準出力の [ から始まる部分だけを取り出す
+             RAW_JSON=$(npx wrangler versions list --json 2>/dev/null || true)
+             
+             # JSON部分だけ抽出（最初の [ から最後まで）
+             VERSIONS_JSON=$(echo "$RAW_JSON" | sed -n '/^\[/,$p')
+             
+             if [ -z "$VERSIONS_JSON" ]; then
+                # もし抽出できなかった場合（JSONが含まれていない場合）、元の出力をデバッグ表示
+                echo "Failed to iterate versions json. Raw output:"
+                echo "$RAW_JSON"
+             else
+                # jqでパース: tagsにci-previewを含むもののpreview_urlを取得
+                PREVIEW_URL=$(echo "$VERSIONS_JSON" | jq -r '.[] | select(.tags[]? == "ci-preview") | .preview_url' | head -n 1)
+             fi
           fi
           
           if [ -z "$PREVIEW_URL" ] || [ "$PREVIEW_URL" == "null" ]; then
