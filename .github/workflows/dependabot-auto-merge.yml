@@ -38,48 +38,67 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Wait 5 minutes for other checks to complete
-        run: sleep 300
-
       - name: Check if all workflows have passed
         run: |
-          MAX_RETRIES=6
-          RETRY_INTERVAL=300  # 5分を秒で指定
-          ATTEMPT=0
+          PR_URL="${{github.event.pull_request.html_url}}"
+          INTERVAL=10
+          MAX_RETRIES=180 # 30 mins max
           CURRENT_WORKFLOW="Dependabot auto-merge"
 
-          while [ $ATTEMPT -lt $MAX_RETRIES ]; do
-            echo "Fetching PR status checks..."
-            WORKFLOWS=$(gh pr view "$PR_URL" --json statusCheckRollup -q '.statusCheckRollup')
+          echo "🔍 Starting stylish status check monitoring..."
 
-            # デバッグ: 各ステータスチェックの状態を出力
-            echo "Debug: Current status of all checks:"
-            WORKFLOW_STATUS=$(jq -r '[.[] | {name: (.workflowName // .name // .context), type: .["__typename"], status: .status, state: .state, conclusion: .conclusion}]' <<< "$WORKFLOWS")
+          for ((i=1; i<=MAX_RETRIES; i++)); do
+            # Fetch statuses
+            # Returns: <Name>|<Status> per line
+            CHECKS=$(gh pr view "$PR_URL" --json statusCheckRollup -q ".statusCheckRollup[] | {name: (.workflowName // .name // .context), status: (if .__typename == \"CheckRun\" then (if .status == \"COMPLETED\" then .conclusion else .status end) else .state end) | ascii_upcase} | select(.name != \"$CURRENT_WORKFLOW\") | \"\(.name)|\(.status)\"")
 
-            # 現在のワークフロー以外のすべてのチェックが成功したか確認
-            all_passed=true
-            while IFS= read -r check; do
-              name=$(jq -r '.name' <<< "$check")
-              type=$(jq -r '.type' <<< "$check")
-              status=$(jq -r 'if .type == "CheckRun" then (if .status == "COMPLETED" then .conclusion else .status end) else .state end' <<< "$check")
-              if [[ "$name" != "$CURRENT_WORKFLOW" && "$status" != "SUCCESS" ]]; then
-                all_passed=false
-                echo "Failed or Pending check: $name ($type) - Status: $status"
-                break
-              fi
-            done < <(echo "$WORKFLOW_STATUS" | jq -c '.[]')
-
-            if $all_passed; then
-              echo "All other checks have passed"
+            if [ -z "$CHECKS" ]; then
+              echo "⚠️ No other checks found. Assuming safe to merge."
               exit 0
-            else
-              echo "Some status checks have not passed. Attempt $((ATTEMPT + 1)) of $MAX_RETRIES."
-              echo "Retrying in $RETRY_INTERVAL seconds..."
-              sleep $RETRY_INTERVAL
-              ATTEMPT=$((ATTEMPT + 1))
             fi
+
+            PENDING=0
+            FAILED=0
+            PASSED=0
+
+            echo "---------------------------------------------------"
+            echo "🔄 Attempt $i/$MAX_RETRIES"
+
+            while IFS='|' read -r name status; do
+              case "$status" in
+                SUCCESS|SKIPPED|NEUTRAL)
+                  echo "✅ $name"
+                  ((PASSED++))
+                  ;;
+                FAILURE|CANCELLED|TIMED_OUT|ACTION_REQUIRED|ERROR)
+                  echo "❌ $name ($status)"
+                  ((FAILED++))
+                  ;;
+                *)
+                  echo "⏳ $name ($status)"
+                  ((PENDING++))
+                  ;;
+              esac
+            done <<< "$CHECKS"
+
+            echo "---------------------------------------------------"
+            echo "📊 Passed: $PASSED | Pending: $PENDING | Failed: $FAILED"
+
+            if [ "$FAILED" -gt 0 ]; then
+              echo "🚫 Critical check(s) failed. Aborting."
+              exit 1
+            fi
+
+            if [ "$PENDING" -eq 0 ]; then
+              echo "🎉 All checks passed! Ready to merge."
+              exit 0
+            fi
+
+            echo "💤 Waiting ${INTERVAL}s..."
+            sleep $INTERVAL
           done
-          echo "Failed to merge the PR after $MAX_RETRIES attempts due to failing status checks."
+
+          echo "⏰ Timeout waiting for checks."
           exit 1
       - name: Auto-merge for Dependabot PRs
         run: gh pr merge --auto --merge "$PR_URL"
