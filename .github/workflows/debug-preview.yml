@@ -2,7 +2,7 @@ name: Test Preview Deployment
 
 on:
   pull_request_target:
-    types: [labeled]
+    types: [labeled, synchronize]
 
 jobs:
   test-preview-deployment:
