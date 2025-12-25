@@ -4,6 +4,15 @@ on:
   push:
     branches:
       - main # デプロイをトリガーするブランチを指定
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'linalg-wasm/**'
+      - 'migrations/**'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
 
 jobs:
   deploy:
