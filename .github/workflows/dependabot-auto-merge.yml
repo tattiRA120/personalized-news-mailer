@@ -14,7 +14,7 @@ jobs:
   dependabot:
     runs-on: ubuntu-latest
     if: |
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      (github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'tattiRA120') &&
       github.repository == 'tattiRA120/personalized-news-mailer' &&
       contains(join(github.event.pull_request.labels.*.name, ','), 'github_actions') &&
       contains(join(github.event.pull_request.labels.*.name, ','), 'safe-to-preview')
