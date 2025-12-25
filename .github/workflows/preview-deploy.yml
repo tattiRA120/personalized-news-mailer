@@ -262,3 +262,38 @@ jobs:
               console.error('❌ Batch feedback verification failed:', error.message);
               core.setFailed('Batch feedback verification failed');
             }
+
+      - name: Report Status
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const run_id = context.payload.workflow_run.id;
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: run_id,
+            });
+            const prs = run.data.pull_requests;
+            if (prs.length === 0) {
+              console.log("No PR found. skipping status report.");
+              return;
+            }
+            const prHeadSha = prs[0].head.sha;
+            
+            const jobStatus = '${{ job.status }}';
+            let state = 'failure';
+            if (jobStatus === 'success') state = 'success';
+            else if (jobStatus === 'cancelled') state = 'error';
+            
+            console.log(`Reporting status '${state}' for check 'test-preview-deployment' on SHA ${prHeadSha}`);
+            
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: prHeadSha,
+              state: state,
+              context: 'test-preview-deployment',
+              description: state === 'success' ? 'Preview deployment passed' : 'Preview deployment failed',
+              target_url: `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            });
