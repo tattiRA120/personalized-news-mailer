@@ -1,24 +1,68 @@
-name: Test Preview Deployment
+name: Preview Deploy
 
 on:
-  pull_request_target:
-    types: [labeled, synchronize]
+  workflow_run:
+    workflows: ["Preview Build"]
+    types:
+      - completed
 
 jobs:
-  test-preview-deployment:
+  deploy-preview:
     runs-on: ubuntu-latest
-    if: contains(github.event.pull_request.labels.*.name, 'safe-to-preview')
-    
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76 # v2.14.0
         with:
           egress-policy: audit
 
-      - name: Checkout code
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+      # We need to verify the PR label manually because workflow_run doesn't have it in context easily
+      # and we don't want to run secrets on arbitrary PRs without a check.
+      - name: Check for 'safe-to-preview' label
+        uses: actions/github-script@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          script: |
+            const run_id = context.payload.workflow_run.id;
+            const run = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: run_id,
+            });
+            
+            // workflow_run event doesn't give us the pull_requests array directly in payload sometimes, 
+            // but the run object from API does.
+            const prs = run.data.pull_requests;
+            
+            if (prs.length === 0) {
+              console.log("No PR found associated with this run.");
+              return; 
+            }
+            
+            const prNumber = prs[0].number;
+            console.log(`Checking matching PR #${prNumber} for labels...`);
+            
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            
+            const hasLabel = pr.data.labels.some(label => label.name === 'safe-to-preview');
+            
+            if (!hasLabel) {
+              core.setFailed("PR does not have 'safe-to-preview' label. Skipping deployment.");
+            } else {
+              console.log("PR has 'safe-to-preview' label. Proceeding.");
+            }
+
+      - name: Download artifact
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: preview-artifact
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node.js
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
@@ -26,39 +70,8 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install safe-chain
-        run: curl -fsSL https://raw.githubusercontent.com/AikidoSec/safe-chain/main/install-scripts/install-safe-chain.sh | sh -s -- --ci
-
-      - name: Install dependencies
+      - name: Install dependencies (production only + dev for wrangler)
         run: npm ci
-
-      - name: Cache Cargo registry + target
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
-        with:
-          path: |
-            ~/.cargo/bin
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@6d9817901c499d6b02debbb57edb38d33daa680b # stable
-        with:
-          toolchain: stable
-          target: wasm32-unknown-unknown
-
-      - name: Install wasm-pack
-        run: |
-          curl -L https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz -o wasm-pack.tar.gz
-          tar xzf wasm-pack.tar.gz
-          sudo mv wasm-pack-v0.13.1-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/
-          wasm-pack --version
-
-      - name: Build WASM module
-        run: npm run build:wasm
 
       - name: Start Wrangler Dev Server
         id: start-server
@@ -78,6 +91,10 @@ jobs:
 
           echo "Starting Wrangler Dev Server (Remote mode)..."
           
+          # We need to manually recreate the wasm location if it was flattened or moved?
+          # The artifact upload preserved directory structure, so it should be fine.
+          ls -R
+          
           echo "WORKER_BASE_URL=http://127.0.0.1:8787" > .dev.vars
 
           npx wrangler dev --remote --port 8787 --ip 127.0.0.1 > wrangler.log 2>&1 &
@@ -89,11 +106,10 @@ jobs:
           
           echo "Server is ready!"
           echo "BASE_URL=http://127.0.0.1:8787" >> $GITHUB_ENV
-          echo "BASE_URL=http://127.0.0.1:8787" >> $GITHUB_OUTPUT
 
       - name: Verify Endpoints
         id: verify
-        uses: actions/github-script@v8
+        uses: actions/github-script@v7
         env:
           BASE_URL: http://127.0.0.1:8787
         with:

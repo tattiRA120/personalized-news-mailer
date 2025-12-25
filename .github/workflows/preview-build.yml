@@ -1,0 +1,71 @@
+name: Preview Build
+
+on:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76 # v2.14.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install safe-chain
+        run: curl -fsSL https://raw.githubusercontent.com/AikidoSec/safe-chain/main/install-scripts/install-safe-chain.sh | sh -s -- --ci
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache Cargo registry + target
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@6d9817901c499d6b02debbb57edb38d33daa680b # stable
+        with:
+          toolchain: stable
+          target: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: |
+          curl -L https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz -o wasm-pack.tar.gz
+          tar xzf wasm-pack.tar.gz
+          sudo mv wasm-pack-v0.13.1-x86_64-unknown-linux-musl/wasm-pack /usr/local/bin/
+          wasm-pack --version
+
+      - name: Build WASM module
+        run: npm run build:wasm
+
+      - name: Archive build artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: preview-artifact
+          path: |
+            src/
+            public/
+            linalg-wasm/pkg/
+            package.json
+            package-lock.json
+            wrangler.jsonc
+            tsconfig.json
+            migrations/
+          retention-days: 1
