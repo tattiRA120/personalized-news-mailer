@@ -60,10 +60,10 @@ jobs:
             while IFS= read -r check; do
               name=$(jq -r '.name' <<< "$check")
               type=$(jq -r '.type' <<< "$check")
-              status=$(jq -r 'if .type == "CheckRun" then .conclusion else .state end' <<< "$check")
+              status=$(jq -r 'if .type == "CheckRun" then (if .status == "COMPLETED" then .conclusion else .status end) else .state end' <<< "$check")
               if [[ "$name" != "$CURRENT_WORKFLOW" && "$status" != "SUCCESS" ]]; then
                 all_passed=false
-                echo "Failed check: $name ($type) - Status: $status"
+                echo "Failed or Pending check: $name ($type) - Status: $status"
                 break
               fi
             done < <(echo "$WORKFLOW_STATUS" | jq -c '.[]')
