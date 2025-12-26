@@ -68,15 +68,15 @@ jobs:
               case "$status" in
                 SUCCESS|SKIPPED|NEUTRAL)
                   echo "✅ $name"
-                  ((PASSED++))
+                  ((PASSED+=1))
                   ;;
                 FAILURE|CANCELLED|TIMED_OUT|ACTION_REQUIRED|ERROR)
                   echo "❌ $name ($status)"
-                  ((FAILED++))
+                  ((FAILED+=1))
                   ;;
                 *)
                   echo "⏳ $name ($status)"
-                  ((PENDING++))
+                  ((PENDING+=1))
                   ;;
               esac
             done <<< "$CHECKS"
