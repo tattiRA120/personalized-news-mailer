@@ -405,6 +405,8 @@ export async function collectNews(env: Env): Promise<NewsArticle[]> {
                     sourceName = '北森瓦版';
                 } else if (sourceName.includes('nichepcgamer.com')) {
                     sourceName = 'ニッチなPCゲーマーの環境構築Z';
+                } else if (sourceName.includes('xenospectrum.com')) {
+                    sourceName = 'XenoSpectrum';
                 }
 
                 const articles = await parseFeedWithFastXmlParser(xml, url, env);
