@@ -26,7 +26,8 @@ export const NEWS_RSS_URLS: string[] = [
     'https://qiita.com/popular-items/feed.atom', // Qiita(エンジニア系)
     'https://gazlog.com/feed/', // ギャズログ｜GAZLOG(PCパーツ:リーク系)
     'https://northwood.blog.fc2.com/?xml', // 北森瓦版(PCパーツ:リーク系)
-    'https://www.nichepcgamer.com/feed' // ニッチなPCゲーマーの環境構築Z(PCパーツ:リーク系)
+    'https://www.nichepcgamer.com/feed', // ニッチなPCゲーマーの環境構築Z(PCパーツ:リーク系)
+    'https://xenospectrum.com/feed/' // XenoSpectrum
 ];
 
 export const OPENAI_EMBEDDING_MODEL = "text-embedding-3-small";
@@ -52,12 +53,13 @@ export const NEWS_SOURCE_LOGOS: { [key: string]: string } = {
     'GIGAZINE': 'https://pbs.twimg.com/profile_images/876998955627827204/IuoxMaM2_400x400.jpg',
     'GIZMODO JAPAN': 'https://upload.wikimedia.org/wikipedia/commons/6/69/Gizmodo_Media_Group_Logo.png',
     'エルミタージュ秋葉原': 'https://www.gdm.or.jp/wp-content/themes/hermitage/images/common/logo.png',
-    'テクノエッジ':'https://www.techno-edge.net/base/images/noimage.png',
+    'テクノエッジ': 'https://www.techno-edge.net/base/images/noimage.png',
     'Zenn': 'https://static.zenn.studio/images/logo-only-dark.png',
     'Qiita': 'https://i.gyazo.com/43ef3dfee7b402b1582db2ce241731f5.png',
     'ギャズログ': 'https://gazlog.jp/wp-content/uploads/2024/02/cropped-Gazlog-favcon-3-1.jpg',
     '北森瓦版': 'https://cdn2.iconfinder.com/data/icons/social-icon-3/512/social_style_3_rss-512.png',
     'ニッチなPCゲーマーの環境構築Z': 'https://www.nichepcgamer.com/wp-content/uploads/2020/04/npg-title3-min.png',
+    'XenoSpectrum': 'https://xenospectrum.com/wp-content/uploads/2024/03/xs-logo.png',
     // 汎用的なデフォルト画像
     'DEFAULT': 'https://cdn2.iconfinder.com/data/icons/social-icon-3/512/social_style_3_rss-512.png',
 };
