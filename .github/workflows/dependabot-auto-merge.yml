@@ -2,6 +2,16 @@ name: Dependabot auto-merge
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
+  workflow_run:
+    workflows: ["Auto Label Safe Preview"]
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      pr_url:
+        description: "PR URL (required for manual trigger)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -14,12 +24,14 @@ jobs:
   dependabot:
     runs-on: ubuntu-latest
     if: |
-      (github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'tattiRA120') &&
-      github.repository == 'tattiRA120/personalized-news-mailer' &&
-      contains(join(github.event.pull_request.labels.*.name, ','), 'safe-to-preview')
+      (
+        (github.event_name == 'pull_request' && (github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'tattiRA120') && contains(join(github.event.pull_request.labels.*.name, ','), 'safe-to-preview')) ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
+        github.event_name == 'workflow_dispatch'
+      ) &&
+      github.repository == 'tattiRA120/personalized-news-mailer'
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      PR_URL: ${{github.event.pull_request.html_url}}
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@20cf305ff2072d973412fa9b1e3a4f227bda3c76 # v2.14.0
@@ -38,13 +50,32 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check if all workflows have passed
+        id: check-workflows
         run: |
-          PR_URL="${{github.event.pull_request.html_url}}"
+          # Dynamically determine PR_URL
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            PR_URL="${{ github.event.pull_request.html_url }}"
+          elif [ "${{ github.event_name }}" == "workflow_run" ]; then
+            HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
+            echo "Searching for PR associated with SHA: $HEAD_SHA"
+            PR_URL=$(gh pr list --search "$HEAD_SHA" --state open --json url --jq '.[0].url')
+          elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            PR_URL="${{ inputs.pr_url }}"
+          fi
+
+          if [ -z "$PR_URL" ] || [ "$PR_URL" == "null" ]; then
+            echo "❌ Could not determine PR URL for event ${{ github.event_name }}"
+            exit 1
+          fi
+
+          echo "Target PR: $PR_URL"
+          echo "PR_URL=$PR_URL" >> $GITHUB_ENV
+
           INTERVAL=10
           MAX_RETRIES=180 # 30 mins max
           CURRENT_WORKFLOW="Dependabot auto-merge"
 
-          echo "🔍 Starting stylish status check monitoring..."
+          echo "🔍 Starting status check monitoring..."
 
           for ((i=1; i<=MAX_RETRIES; i++)); do
             # Fetch statuses
