@@ -35,8 +35,6 @@ export class ClickLogger extends DurableObject {
     env: ClickLoggerEnv;
 
     private inMemoryModels: Map<string, BanditModelState>; // Cache for active models
-    // private readonly modelsR2Key = 'bandit_models.json'; // REMOVED: No longer using monolithic R2 file
-    // private dirty: boolean; // REMOVED: Updates are immediate to storage
 
     // ロガーインスタンスを保持
     private logger: Logger;
@@ -47,7 +45,6 @@ export class ClickLogger extends DurableObject {
         this.state = state;
         this.env = env;
         this.inMemoryModels = new Map<string, BanditModelState>();
-        // this.dirty = false; // REMOVED
 
         // ロガーを初期化し、インスタンス変数に割り当てる
         this.logger = new Logger(env);
@@ -151,8 +148,7 @@ export class ClickLogger extends DurableObject {
         await this.state.storage.put(userId, model);
     }
 
-    // REMOVED: loadModelsFromR2
-    // REMOVED: saveModelsToR2
+
 
     // Initialize a new bandit model for a specific user.
     private initializeNewBanditModel(userId: string): BanditModelState {
@@ -348,7 +344,6 @@ export class ClickLogger extends DurableObject {
 
     async alarm() {
         // This alarm is triggered periodically to process unclicked articles and update models from feedback.
-        // REMOVED: Saving dirty models to R2 (Storage is updated immediately)
 
         try {
             // Process unclicked articles
@@ -396,7 +391,6 @@ export class ClickLogger extends DurableObject {
         // Middleware to ensure alarm is set
         this.app.use('*', async (c, next) => {
             await this.ensureAlarmIsSet();
-            // await this.ensureModelsLoaded(); // REMOVED: Models are lazy loaded via getModel
             await next();
         });
 
@@ -580,7 +574,6 @@ export class ClickLogger extends DurableObject {
                     }
 
                     await this.updateBanditModel(banditModel, embedding, reward, userId);
-                    // this.dirty = true; // REMOVED
                     this.logger.info(`Successfully updated bandit model from feedback for article ${articleId} for user ${userId}`, { userId, articleId, feedback, reward });
                 } else {
                     this.logger.debug(`Immediate update not requested for feedback from user ${userId}, article ${articleId}. Model update will be handled periodically.`, { userId, articleId, feedback });
@@ -787,10 +780,8 @@ export class ClickLogger extends DurableObject {
 
                 if (logStatements.length > 0) {
                     this.state.waitUntil(this.env.DB.batch(logStatements));
-                    // this.dirty = true; // REMOVED
                     this.logger.debug(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
                     await this.updateUserProfileEmbeddingInD1(userId, banditModel);
-                    // await this.saveModelsToR2(); // REMOVED
                 }
                 return new Response('Learning from education completed', { status: 200 });
 
@@ -829,7 +820,6 @@ export class ClickLogger extends DurableObject {
                         this.logger.debug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
                     await this.updateUserProfileEmbeddingInD1(userId, banditModel);
-                    // this.dirty = true; // REMOVED
                 } else {
                     this.logger.debug('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
                 }
@@ -864,7 +854,6 @@ export class ClickLogger extends DurableObject {
                 }
 
                 await this.updateBanditModel(banditModel, embedding, reward, userId);
-                // this.dirty = true; // REMOVED
                 this.logger.debug(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
                 return new Response('Bandit model updated', { status: 200 });
 
@@ -887,7 +876,6 @@ export class ClickLogger extends DurableObject {
                 this.logger.info(`Deleting all bandit models from Storage.`);
                 await this.state.storage.deleteAll();
                 this.inMemoryModels.clear();
-                // this.dirty = false; // REMOVED
                 this.logger.info(`All bandit models deleted.`);
                 return new Response('All bandit models deleted', { status: 200 });
             } catch (error: unknown) {
@@ -1203,7 +1191,6 @@ export class ClickLogger extends DurableObject {
 
                             // クリックされなかった記事には負の報酬を与える (例: -0.1)
                             await this.updateBanditModel(banditModel, embeddingToUse, -0.1, userId, true);
-                            // this.dirty = true; // REMOVED
                             updatedCount++;
                         } else {
                             this.logger.warn(`Article ${article.article_id} from sent_articles missing embedding or published_at. Skipping update.`, { userId, articleId: article.article_id, hasEmbedding: !!article.embedding, hasPublishedAt: !!article.published_at });
@@ -1406,7 +1393,6 @@ export class ClickLogger extends DurableObject {
                             // 興味あり: 20.0, 興味なし: -20.0
                             const reward = log.action === 'interested' ? 20.0 : -20.0;
                             await this.updateBanditModel(banditModel, embedding, reward, userId, true);
-                            // this.dirty = true; // REMOVED
                             updatedCount++;
 
                             // Successfully processed, delete the log

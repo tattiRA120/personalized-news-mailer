@@ -485,18 +485,9 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
       }
       this.logger.debug(`Chunk ${chunk.chunkIndex} batch job created. Job ID: ${job.id}`);
 
-      // Add to batchJobs (keep as array for now as it's likely smaller, or refactor later if needed)
-      // For now, batchJobs array is fine, but we must handle race conditions? 
-      // batchJobs is accessed in alarm and here. 
-      // Optimistic concurrency or granular keys for batchJobs too?
-      // Given batchJobs list is used for polling, keys make sense: job_${batchId}
-      // But for this step let's focus on the QUEUE which was broken.
-      // We will stick to array for batchJobs for now (risk: overlapping alarm and this method? 
-      // queue processing adds to batchJobs. Alarm reads/writes batchJobs.
-      // Yes, race condition exists there too.
-      // Refactoring batchJobs to KV list is safer.)
-
-      // Let's stick effectively to queue fix first.
+      // Add to batchJobs
+      // Note: We use an array for batchJobs for simplicity.
+      // Optimistic concurrency or granular keys/transactions might be needed for high throughput.
 
       let batchJobs = await this.state.storage.get<BatchJobInfo[]>("batchJobs") || [];
       batchJobs.push({ batchId: job.id, inputFileId: uploaded.id, status: "pending", retryCount: 0 });
@@ -520,40 +511,18 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     }
   }
 
-  // Updated loop to use keys needs updated handleChunkError to put back via put() not unshift()
-  // But wait, if we process by listening to `chunk_` prefix, unshift means creating a key that sorts first?
-  // Or just reusing the old key?
-  // We don't have the current key in processSingleChunk.
-  // I should pass the key or keep the chunk in storage until success?
-  // If I delete it AFTER success, then failure means it stays?
-  // But I am deleting it inside processQueue. 
-  // If processSingleChunk fails, handleChunkError tries to put it back.
-  // We should pass the KEY to processSingleChunk.
+
 
   private async handleChunkError(chunk: BatchChunk, error: any, maxRetries: number, originalKey?: string): Promise<void> {
     chunk.retryCount = (chunk.retryCount || 0) + 1;
     if (chunk.retryCount <= maxRetries) {
       this.logger.warn(`BatchQueueDO: Retrying chunk ${chunk.chunkIndex}. Attempt ${chunk.retryCount}/${maxRetries}.`, { error: error, chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount });
 
-      // Update the chunk in storage (in place) or re-add
-      // If we use prefix "chunk_", re-adding with same key keeps order.
-      // But we deleted it in processQueue BEFORE calling this? 
-      // Current processQueue deletes it AFTER success.
-      // Wait, processQueue calls processSingleChunk. If it throws, we catch in processQueue or processSingleChunk?
-      // processSingleChunk catches internally.
-      // So processQueue sees it "return". And then DELETES it.
-      // BAD. If it fails, we shouldn't delete it unless max retries exceeded.
+      this.logger.warn(`BatchQueueDO: Retrying chunk ${chunk.chunkIndex}. Attempt ${chunk.retryCount}/${maxRetries}.`, { error: error, chunkIndex: chunk.chunkIndex, retryCount: chunk.retryCount });
 
-      // Correction to processQueue: Only delete if processSingleChunk returns true (success).
-      // If processSingleChunk handles retries by UPDATING the record, then processQueue shouldn't delete it yet?
-      // Or processSingleChunk re-queues it?
-
-      // Let's change strategy:
-      // processQueue: peek (don't delete). Process. If success, delete.
-      // If fail (and retried), update the record (with new retry count).
-      // If fail (max retries), delete (and log).
-
-      // This requires processQueue logic change.
+      if (originalKey) {
+        await this.state.storage.put(originalKey, chunk);
+      }
     } else {
       // ...
     }
