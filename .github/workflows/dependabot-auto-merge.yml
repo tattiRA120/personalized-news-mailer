@@ -65,8 +65,8 @@ jobs:
           fi
 
           if [ -z "$PR_URL" ] || [ "$PR_URL" == "null" ]; then
-            echo "❌ Could not determine PR URL for event ${{ github.event_name }}"
-            exit 1
+            echo "⚠️ Could not determine PR URL for event ${{ github.event_name }}. This might be a push to main or PR lookup failed."
+            exit 0
           fi
 
           echo "Target PR: $PR_URL"
