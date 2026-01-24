@@ -34,9 +34,9 @@ export class ClickLogger extends DurableObject {
     state: DurableObjectState;
     env: ClickLoggerEnv;
 
-    private inMemoryModels: Map<string, BanditModelState>;
-    private readonly modelsR2Key = 'bandit_models.json'; // Key for the aggregated models file in R2
-    private dirty: boolean; // Flag to track if in-memory models have changed
+    private inMemoryModels: Map<string, BanditModelState>; // Cache for active models
+    // private readonly modelsR2Key = 'bandit_models.json'; // REMOVED: No longer using monolithic R2 file
+    // private dirty: boolean; // REMOVED: Updates are immediate to storage
 
     // ロガーインスタンスを保持
     private logger: Logger;
@@ -47,88 +47,112 @@ export class ClickLogger extends DurableObject {
         this.state = state;
         this.env = env;
         this.inMemoryModels = new Map<string, BanditModelState>();
-        this.dirty = false;
+        // this.dirty = false; // REMOVED
 
         // ロガーを初期化し、インスタンス変数に割り当てる
         this.logger = new Logger(env);
         this.app = new Hono<{ Bindings: ClickLoggerEnv }>();
         this.setupRoutes();
 
-        // Load all models from R2 into memory on startup.
+        // Initialize WASM and Migrate Data if needed
         this.state.blockConcurrencyWhile(async () => {
             this.logger.debug('WASMモジュールを初期化します...');
             await init(wasm); // WASMモジュールの初期化
             this.logger.debug('WASMモジュールの初期化完了');
-            await this.loadModelsFromR2();
+
+            await this.migrateFromR2IfNeeded();
         });
     }
 
-    // Load all bandit models from a single R2 object.
-    private async loadModelsFromR2(): Promise<void> {
-        this.logger.debug(`Attempting to load all bandit models from R2 key: ${this.modelsR2Key}`);
-        try {
-            const object = await this.env.BANDIT_MODELS.get(this.modelsR2Key);
+    // Helper: Migrate from R2 to DO Storage (One-time)
+    private async migrateFromR2IfNeeded(): Promise<void> {
+        const isMigrated = await this.state.storage.get<boolean>('migration_v1_r2_to_storage_done');
+        if (isMigrated) {
+            this.logger.debug('Migration from R2 already completed.');
+            return;
+        }
 
-            if (object !== null) {
-                // object.size が 0 の場合も空のJSONとして扱う
-                if (object.size === 0) {
-                    this.logger.warn('Existing bandit models file found in R2 but it is empty (0B). Initializing with an empty map and saving an empty JSON object to R2.');
-                    this.inMemoryModels = new Map<string, BanditModelState>();
-                    await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify({}));
-                    return; // 処理を終了
-                }
+        this.logger.info('Starting migration from R2 to DO Storage...');
+        try {
+            const object = await this.env.BANDIT_MODELS.get('bandit_models.json');
+            if (object) {
                 const modelsRecord = await object.json<Record<string, { A_inv: number[], b: number[], dimension: number, alpha: number }>>();
-                this.inMemoryModels = new Map(Object.entries(modelsRecord).map(([userId, model]) => [
-                    userId,
-                    {
+                const entries = Object.entries(modelsRecord);
+                this.logger.info(`Found ${entries.length} models in R2. saving to Storage...`);
+
+                // Batch put to storage
+                // Note: DO storage operations are optimized, but we should be careful with huge transactions.
+                // For < 1000 users, simple loop or singular put is fine. 
+                // If very large, we might need chunks, but SQLite backend handles transactions well.
+                const updates: Record<string, BanditModelState> = {};
+
+                for (const [userId, model] of entries) {
+                    const banditModel: BanditModelState = {
                         A_inv: new Float64Array(model.A_inv),
                         b: new Float64Array(model.b),
                         dimension: model.dimension,
                         alpha: model.alpha,
-                    }
-                ]));
-                this.logger.debug(`Successfully loaded ${this.inMemoryModels.size} bandit models from R2.`);
+                    };
+                    // Save to storage (we can use put(entries) object style)
+                    updates[userId] = banditModel;
+                }
+
+                if (entries.length > 0) {
+                    await this.state.storage.put(updates);
+                }
+                this.logger.info('Migration successful.');
             } else {
-                this.logger.debug('No existing bandit models file found in R2. Initializing with an empty map and saving an empty JSON object to R2.');
-                this.inMemoryModels = new Map<string, BanditModelState>();
-                // R2に空のJSONオブジェクトを書き込む
-                await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify({}));
+                this.logger.info('No R2 file found. Skipping migration.');
             }
-        } catch (error: unknown) {
-            const err = this.normalizeError(error);
-            this.logger.error('Error loading bandit models from R2. Starting fresh.', err, { errorName: err.name, errorMessage: err.message });
-            // In case of a loading/parsing error, start with a clean slate to avoid corruption.
-            this.inMemoryModels = new Map<string, BanditModelState>();
+
+            // Mark as done
+            await this.state.storage.put('migration_v1_r2_to_storage_done', true);
+
+        } catch (e) {
+            this.logger.error('Migration failed', e);
+            // Do not verify migration so we can retry on next restart if it failed halfway? 
+            // Or maybe partial success is dangerous. 
+            // For now, logging error and NOT setting flag so it retries.
         }
     }
 
-    // Save all in-memory bandit models to a single R2 object.
-    private async saveModelsToR2(): Promise<void> {
-        this.logger.debug(`Attempting to save ${this.inMemoryModels.size} bandit models to R2.`);
-        try {
-            const modelsToSave = Object.fromEntries(
-                Array.from(this.inMemoryModels.entries()).map(([userId, model]) => [
-                    userId,
-                    {
-                        A_inv: Array.from(model.A_inv),
-                        b: Array.from(model.b),
-                        dimension: model.dimension,
-                        alpha: model.alpha,
-                    }
-                ])
-            );
-            await this.env.BANDIT_MODELS.put(this.modelsR2Key, JSON.stringify(modelsToSave));
-            this.dirty = false; // Reset dirty flag after successful save
-            this.logger.debug('Successfully saved all bandit models to R2.');
-        } catch (error: unknown) {
-            const err = this.normalizeError(error);
-            this.logger.error('Failed to save bandit models to R2.', err, {
-                name: err.name,
-                message: err.message,
-                stack: err.stack,
-            });
+    // New Helper: Get Model (Cache -> Storage -> Init)
+    private async getModel(userId: string): Promise<BanditModelState | undefined> {
+        if (this.inMemoryModels.has(userId)) {
+            return this.inMemoryModels.get(userId);
         }
+
+        // Try storage
+        const stored = await this.state.storage.get<BanditModelState>(userId);
+        if (stored) {
+            // Restore Float64Arrays (Storage stores them as regular arrays/objects usually, need to verify serialization)
+            // Storing TypedArrays in DO Storage (SQLite) works via structured clone, but let's be safe.
+            // If it comes back as plain object/array:
+            const model: BanditModelState = {
+                A_inv: stored.A_inv instanceof Float64Array ? stored.A_inv : new Float64Array(stored.A_inv),
+                b: stored.b instanceof Float64Array ? stored.b : new Float64Array(stored.b),
+                dimension: stored.dimension,
+                alpha: stored.alpha
+            };
+            this.inMemoryModels.set(userId, model);
+            return model;
+        }
+
+        return undefined;
     }
+
+    // New Helper: Save Model (Cache + Storage)
+    private async saveModel(userId: string, model: BanditModelState): Promise<void> {
+        // Update Cache
+        this.inMemoryModels.set(userId, { ...model }); // Clone to be safe? 
+
+        // Update Storage
+        // We assume structured clone algorithm works for Float64Array in put()
+        await this.state.storage.put(userId, model);
+    }
+
+    // REMOVED: loadModelsFromR2
+    // REMOVED: saveModelsToR2
 
     // Initialize a new bandit model for a specific user.
     private initializeNewBanditModel(userId: string): BanditModelState {
@@ -147,9 +171,10 @@ export class ClickLogger extends DurableObject {
             dimension: dimension,
             alpha: 0.5, // UCB parameter
         };
-        this.inMemoryModels.set(userId, newModel);
-        this.dirty = true;
-        this.logger.debug(`Initialized new bandit model for userId: ${userId}`);
+        // this.inMemoryModels.set(userId, newModel);
+        // this.dirty = true;
+        // NOTE: We do NOT save automatically here, caller must call saveModel
+        this.logger.debug(`Initialized new bandit model object for userId: ${userId} (not saved yet)`);
         return newModel;
     }
 
@@ -322,23 +347,8 @@ export class ClickLogger extends DurableObject {
     }
 
     async alarm() {
-        // This alarm is triggered periodically to save dirty models to R2, process unclicked articles, and update models from feedback.
-        try {
-            if (this.dirty) {
-                this.logger.info('Alarm triggered. Saving dirty models to R2.');
-                await this.saveModelsToR2();
-            } else {
-                this.logger.debug('Alarm triggered, but no changes to save.');
-            }
-        } catch (error: unknown) {
-            const err = this.normalizeError(error);
-            this.logger.error('Error saving dirty models in ClickLogger alarm method:', err, {
-                errorName: err.name,
-                errorMessage: err.message,
-                errorStack: err.stack,
-                context: 'saveModelsToR2',
-            });
-        }
+        // This alarm is triggered periodically to process unclicked articles and update models from feedback.
+        // REMOVED: Saving dirty models to R2 (Storage is updated immediately)
 
         try {
             // Process unclicked articles
@@ -383,10 +393,10 @@ export class ClickLogger extends DurableObject {
     // Handle requests to the Durable Object
 
     private setupRoutes() {
-        // Middleware to ensure alarm and models are loaded
+        // Middleware to ensure alarm is set
         this.app.use('*', async (c, next) => {
             await this.ensureAlarmIsSet();
-            await this.ensureModelsLoaded();
+            // await this.ensureModelsLoaded(); // REMOVED: Models are lazy loaded via getModel
             await next();
         });
 
@@ -552,10 +562,11 @@ export class ClickLogger extends DurableObject {
                 }
 
                 if (immediateUpdate && embedding) {
-                    let banditModel = this.inMemoryModels.get(userId);
+                    let banditModel = await this.getModel(userId);
                     if (!banditModel) {
                         this.logger.warn(`No model found for user ${userId} in log-feedback. Initializing a new one.`);
                         banditModel = this.initializeNewBanditModel(userId);
+                        await this.saveModel(userId, banditModel);
                     }
 
                     if (embedding.length !== banditModel.dimension) {
@@ -569,7 +580,7 @@ export class ClickLogger extends DurableObject {
                     }
 
                     await this.updateBanditModel(banditModel, embedding, reward, userId);
-                    this.dirty = true;
+                    // this.dirty = true; // REMOVED
                     this.logger.info(`Successfully updated bandit model from feedback for article ${articleId} for user ${userId}`, { userId, articleId, feedback, reward });
                 } else {
                     this.logger.debug(`Immediate update not requested for feedback from user ${userId}, article ${articleId}. Model update will be handled periodically.`, { userId, articleId, feedback });
@@ -624,10 +635,11 @@ export class ClickLogger extends DurableObject {
                     return new Response('Invalid input: userId, articlesWithEmbeddings array, and userCTR are required', { status: 400 });
                 }
 
-                let banditModel = this.inMemoryModels.get(userId);
+                let banditModel = await this.getModel(userId);
                 if (!banditModel) {
                     this.logger.warn(`No model found for user ${userId} in get-ucb-values. Initializing a new one.`);
                     banditModel = this.initializeNewBanditModel(userId);
+                    await this.saveModel(userId, banditModel);
                 }
 
                 const ucbValues = await this.getUCBValues(userId, banditModel, articlesWithEmbeddings, userCTR);
@@ -710,10 +722,11 @@ export class ClickLogger extends DurableObject {
                     return new Response('Invalid parameters: userId and selectedArticles array are required', { status: 400 });
                 }
 
-                let banditModel = this.inMemoryModels.get(userId);
+                let banditModel = await this.getModel(userId);
                 if (!banditModel) {
                     this.logger.warn(`No model found for user ${userId} in learn-from-education. Initializing a new one.`);
                     banditModel = this.initializeNewBanditModel(userId);
+                    await this.saveModel(userId, banditModel);
                 }
 
                 const logStatements = [];
@@ -774,10 +787,10 @@ export class ClickLogger extends DurableObject {
 
                 if (logStatements.length > 0) {
                     this.state.waitUntil(this.env.DB.batch(logStatements));
-                    this.dirty = true;
+                    // this.dirty = true; // REMOVED
                     this.logger.debug(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
                     await this.updateUserProfileEmbeddingInD1(userId, banditModel);
-                    await this.saveModelsToR2();
+                    // await this.saveModelsToR2(); // REMOVED
                 }
                 return new Response('Learning from education completed', { status: 200 });
 
@@ -804,10 +817,11 @@ export class ClickLogger extends DurableObject {
                 }
 
                 if (userId) {
-                    let banditModel = this.inMemoryModels.get(userId);
+                    let banditModel = await this.getModel(userId);
                     if (!banditModel) {
                         this.logger.warn(`No model found for user ${userId} during embedding callback. Initializing a new one.`);
                         banditModel = this.initializeNewBanditModel(userId);
+                        await this.saveModel(userId, banditModel);
                     }
 
                     for (const embed of embeddings) {
@@ -815,7 +829,7 @@ export class ClickLogger extends DurableObject {
                         this.logger.debug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
                     }
                     await this.updateUserProfileEmbeddingInD1(userId, banditModel);
-                    this.dirty = true;
+                    // this.dirty = true; // REMOVED
                 } else {
                     this.logger.debug('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
                 }
@@ -842,14 +856,15 @@ export class ClickLogger extends DurableObject {
                     return new Response('Missing parameters', { status: 400 });
                 }
 
-                let banditModel = this.inMemoryModels.get(userId);
+                let banditModel = await this.getModel(userId);
                 if (!banditModel) {
                     this.logger.warn(`No model found for user ${userId} in update-bandit-from-click. Initializing a new one.`);
                     banditModel = this.initializeNewBanditModel(userId);
+                    await this.saveModel(userId, banditModel);
                 }
 
                 await this.updateBanditModel(banditModel, embedding, reward, userId);
-                this.dirty = true;
+                // this.dirty = true; // REMOVED
                 this.logger.debug(`Successfully updated bandit model from click for article ${articleId} for user ${userId}`);
                 return new Response('Bandit model updated', { status: 200 });
 
@@ -869,10 +884,10 @@ export class ClickLogger extends DurableObject {
         this.app.post('/delete-all-data', async (c) => {
             const request = c.req.raw;
             try {
-                this.logger.info(`Deleting all bandit models from R2.`);
-                await this.env.BANDIT_MODELS.delete(this.modelsR2Key);
+                this.logger.info(`Deleting all bandit models from Storage.`);
+                await this.state.storage.deleteAll();
                 this.inMemoryModels.clear();
-                this.dirty = false;
+                // this.dirty = false; // REMOVED
                 this.logger.info(`All bandit models deleted.`);
                 return new Response('All bandit models deleted', { status: 200 });
             } catch (error: unknown) {
@@ -898,10 +913,11 @@ export class ClickLogger extends DurableObject {
                     return new Response('Missing parameters', { status: 400 });
                 }
 
-                let banditModel = this.inMemoryModels.get(userId);
+                let banditModel = await this.getModel(userId);
                 if (!banditModel) {
                     this.logger.warn(`No model found for user ${userId} for preference score calculation. Initializing a new one.`);
                     banditModel = this.initializeNewBanditModel(userId);
+                    await this.saveModel(userId, banditModel); // Save it? Probably fine.
                 }
 
                 const userPreferenceVector = Array.from(banditModel.b);
@@ -1116,9 +1132,9 @@ export class ClickLogger extends DurableObject {
     // Process unclicked articles and update bandit models
     private async processUnclickedArticles(): Promise<void> {
         try {
-            // Get all user IDs that have sent articles
-            const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM sent_articles`).all<{ user_id: string }>();
             const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000); // 24時間前
+            // Get all user IDs that have sent articles in the last 24 hours (OPTIMIZATION)
+            const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM sent_articles WHERE timestamp >= ?`).bind(twentyFourHoursAgo).all<{ user_id: string }>();
 
             // 過去24時間以内に送信され、かつクリックされていないすべての記事を、すべてのユーザーに対して一度に取得
             const allUnclickedArticles = await this.env.DB.prepare(
@@ -1150,10 +1166,11 @@ export class ClickLogger extends DurableObject {
                 async (userId: string) => {
                     const unclickedArticlesForUser = articlesByUser.get(userId) || [];
 
-                    let banditModel = this.inMemoryModels.get(userId);
+                    let banditModel = await this.getModel(userId);
                     if (!banditModel) {
                         this.logger.warn(`No bandit model found for user ${userId} during unclicked article processing. Initializing a new one.`);
                         banditModel = this.initializeNewBanditModel(userId);
+                        await this.saveModel(userId, banditModel); // Save the new model
                     }
 
                     const now = Date.now();
@@ -1186,7 +1203,7 @@ export class ClickLogger extends DurableObject {
 
                             // クリックされなかった記事には負の報酬を与える (例: -0.1)
                             await this.updateBanditModel(banditModel, embeddingToUse, -0.1, userId, true);
-                            this.dirty = true;
+                            // this.dirty = true; // REMOVED
                             updatedCount++;
                         } else {
                             this.logger.warn(`Article ${article.article_id} from sent_articles missing embedding or published_at. Skipping update.`, { userId, articleId: article.article_id, hasEmbedding: !!article.embedding, hasPublishedAt: !!article.published_at });
@@ -1344,10 +1361,11 @@ export class ClickLogger extends DurableObject {
             for (const [userId, feedbackLogsForUser] of feedbackLogsByUser.entries()) {
                 this.logger.debug(`Processing pending feedback for user: ${userId}`, { userId, feedbackCount: feedbackLogsForUser.length });
 
-                let banditModel = this.inMemoryModels.get(userId);
+                let banditModel = await this.getModel(userId);
                 if (!banditModel) {
                     this.logger.warn(`No bandit model found for user ${userId} during feedback processing. Initializing a new one.`);
                     banditModel = this.initializeNewBanditModel(userId);
+                    await this.saveModel(userId, banditModel);
                 }
 
                 let updatedCount = 0;
@@ -1388,7 +1406,7 @@ export class ClickLogger extends DurableObject {
                             // 興味あり: 20.0, 興味なし: -20.0
                             const reward = log.action === 'interested' ? 20.0 : -20.0;
                             await this.updateBanditModel(banditModel, embedding, reward, userId, true);
-                            this.dirty = true;
+                            // this.dirty = true; // REMOVED
                             updatedCount++;
 
                             // Successfully processed, delete the log
@@ -1508,14 +1526,7 @@ export class ClickLogger extends DurableObject {
         }
     }
 
-    // Durable Objectがアイドル状態から復帰した際に、inMemoryModelsが空であればR2からロードを試みる
-    // これはDurable Objectのリセット後に状態が失われる問題への防御的なアプローチ
-    private async ensureModelsLoaded(): Promise<void> {
-        if (this.inMemoryModels.size === 0) {
-            this.logger.warn('inMemoryModels is empty. Attempting to reload models from R2.');
-            await this.loadModelsFromR2();
-        }
-    }
+    // REMOVED: ensureModelsLoaded (managed via getModel now)
 
     // Helper to normalize errors to Error objects
     private normalizeError(error: unknown): Error {
@@ -1575,6 +1586,10 @@ export class ClickLogger extends DurableObject {
             if (!skipProfileUpdate) {
                 await this.updateUserProfileEmbeddingInD1(userId, banditModel);
             }
+
+            // Save to Storage
+            await this.saveModel(userId, banditModel);
+
         } catch (error: unknown) {
             const err = this.normalizeError(error);
             this.logger.error("Error during WASM bandit model update:", err, {
