@@ -8,7 +8,7 @@ on:
 
 permissions:
   pull-requests: write
-  actions: read
+  actions: write
 
 jobs:
   label-if-secure:
@@ -36,6 +36,11 @@ jobs:
             const finishedWorkflows = new Set(
               runs.data.workflow_runs
                 .map(run => run.name)
+              .map(name => {
+                // Handle "Analyze (<language>)" format from CodeQL
+                if (name.startsWith('Analyze (')) return 'CodeQL';
+                return name;
+              })
             );
 
             console.log('Successful workflows found:', Array.from(finishedWorkflows));
@@ -46,8 +51,6 @@ jobs:
               console.log('All security checks passed. Proceeding to label PR.');
               
               // 3. Find the PR associated with this commit
-              // workflow_run payload usually contains pull_requests, but it's often empty for 'push' triggers
-              // We search for PRs associated with the commit
               const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -65,6 +68,25 @@ jobs:
                   labels: ['safe-to-preview']
                 });
                 console.log(`Added 'safe-to-preview' label to PR #${pr.number}`);
+
+                // 4. Trigger auto-merge workflow
+                try {
+                  console.log(`Triggering auto-merge for PR #${pr.number}...`);
+                  await github.rest.actions.createWorkflowDispatch({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    workflow_id: 'dependabot-auto-merge.yml',
+                    ref: 'main',
+                    inputs: {
+                      pr_url: pr.html_url
+                    }
+                  });
+                  console.log('Auto-merge workflow triggered successfully.');
+                } catch (error) {
+                  console.error(`Failed to trigger auto-merge: ${error.message}`);
+                  // Do not fail the workflow if triggering fails, as the label is already applied
+                }
+
               } else {
                 console.log('No PR found for this commit.');
               }
