@@ -197,10 +197,10 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     // --- Fetch Negative Feedback Embeddings ---
                     // 興味なしと判定された記事の埋め込みを取得 (sent_articlesと結合)
                     const negativeFeedbackResult = await env.DB.prepare(
-                        `SELECT sa.embedding
+                        `SELECT a.embedding
                          FROM education_logs el
-                         JOIN sent_articles sa ON el.article_id = sa.article_id AND el.user_id = sa.user_id
-                         WHERE el.user_id = ? AND el.action = 'not_interested' AND sa.embedding IS NOT NULL
+                         JOIN articles a ON el.article_id = a.article_id
+                         WHERE el.user_id = ? AND el.action = 'not_interested' AND a.embedding IS NOT NULL
                          ORDER BY el.timestamp DESC
                          LIMIT 50`
                     ).bind(userId).all<{ embedding: string }>();

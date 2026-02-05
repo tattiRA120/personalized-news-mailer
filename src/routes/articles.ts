@@ -158,6 +158,33 @@ app.get('/get-personalized-articles', async (c) => {
         // ユーザーのCTRを取得
         const userCTR = await getUserCTR(c.env, userId);
 
+        // --- Fetch Negative Feedback Embeddings ---
+        // 興味なしと判定された記事の埋め込みを取得 (sent_articlesとarticlesの両方から)
+        // 今回は全ての記事テーブル(articles)と結合して、WebでのDiscoveriesも含める
+        const negativeFeedbackResult = await c.env.DB.prepare(
+            `SELECT a.embedding
+             FROM education_logs el
+             JOIN articles a ON el.article_id = a.article_id
+             WHERE el.user_id = ? AND el.action = 'not_interested' AND a.embedding IS NOT NULL
+             ORDER BY el.timestamp DESC
+             LIMIT 50`
+        ).bind(userId).all<{ embedding: string }>();
+
+        const negativeFeedbackEmbeddings: number[][] = [];
+        if (negativeFeedbackResult.results) {
+            for (const row of negativeFeedbackResult.results) {
+                try {
+                    const embedding = JSON.parse(row.embedding);
+                    if (Array.isArray(embedding)) {
+                        negativeFeedbackEmbeddings.push(embedding);
+                    }
+                } catch (e) {
+                    logger.warn(`Failed to parse embedding for negative feedback article`, e);
+                }
+            }
+        }
+        logger.debug(`Fetched ${negativeFeedbackEmbeddings.length} negative feedback embeddings for user ${userId} (from ALL articles).`, { userId, count: negativeFeedbackEmbeddings.length });
+
         // WASM DOを使用してパーソナライズド記事を選択
         const wasmDOId = c.env.WASM_DO.idFromName("wasm-calculator");
         const wasmDOStub = c.env.WASM_DO.get(wasmDOId);
@@ -215,6 +242,7 @@ app.get('/get-personalized-articles', async (c) => {
                 userCTR: userCTR,
                 lambda: lambda,
                 workerBaseUrl: c.env.WORKER_BASE_URL,
+                negativeFeedbackEmbeddings: negativeFeedbackEmbeddings,
             }),
         }));
 
