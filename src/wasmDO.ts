@@ -130,15 +130,17 @@ export class WasmDO extends DurableObject<Env> {
         // POST /select-personalized-articles
         this.app.post('/select-personalized-articles', async (c) => {
             try {
-                const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl, negativeFeedbackEmbeddings } = await c.req.json<SelectPersonalizedArticlesRequest>();
+                const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl, negativeFeedbackEmbeddings, recentInterestEmbeddings } = await c.req.json<SelectPersonalizedArticlesRequest>();
 
                 if (!articles || !userProfileEmbeddingForSelection || !userId || !count || userCTR === undefined) {
                     return c.text("Missing required parameters for personalized article selection.", 400);
                 }
 
-                this.logger.info(`Selecting personalized articles for user ${userId} in WASM DO (Optimized).`, { userId, articleCount: articles.length, count });
+                this.logger.info(`Selecting personalized articles for user ${userId} using Portfolio Algorithm.`, { userId, articleCount: articles.length, count });
 
-                // Durable Object から記事のUCB値を取得
+                // --- 1. Pre-calculate scores for all articles ---
+
+                // Fetch UCB values from ClickLogger
                 const articlesWithEmbeddingsForUCB = articles
                     .filter((article: NewsArticleWithEmbedding) => article.embedding !== undefined)
                     .map((article: NewsArticleWithEmbedding) => ({ articleId: article.articleId, embedding: article.embedding! }));
@@ -148,43 +150,51 @@ export class WasmDO extends DurableObject<Env> {
                     try {
                         const clickLoggerId = this.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
                         const clickLoggerStub = this.env.CLICK_LOGGER.get(clickLoggerId);
-
                         const response = await clickLoggerStub.fetch(new Request(`${workerBaseUrl}/get-ucb-values`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ userId: userId, articlesWithEmbeddings: articlesWithEmbeddingsForUCB, userCTR: userCTR }),
                         }));
-
                         if (response.ok) {
                             ucbValues = await response.json();
-                            this.logger.info(`Received ${ucbValues.length} UCB values from ClickLogger.`, { userId });
-                        } else {
-                            const text = await response.text();
-                            this.logger.error(`Failed to get UCB values: ${response.status} ${text}`);
                         }
                     } catch (error) {
                         this.logger.error('Error fetching UCB values from ClickLogger in WASM DO:', error, { userId });
                     }
                 }
 
-                // ユーザー興味関心との関連度計算
-                const vec1sForInterestRelevance: number[][] = [];
-                const vec2sForInterestRelevance: number[][] = [];
-                const articleIndicesForInterestRelevance: number[] = [];
-
-                articles.forEach((article: NewsArticleWithEmbedding, index: number) => {
-                    if (userProfileEmbeddingForSelection && article.embedding) {
-                        vec1sForInterestRelevance.push(userProfileEmbeddingForSelection);
-                        vec2sForInterestRelevance.push(article.embedding);
-                        articleIndicesForInterestRelevance.push(index);
+                // Long-Term Interest Relevance (Sim to User Profile)
+                const longTermRelevanceMap = new Map<string, number>();
+                if (userProfileEmbeddingForSelection) {
+                    const vec1s = articles.filter(a => a.embedding).map(() => userProfileEmbeddingForSelection);
+                    const vec2s = articles.filter(a => a.embedding).map(a => a.embedding!);
+                    if (vec1s.length > 0) {
+                        const results = cosine_similarity_bulk(vec1s, vec2s);
+                        const articlesWithEmb = articles.filter(a => a.embedding);
+                        results.forEach((sim: number, idx: number) => {
+                            longTermRelevanceMap.set(articlesWithEmb[idx].articleId, sim);
+                        });
                     }
-                });
+                }
 
-                const interestRelevanceResults = vec1sForInterestRelevance.length > 0
-                    ? cosine_similarity_bulk(vec1sForInterestRelevance, vec2sForInterestRelevance)
-                    : [];
+                // Short-Term Interest Relevance (Max Sim to Recent Clicks)
+                const shortTermRelevanceMap = new Map<string, number>();
+                if (recentInterestEmbeddings && recentInterestEmbeddings.length > 0) {
+                    articles.forEach(article => {
+                        if (article.embedding) {
+                            let maxSim = 0;
+                            for (const recentEmb of recentInterestEmbeddings) {
+                                if (article.embedding.length === recentEmb.length) {
+                                    const sim = cosine_similarity(article.embedding, recentEmb);
+                                    if (sim > maxSim) maxSim = sim;
+                                }
+                            }
+                            shortTermRelevanceMap.set(article.articleId, maxSim);
+                        }
+                    });
+                }
 
-                // Negative Feedback Penalty Pre-calculation
+                // Negative Feedback Penalty
                 const negativePenaltyMap = new Map<string, number>();
                 if (negativeFeedbackEmbeddings && negativeFeedbackEmbeddings.length > 0) {
                     articles.forEach(article => {
@@ -201,136 +211,112 @@ export class WasmDO extends DurableObject<Env> {
                     });
                 }
 
-                // Calculate Initial Scores
-                const articlesWithFinalScore = articles.map((article, index) => {
+                // Freshness & UCB Scores
+                const articlesWithScores = articles.map(article => {
                     const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.articleId);
                     const ucb = ucbInfo ? ucbInfo.ucb : 0;
-
-                    let interestRelevance = 0;
-                    const relevanceIndex = articleIndicesForInterestRelevance.indexOf(index);
-                    if (relevanceIndex !== -1) {
-                        interestRelevance = interestRelevanceResults[relevanceIndex];
-                    }
-
-                    // Weights
-                    const interestWeight = 3.0;
-                    const baseUcbWeight = 1.0;
-                    const ucbWeight = baseUcbWeight + (1 - userCTR) * 0.5;
-
-                    // Freshness
                     let freshnessScore = 0;
                     if (article.embedding && article.embedding.length > 0) {
-                        const normalizedAge = article.embedding[article.embedding.length - 1]; // 0=New, 1=Old
+                        const normalizedAge = article.embedding[article.embedding.length - 1];
                         freshnessScore = Math.max(0, 1.0 - normalizedAge);
                     }
-                    const freshnessWeight = 0.8;
-
-                    // Penalty
-                    const penaltyWeight = 5.0;
-                    const maxSimilarityWithNegative = negativePenaltyMap.get(article.articleId) || 0;
-
-                    let finalScore = (interestRelevance * interestWeight) + (ucb * ucbWeight) + (freshnessScore * freshnessWeight);
-
-                    if (maxSimilarityWithNegative > 0.6) {
-                        const penaltyFactor = maxSimilarityWithNegative > 0.85 ? 10.0 : 1.0;
-                        finalScore -= maxSimilarityWithNegative * penaltyWeight * penaltyFactor;
-                    }
+                    const longTerm = longTermRelevanceMap.get(article.articleId) || 0;
+                    const shortTerm = shortTermRelevanceMap.get(article.articleId) || 0;
+                    const negPenalty = negativePenaltyMap.get(article.articleId) || 0;
 
                     return {
                         ...article,
                         ucb,
-                        finalScore,
-                        interestRelevance,
-                        embedding: article.embedding
+                        freshnessScore,
+                        longTermRelevance: longTerm,
+                        shortTermRelevance: shortTerm,
+                        negativePenalty: negPenalty,
                     };
                 });
 
-                // Filter out invalid scores or highly negative ones effectively
-                const validCandidates = articlesWithFinalScore.filter(a => a.embedding && a.finalScore > -100);
+                // Filter out articles with high negative penalty
+                const validCandidates = articlesWithScores.filter(a => a.embedding && a.negativePenalty < 0.75);
 
-                // Sort by initial score to pick the first best candidate
-                validCandidates.sort((a, b) => (b.finalScore || 0) - (a.finalScore || 0));
+                // --- 2. Portfolio Selection: 3 Buckets ---
+                const selectedIds = new Set<string>();
+                const selected: typeof validCandidates = [];
 
-                const selected: any[] = [];
-                const candidates = [...validCandidates];
+                const countA = Math.max(1, Math.floor(count * 0.4)); // Long-Term: 40%
+                const countB = Math.max(1, Math.floor(count * 0.4)); // Short-Term: 40%
+                const countC = Math.max(1, count - countA - countB);  // Exploration: 20%
 
-                // --- Optimized MMR Loop with O(k*N) complexity ---
+                // Bucket A: Long-Term Interest (Sort by longTermRelevance)
+                const bucketA = [...validCandidates]
+                    .sort((a, b) => b.longTermRelevance - a.longTermRelevance)
+                    .filter(a => !selectedIds.has(a.articleId))
+                    .slice(0, countA);
+                bucketA.forEach(a => { selected.push(a); selectedIds.add(a.articleId); });
+                this.logger.debug(`Portfolio Bucket A (Long-Term): Selected ${bucketA.length} articles.`);
 
-                // 1. Pick top 1
-                if (candidates.length > 0) {
-                    selected.push(candidates.shift());
-                }
+                // Bucket B: Short-Term Interest (Sort by shortTermRelevance)
+                const bucketB = [...validCandidates]
+                    .sort((a, b) => b.shortTermRelevance - a.shortTermRelevance)
+                    .filter(a => !selectedIds.has(a.articleId))
+                    .slice(0, countB);
+                bucketB.forEach(a => { selected.push(a); selectedIds.add(a.articleId); });
+                this.logger.debug(`Portfolio Bucket B (Short-Term): Selected ${bucketB.length} articles.`);
 
-                const maxSimMap = new Map<string, number>();
+                // Bucket C: Exploration (Sort by UCB + Freshness)
+                const bucketC = [...validCandidates]
+                    .sort((a, b) => (b.ucb + b.freshnessScore) - (a.ucb + a.freshnessScore))
+                    .filter(a => !selectedIds.has(a.articleId))
+                    .slice(0, countC);
+                bucketC.forEach(a => { selected.push(a); selectedIds.add(a.articleId); });
+                this.logger.debug(`Portfolio Bucket C (Exploration): Selected ${bucketC.length} articles.`);
 
+                // --- 3. MMR De-duplication Pass (Relaxed) ---
+                // Remove near-duplicate articles from the final list
                 const { cosine_similarity_one_to_many } = await import('../linalg-wasm/pkg/linalg_wasm');
+                const finalSelected: typeof selected = [];
+                const SIMILARITY_THRESHOLD = 0.90;
 
-                while (selected.length < count && candidates.length > 0) {
-                    const lastSelected = selected[selected.length - 1];
-
-                    if (lastSelected && lastSelected.embedding) {
-                        const candidateEmbeddings = candidates.map(c => c.embedding!);
-
-                        let newSims: number[] = [];
-                        try {
-                            newSims = cosine_similarity_one_to_many(lastSelected.embedding, candidateEmbeddings) as number[];
-                        } catch (e) {
-                            this.logger.error("Failed to use cosine_similarity_one_to_many, falling back to TS loop", e);
-                            const target = lastSelected.embedding;
-                            newSims = candidateEmbeddings.map(cand => {
-                                let dot = 0; let m1 = 0; let m2 = 0;
-                                for (let k = 0; k < target.length; k++) {
-                                    dot += target[k] * cand[k];
-                                    m1 += target[k] ** 2;
-                                    m2 += cand[k] ** 2;
+                for (const article of selected) {
+                    if (!article.embedding) {
+                        finalSelected.push(article);
+                        continue;
+                    }
+                    let isDuplicate = false;
+                    if (finalSelected.length > 0) {
+                        const existingEmbeddings = finalSelected.filter(a => a.embedding).map(a => a.embedding!);
+                        if (existingEmbeddings.length > 0) {
+                            try {
+                                const sims = cosine_similarity_one_to_many(article.embedding, existingEmbeddings) as number[];
+                                if (sims.some(s => s > SIMILARITY_THRESHOLD)) {
+                                    isDuplicate = true;
                                 }
-                                return (m1 && m2) ? dot / (Math.sqrt(m1) * Math.sqrt(m2)) : 0;
-                            });
-                        }
-
-                        candidates.forEach((cand, idx) => {
-                            const newSim = newSims[idx];
-                            const currentMax = maxSimMap.get(cand.articleId) || 0;
-                            if (newSim > currentMax) {
-                                maxSimMap.set(cand.articleId, newSim);
+                            } catch (e) {
+                                this.logger.warn("MMR dedup fallback", e);
                             }
-                        });
-                    }
-
-                    let bestScore = -Infinity;
-                    let bestIndex = -1;
-
-                    for (let i = 0; i < candidates.length; i++) {
-                        const cand = candidates[i];
-                        const sim = maxSimMap.get(cand.articleId) || 0;
-                        const relevance = cand.finalScore;
-
-                        let redundancyPenalty = 0;
-                        if (sim > 0.95) redundancyPenalty = 100.0;
-                        else if (sim > 0.8) redundancyPenalty = 10.0 * sim;
-                        else redundancyPenalty = (1.0 - lambda) * sim * 5.0;
-
-                        const mmr = lambda * relevance - redundancyPenalty;
-
-                        if (mmr > bestScore) {
-                            bestScore = mmr;
-                            bestIndex = i;
                         }
                     }
-
-                    if (bestIndex !== -1) {
-                        selected.push(candidates.splice(bestIndex, 1)[0]);
-                    } else {
-                        break;
+                    if (!isDuplicate) {
+                        finalSelected.push(article);
                     }
                 }
 
-                this.logger.info(`Finished personalized article selection via Optimized MMR. Selected ${selected.length} articles.`, { userId, selectedCount: selected.length });
+                // If MMR removed too many, fill from remaining candidates
+                if (finalSelected.length < count) {
+                    const remaining = validCandidates
+                        .filter(a => !finalSelected.some(f => f.articleId === a.articleId))
+                        .sort((a, b) => (b.longTermRelevance + b.shortTermRelevance) - (a.longTermRelevance + a.shortTermRelevance));
+                    let idx = 0;
+                    while (finalSelected.length < count && idx < remaining.length) {
+                        finalSelected.push(remaining[idx]);
+                        idx++;
+                    }
+                }
 
-                const avgRelevance = selected.reduce((sum, a) => sum + (a.interestRelevance || 0), 0) / (selected.length || 1);
+                this.logger.info(`Finished Portfolio Algorithm. Selected ${finalSelected.length} articles.`, { userId, selectedCount: finalSelected.length });
+
+                const avgRelevance = finalSelected.reduce((sum, a) => sum + (a.longTermRelevance || 0), 0) / (finalSelected.length || 1);
 
                 return c.json({
-                    articles: selected,
+                    articles: finalSelected,
                     avgRelevance: avgRelevance
                 });
 
@@ -341,6 +327,7 @@ export class WasmDO extends DurableObject<Env> {
                 }, 500);
             }
         });
+
 
         // Not Found Handler
         this.app.notFound((c) => {

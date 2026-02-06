@@ -2,7 +2,7 @@
 import { Hono } from 'hono';
 import { Env } from '../types/bindings';
 import { getLogger } from '../middlewares/logger';
-import { getArticlesFromD1, getUserCTR } from '../services/d1Service';
+import { getArticlesFromD1, getUserCTR, getRecentPositiveFeedbackEmbeddings } from '../services/d1Service';
 import { selectDissimilarArticles } from '../articleSelector';
 import { getUserProfile } from '../userProfile';
 import { NewsArticle } from '../newsCollector';
@@ -185,6 +185,10 @@ app.get('/get-personalized-articles', async (c) => {
         }
         logger.debug(`Fetched ${negativeFeedbackEmbeddings.length} negative feedback embeddings for user ${userId} (from ALL articles).`, { userId, count: negativeFeedbackEmbeddings.length });
 
+        // --- Fetch Recent Positive Feedback Embeddings (for Short-Term Interest) ---
+        const recentInterestEmbeddings = await getRecentPositiveFeedbackEmbeddings(c.env, userId, 10);
+        logger.debug(`Fetched ${recentInterestEmbeddings.length} recent positive feedback embeddings for user ${userId}.`, { userId, count: recentInterestEmbeddings.length });
+
         // WASM DOを使用してパーソナライズド記事を選択
         const wasmDOId = c.env.WASM_DO.idFromName("wasm-calculator");
         const wasmDOStub = c.env.WASM_DO.get(wasmDOId);
@@ -243,6 +247,7 @@ app.get('/get-personalized-articles', async (c) => {
                 lambda: lambda,
                 workerBaseUrl: c.env.WORKER_BASE_URL,
                 negativeFeedbackEmbeddings: negativeFeedbackEmbeddings,
+                recentInterestEmbeddings: recentInterestEmbeddings,
             }),
         }));
 

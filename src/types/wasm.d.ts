@@ -29,4 +29,5 @@ export interface SelectPersonalizedArticlesRequest {
     lambda?: number;
     workerBaseUrl: string; // ClickLoggerへのフェッチのために必要
     negativeFeedbackEmbeddings?: number[][]; // 興味なし記事の埋め込みベクトル
+    recentInterestEmbeddings?: number[][]; // 直近のポジティブフィードバック記事の埋め込みベクトル
 }

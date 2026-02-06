@@ -112,7 +112,7 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
     logger.info(`Fetching articles from D1 with limit ${limit}, offset ${offset}, where: ${whereClause}.`);
     try {
         let query = `SELECT article_id, title, url, published_at, content, embedding FROM articles`;
-        
+
         let finalWhereClause = whereClause;
         // whereClauseが指定されていない場合、またはembedding IS NULLを含まない場合にのみ、embedding IS NOT NULLを追加
         if (!whereClause || !whereClause.includes("embedding IS NULL")) {
@@ -292,7 +292,7 @@ export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimesta
     try {
         const tables = ['click_logs', 'sent_articles', 'education_logs'];
         for (const table of tables) {
-            const { success, error, meta } = await env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run() as D1Result; 
+            const { success, error, meta } = await env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run() as D1Result;
             if (success) {
                 totalDeleted += meta?.changes || 0;
                 logger.info(`Deleted ${meta?.changes || 0} old entries from ${table} for user ${userId}.`, { table, userId, deletedCount: meta?.changes || 0 });
@@ -379,7 +379,7 @@ export async function getClickLogsForUser(env: Env, userId: string): Promise<{ a
     const logger = new Logger(env);
     logger.info(`Fetching click logs for user ${userId} from DB.`);
     try {
-        const { results } = await env.DB.prepare( 
+        const { results } = await env.DB.prepare(
             `SELECT article_id, timestamp FROM click_logs WHERE user_id = ?`
         ).bind(userId).all<{ article_id: string, timestamp: number }>();
         logger.info(`Found ${results.length} click logs for user ${userId}.`, { userId, count: results.length });
@@ -465,5 +465,47 @@ export async function getUserCTR(env: Env, userId: string, days: number = 30): P
     } catch (error) {
         logger.error(`Error calculating CTR for user ${userId}:`, error, { userId });
         return 0.5; // エラー時もデフォルト値0.5を返す
+    }
+}
+
+/**
+ * ユーザーの直近のポジティブフィードバック（クリック）記事の埋め込みを取得します。
+ * ポートフォリオ型推薦アルゴリズムにおける「短期的興味」の計算に使用します。
+ * @param env 環境変数
+ * @param userId ユーザーID
+ * @param limit 取得する記事の最大数（デフォルト10）
+ * @returns 直近のクリック記事の埋め込みベクトルの配列
+ */
+export async function getRecentPositiveFeedbackEmbeddings(env: Env, userId: string, limit: number = 10): Promise<number[][]> {
+    const logger = new Logger(env);
+    logger.info(`Fetching recent positive feedback embeddings for user ${userId} (limit: ${limit}).`);
+    try {
+        const { results } = await env.DB.prepare(
+            `SELECT a.embedding
+             FROM click_logs cl
+             JOIN articles a ON cl.article_id = a.article_id
+             WHERE cl.user_id = ? AND a.embedding IS NOT NULL
+             ORDER BY cl.timestamp DESC
+             LIMIT ?`
+        ).bind(userId, limit).all<{ embedding: string }>();
+
+        const embeddings: number[][] = [];
+        if (results) {
+            for (const row of results) {
+                try {
+                    const embedding = JSON.parse(row.embedding);
+                    if (Array.isArray(embedding)) {
+                        embeddings.push(embedding);
+                    }
+                } catch (e) {
+                    logger.warn(`Failed to parse embedding for recent positive feedback article`, e);
+                }
+            }
+        }
+        logger.info(`Fetched ${embeddings.length} recent positive feedback embeddings for user ${userId}.`, { userId, count: embeddings.length });
+        return embeddings;
+    } catch (error) {
+        logger.error(`Error fetching recent positive feedback embeddings for user ${userId}:`, error, { userId });
+        return [];
     }
 }
