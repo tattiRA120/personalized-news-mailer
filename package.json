@@ -4,8 +4,8 @@
     "wrangler": "^4.63.0"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.3.4",
-    "hono": "^4.11.7",
+    "fast-xml-parser": "^5.3.5",
+    "hono": "^4.11.9",
     "linalg-wasm": "^0.1.0",
     "typescript": "^5.8.3"
   },
