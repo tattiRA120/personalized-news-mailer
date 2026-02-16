@@ -1,7 +1,7 @@
 {
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260212.0",
-    "wrangler": "^4.64.0"
+    "@cloudflare/workers-types": "^4.20260214.0",
+    "wrangler": "^4.65.0"
   },
   "dependencies": {
     "fast-xml-parser": "^5.3.6",
