@@ -20,7 +20,9 @@ const submitNewFeedbackBtn = document.getElementById('submit-new-feedback'); // 
 document.addEventListener('DOMContentLoaded', async () => {
     setupTabs();
     await fetchMMRSettings();
+    await fetchAlignmentScore();
     await fetchPersonalizedArticles(); // Load recommended by default
+    setupResetButton();
 });
 
 function setupTabs() {
@@ -72,18 +74,87 @@ async function fetchMMRSettings() {
 }
 
 
-function updateScoreDisplay(score) {
-    if (scoreValue) scoreValue.textContent = `${Math.round(score)}%`;
+async function fetchAlignmentScore() {
+    try {
+        const response = await fetch(`/api/alignment-score?userId=${encodeURIComponent(userId)}`);
+        if (response.ok) {
+            const data = await response.json();
+            updateAlignmentScoreDisplay(data);
+        }
+    } catch (error) {
+        console.error('Error fetching alignment score:', error);
+    }
+}
+
+function updateAlignmentScoreDisplay(data) {
+    const scoreValue = document.getElementById('score-value');
+    const scoreFill = document.getElementById('score-fill');
+    const scoreDetails = document.getElementById('score-details');
+
+    // data: { score: number, sampleSize: number, posCount: number, negCount: number, message?: string }
+    const score = data.score;
+    const percentage = Math.round(score * 100); // 0.5 -> 50%, 1.0 -> 100%
+
+    // Display: 0.5 is baseline (random). Scale visualization from 0.5 to 1.0? 
+    // Or just show raw AUC. Let's show raw AUC but mapped to 0-100% width where 50% is center?
+    // Actually, AUC < 0.5 is worse than random. 
+    // Let's just map 0.0-1.0 to 0-100% width.
+
+    if (scoreValue) scoreValue.textContent = score.toFixed(2);
+
     if (scoreFill) {
-        scoreFill.style.width = `${score}%`;
-        if (score < 30) {
-            scoreFill.style.backgroundColor = '#ff4d4d'; // Red
-        } else if (score < 70) {
-            scoreFill.style.backgroundColor = '#ffa600'; // Orange
+        scoreFill.style.width = `${Math.max(0, Math.min(100, score * 100))}%`;
+        // Color coding
+        if (score < 0.6) {
+            scoreFill.style.background = 'linear-gradient(90deg, #dc3545, #ffc107)';
+        } else if (score < 0.8) {
+            scoreFill.style.background = 'linear-gradient(90deg, #ffc107, #28a745)';
         } else {
-            scoreFill.style.backgroundColor = '#4caf50'; // Green
+            scoreFill.style.background = '#28a745';
         }
     }
+
+    if (scoreDetails) {
+        if (data.sampleSize > 0) {
+            scoreDetails.textContent = `(サンプル数: ${data.sampleSize}, Pos: ${data.posCount}, Neg: ${data.negCount})`;
+        } else {
+            scoreDetails.textContent = `(データ不足 - ${data.message || '学習中'})`;
+        }
+    }
+}
+
+function setupResetButton() {
+    const resetBtn = document.getElementById('reset-button');
+    if (!resetBtn) return;
+
+    resetBtn.addEventListener('click', async () => {
+        if (!confirm('本当に学習データをリセットしますか？この操作は取り消せません。')) {
+            return;
+        }
+
+        resetBtn.disabled = true;
+        resetBtn.textContent = 'リセット中...';
+
+        try {
+            const response = await fetch('/api/reset-user-data', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId })
+            });
+
+            if (response.ok) {
+                alert('データをリセットしました。ページを再読み込みします。');
+                window.location.reload();
+            } else {
+                throw new Error('Reset failed');
+            }
+        } catch (error) {
+            console.error('Error resetting data:', error);
+            alert('リセットに失敗しました。');
+            resetBtn.disabled = false;
+            resetBtn.textContent = '学習データをリセットする';
+        }
+    });
 }
 
 async function fetchPersonalizedArticles() {
@@ -100,7 +171,8 @@ async function fetchPersonalizedArticles() {
         } else {
             articles = data.articles || [];
             if (typeof data.score === 'number') {
-                updateScoreDisplay(data.score);
+                // Legacy score handling, ignore or remove
+                // updateScoreDisplay(data.score); 
             }
         }
 
@@ -260,11 +332,8 @@ submitButton.addEventListener('click', async () => {
 
         // Update score
         if (selectedArticleIds.length > 0) {
-            await fetch('/api/preference-score', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, selectedArticleIds })
-            });
+            // Recalculate alignment score
+            await fetchAlignmentScore();
 
             // Save selected articles to localStorage for display in the new tab
             const selectedArticles = articles.filter(a => selectedArticleIds.includes(a.articleId));

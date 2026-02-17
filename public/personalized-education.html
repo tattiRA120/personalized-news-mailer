@@ -170,26 +170,35 @@
             </div>
 
 
-            <!-- 好みスコア表示エリア -->
-            <div id="preference-score"
+            <!-- データリセットエリア -->
+            <div id="danger-zone" style="margin-top: 40px; padding: 15px; border: 1px solid #dc3545; border-radius: 8px;">
+                <h3 style="color: #dc3545; margin-top: 0;">Danger Zone (データリセット)</h3>
+                <p>学習したモデルとプロファイルを初期状態に戻します。これまでのフィードバック学習はリセットされますが、ログは保持されます。</p>
+                <button id="reset-button" style="background-color: #dc3545; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer;">学習データをリセットする</button>
+            </div>
+
+            <!-- Alignment Score表示エリア -->
+            <div id="alignment-score"
                 style="margin-top: 20px; padding: 15px; background-color: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6;">
-                <h3 style="margin: 0 0 10px 0; color: #495057;">現在の好みスコア</h3>
+                <h3 style="margin: 0 0 10px 0; color: #495057;">AI予測精度 (Alignment Score)</h3>
                 <div style="display: flex; align-items: center; gap: 15px;">
                     <div style="flex: 1;">
                         <div class="progress-bar"
                             style="width: 100%; height: 20px; background-color: #e9ecef; border-radius: 10px; overflow: hidden;">
                             <div class="progress-fill" id="score-fill"
-                                style="height: 100%; background: linear-gradient(90deg, #28a745 0%, #ffc107 50%, #dc3545 100%); border-radius: 10px; transition: width 0.3s ease; width: 0%;">
+                                style="height: 100%; background: linear-gradient(90deg, #dc3545 0%, #ffc107 50%, #28a745 100%); border-radius: 10px; transition: width 0.3s ease; width: 50%;">
                             </div>
                         </div>
                     </div>
                     <div class="score-text" id="score-value"
-                        style="font-size: 24px; font-weight: bold; color: #495057; min-width: 60px; text-align: center;">
-                        --%
+                        style="font-size: 24px; font-weight: bold; color: #495057; min-width: 80px; text-align: center;">
+                        --
                     </div>
                 </div>
                 <p style="margin: 10px 0 0 0; font-size: 14px; color: #6c757d;">
-                    AIがあなたの好みをどれだけ強く学習できているか（学習深度）を示しています。興味のある記事を選択することで、スコアが向上します。</p>
+                    あなたの最近のフィードバックと、現在のAIモデル（興味ベクトル）の整合性をAUC (0.5 - 1.0) で示しています。0.5はランダム、1.0は完璧に予測できている状態です。
+                    <br><span id="score-details" style="font-size: 0.9em; color: #888;">(データ不足)</span>
+                </p>
             </div>
 
             <div id="articles-list">

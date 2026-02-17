@@ -59,6 +59,158 @@ export class ClickLogger extends DurableObject {
 
             await this.migrateFromR2IfNeeded();
         });
+
+        // POST /calculate-alignment-score
+        // Calculates AUC (Area Under Curve) of the user's current embedding against their recent explicit feedback.
+        this.app.post('/calculate-alignment-score', async (c) => {
+            const request = c.req.raw;
+            try {
+                const { userId } = await request.json() as { userId: string };
+
+                if (!userId) {
+                    return new Response('Missing userId', { status: 400 });
+                }
+
+                const banditModel = await this.getModel(userId);
+                if (!banditModel) {
+                    return new Response(JSON.stringify({ score: 0.5, sampleSize: 0, message: 'No model found' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+                const userVector = Array.from(banditModel.b);
+
+                // Fetch recent feedback (both processed and unprocessed)
+                const Limit = 100;
+                const feedbackLogs = await this.env.DB.prepare(
+                    `SELECT article_id, action FROM education_logs WHERE user_id = ? AND action IN ('interested', 'not_interested') ORDER BY timestamp DESC LIMIT ?`
+                ).bind(userId, Limit).all<{ article_id: string, action: 'interested' | 'not_interested' }>();
+
+                if (!feedbackLogs.results || feedbackLogs.results.length === 0) {
+                    return new Response(JSON.stringify({ score: 0.5, sampleSize: 0, message: 'No feedback logs' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+
+                const articleIds = feedbackLogs.results.map(l => l.article_id);
+                // Fetch embeddings
+                // Note: unique IDs only for fetching
+                const uniqueArticleIds = [...new Set(articleIds)];
+
+                // Fetch from articles table (assuming most are there, some might be in sent_articles but processed ones should surely be in articles context... simply checking both is safer but let's try articles first for speed or reuse the logic?)
+                // Actually reuse the batch fetch logic style or just simple IN query.
+                // LIMIT 100 is small enough.
+                const placeholders = uniqueArticleIds.map(() => '?').join(',');
+                const embeddingsResult = await this.env.DB.prepare(
+                    `SELECT article_id, embedding FROM articles WHERE article_id IN (${placeholders}) AND embedding IS NOT NULL`
+                ).bind(...uniqueArticleIds).all<{ article_id: string, embedding: string }>();
+
+                const embeddingMap = new Map<string, number[]>();
+                if (embeddingsResult.results) {
+                    for (const row of embeddingsResult.results) {
+                        try {
+                            embeddingMap.set(row.article_id, JSON.parse(row.embedding));
+                        } catch (e) { /* ignore */ }
+                    }
+                }
+
+                // Also check sent_articles if missing? (simplified for now)
+
+                const interestedScores: number[] = [];
+                const notInterestedScores: number[] = [];
+
+                for (const log of feedbackLogs.results) {
+                    const embed = embeddingMap.get(log.article_id);
+                    if (!embed) continue;
+
+                    // Extend embedding if needed (simplified version of logic in other methods)
+                    // Assuming for now standard dimensions or robust enough.
+                    // Actually we should normalize age... but let's just use raw cosine for "content" alignment first? 
+                    // Or we should replicate the full scoring?
+                    // Let's use raw cosine of just the content part to see "interest" alignment independent of time?
+                    // The user's vector (b) includes time weight though.
+                    // Let's match dimensions.
+
+                    let vecToCheck = embed;
+                    if (vecToCheck.length < userVector.length) {
+                        // Pad with 0 (neutral freshness)
+                        vecToCheck = [...vecToCheck, 0];
+                    }
+                    if (vecToCheck.length > userVector.length) {
+                        vecToCheck = vecToCheck.slice(0, userVector.length);
+                    }
+
+                    const score = cosine_similarity(userVector, vecToCheck);
+
+                    if (log.action === 'interested') {
+                        interestedScores.push(score);
+                    } else {
+                        notInterestedScores.push(score);
+                    }
+                }
+
+                if (interestedScores.length === 0 || notInterestedScores.length === 0) {
+                    return new Response(JSON.stringify({ score: 0.5, sampleSize: interestedScores.length + notInterestedScores.length, message: 'Insufficient diversity in feedback' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+
+                // Calculate AUC
+                let correctPairs = 0;
+                let totalPairs = 0;
+                for (const pos of interestedScores) {
+                    for (const neg of notInterestedScores) {
+                        if (pos > neg) correctPairs++;
+                        if (pos === neg) correctPairs += 0.5;
+                        totalPairs++;
+                    }
+                }
+                const auc = totalPairs > 0 ? correctPairs / totalPairs : 0.5;
+
+                this.logger.info(`Calculated Alignment Score (AUC) for user ${userId}: ${auc.toFixed(3)} (Pos: ${interestedScores.length}, Neg: ${notInterestedScores.length})`);
+
+                return new Response(JSON.stringify({ score: auc, sampleSize: totalPairs, posCount: interestedScores.length, negCount: notInterestedScores.length }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error calculating alignment score:', err);
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        });
+
+        // POST /reset-user-data
+        // Resets the user's bandit model and profile.
+        this.app.post('/reset-user-data', async (c) => {
+            const request = c.req.raw;
+            try {
+                const { userId } = await request.json() as { userId: string };
+                if (!userId) return new Response('Missing userId', { status: 400 });
+
+                this.logger.warn(`RESETTING DATA for user ${userId}`);
+
+                // 1. Reset Bandit Model in DO Storage/Memory
+                const newModel = this.initializeNewBanditModel(userId);
+                await this.saveModel(userId, newModel);
+                this.inMemoryModels.set(userId, newModel); // Force update memory
+
+                // 2. Reset User Profile in D1
+                // We keep the email, but nuke embedding and mmr_lambda
+                await this.env.DB.prepare(
+                    `UPDATE users SET embedding = NULL, mmr_lambda = 0.5 WHERE user_id = ?`
+                ).bind(userId).run();
+
+                // 3. (Optional) Mark all education logs as processed? Or delete them? 
+                // If we reset, old feedback is now "invalid" for the new model history wise?
+                // Actually, if we reset, we might want to *re-learn* from them if we wanted to replay... 
+                // But the user asked for a reset to fix "bad data". 
+                // Let's leave the logs alone (they are processed=1 anyway). The model is fresh. 
+                // Future feedback will train the new model.
+
+                this.logger.info(`Successfully reset data for user ${userId}`);
+                return new Response('User data reset successfully', { status: 200 });
+
+            } catch (error: unknown) {
+                const err = this.normalizeError(error);
+                this.logger.error('Error resetting user data:', err);
+                return new Response('Internal Server Error', { status: 500 });
+            }
+        });
     }
 
     // Helper: Migrate from R2 to DO Storage (One-time)
@@ -1231,10 +1383,10 @@ export class ClickLogger extends DurableObject {
             const { results: distinctUsersWithFeedback } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM education_logs`).all<{ user_id: string }>();
             this.logger.info(`Found ${distinctUsersWithFeedback.length} distinct users with feedback logs.`, { distinctUsersWithFeedbackCount: distinctUsersWithFeedback.length });
 
-            // すべてのユーザーの最近のフィードバックログを一度に取得
+            // すべてのユーザーの最近の未処理フィードバックログを一度に取得
             const BATCH_SIZE = 50; // D1のSQL変数制限を考慮してバッチサイズを調整
             const allFeedbackLogs = await this.env.DB.prepare(
-                `SELECT user_id, article_id, action, timestamp FROM education_logs ORDER BY timestamp DESC LIMIT 500`
+                `SELECT user_id, article_id, action, timestamp FROM education_logs WHERE processed = 0 ORDER BY timestamp DESC LIMIT 500`
             ).all<{ user_id: string, article_id: string, action: string, timestamp: number }>();
 
             if (!allFeedbackLogs.results || allFeedbackLogs.results.length === 0) {
@@ -1395,10 +1547,10 @@ export class ClickLogger extends DurableObject {
                             await this.updateBanditModel(banditModel, embedding, reward, userId, true);
                             updatedCount++;
 
-                            // Successfully processed, delete the log
+                            // Successfully processed, mark as processed
                             logStatements.push(
                                 this.env.DB.prepare(
-                                    `DELETE FROM education_logs WHERE user_id = ? AND article_id = ? AND timestamp = ?`
+                                    `UPDATE education_logs SET processed = 1 WHERE user_id = ? AND article_id = ? AND timestamp = ?`
                                 ).bind(userId, log.article_id, log.timestamp)
                             );
                         } else {

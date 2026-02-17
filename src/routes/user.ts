@@ -349,4 +349,68 @@ app.post('/api/preference-score', async (c) => {
     }
 });
 
+// --- Get Alignment Score Handler ---
+app.get('/api/alignment-score', async (c) => {
+    const logger = getLogger(c);
+    const userId = c.req.query('userId');
+
+    if (!userId) {
+        return new Response('Missing userId', { status: 400 });
+    }
+
+    try {
+        const clickLoggerId = c.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+        const clickLogger = c.env.CLICK_LOGGER.get(clickLoggerId);
+
+        const response = await clickLogger.fetch(
+            new Request(`${c.env.WORKER_BASE_URL}/calculate-alignment-score`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId })
+            })
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            logger.error(`Failed to get alignment score: ${response.statusText}`, null, { userId, errorText });
+            return new Response(`Failed to get alignment score: ${response.statusText}`, { status: response.status });
+        }
+
+        const data = await response.json();
+        return c.json(data, 200);
+    } catch (e) {
+        logger.error('Error getting alignment score', e);
+        return new Response('Internal Server Error', { status: 500 });
+    }
+});
+
+// --- Reset User Data Handler ---
+app.post('/api/reset-user-data', async (c) => {
+    const logger = getLogger(c);
+    try {
+        const { userId } = await c.req.json() as { userId: string };
+        if (!userId) return new Response('Missing userId', { status: 400 });
+
+        const clickLoggerId = c.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+        const clickLogger = c.env.CLICK_LOGGER.get(clickLoggerId);
+
+        const response = await clickLogger.fetch(
+            new Request(`${c.env.WORKER_BASE_URL}/reset-user-data`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId })
+            })
+        );
+
+        if (!response.ok) {
+            return new Response('Failed to reset data', { status: response.status });
+        }
+
+        return c.json({ message: 'User data reset successfully' }, 200);
+    } catch (e) {
+        logger.error('Error resetting user data', e);
+        return new Response('Internal Server Error', { status: 500 });
+    }
+});
+
 export default app;
