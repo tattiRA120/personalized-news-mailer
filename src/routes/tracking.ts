@@ -91,11 +91,9 @@ app.get('/track-feedback', async (c) => {
             logger.error(`Failed to log feedback for user ${userId}, article ${articleId}: ${logFeedbackResponse.statusText}`, null, { userId, articleId, status: logFeedbackResponse.status, statusText: logFeedbackResponse.statusText });
         }
 
-        // ユーザーにフィードバックが記録されたことを伝える簡単なメッセージを返す
-        return new Response('フィードバックありがとうございます！', {
-            status: 200,
-            headers: { 'Content-Type': 'text/html; charset=utf-8' },
-        });
+        // Redirect to new education page with toast params
+        const educationUrl = `/education.html?userId=${encodeURIComponent(userId)}&feedback_success=true&articleId=${encodeURIComponent(articleId)}`;
+        return c.redirect(educationUrl, 302);
 
     } catch (error) {
         logger.error('Error during feedback tracking:', error, { userId, articleId, feedback, requestUrl: c.req.url });

@@ -413,4 +413,38 @@ app.post('/api/reset-user-data', async (c) => {
     }
 });
 
+// --- Get User Stats Handler (for Education Level) ---
+app.get('/api/user-stats', async (c) => {
+    const logger = getLogger(c);
+    const userId = c.req.query('userId');
+
+    if (!userId) {
+        return new Response('Missing userId', { status: 400 });
+    }
+
+    try {
+        const clickLoggerId = c.env.CLICK_LOGGER.idFromName("global-click-logger-hub");
+        const clickLogger = c.env.CLICK_LOGGER.get(clickLoggerId);
+
+        const response = await clickLogger.fetch(
+            new Request(`${c.env.WORKER_BASE_URL}/get-user-stats?userId=${encodeURIComponent(userId)}`, {
+                method: 'GET',
+            })
+        );
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            logger.error(`Failed to get user stats: ${response.statusText}`, null, { userId, errorText });
+            // Fallback to 0 if fails, to not break UI
+            return c.json({ educationCount: 0 }, 200);
+        }
+
+        const data = await response.json();
+        return c.json(data, 200);
+    } catch (e) {
+        logger.error('Error getting user stats', e);
+        return c.json({ educationCount: 0 }, 200);
+    }
+});
+
 export default app;

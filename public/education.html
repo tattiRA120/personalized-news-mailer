@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI教育 - 記事仕分け</title>
+    <link rel="stylesheet" href="education.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <header>
+            <div class="header-content">
+                <h1>Mail News AI Trainer</h1>
+                <div class="stats">
+                    <span id="learned-count">0</span> 学習済み | Sync: <span id="sync-rate">--</span>%
+                </div>
+            </div>
+            <div class="progress-container">
+                <div class="progress-bar" id="level-progress"></div>
+            </div>
+        </header>
+
+        <main id="card-container">
+            <div class="loading-state">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>記事を読み込んでいます...</p>
+            </div>
+            <div id="no-more-cards" class="hidden">
+                <i class="fas fa-check-circle"></i>
+                <h2>すべての記事をチェックしました！</h2>
+                <p>新しい記事が追加されるまでお待ちください。</p>
+                <button onclick="location.reload()">再読み込み</button>
+            </div>
+        </main>
+
+        <div class="controls">
+            <button id="btn-nope" class="control-btn nope" aria-label="興味なし">
+                <i class="fas fa-times"></i>
+            </button>
+            <button id="btn-super" class="control-btn super" aria-label="詳細を見る">
+                <i class="fas fa-external-link-alt"></i>
+            </button>
+            <button id="btn-like" class="control-btn like" aria-label="興味あり">
+                <i class="fas fa-heart"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden">学習しました！</div>
+
+    <script src="education.js"></script>
+</body>
+
+</html>
