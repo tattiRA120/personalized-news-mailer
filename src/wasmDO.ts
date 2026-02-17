@@ -3,7 +3,7 @@ import { DurableObject } from "cloudflare:workers";
 // WASMモジュールをインポート
 import init, { cosine_similarity } from '../linalg-wasm/pkg/linalg_wasm.js';
 import wasmModule from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
-import { cosine_similarity_bulk, calculate_similarity_matrix } from '../linalg-wasm/pkg/linalg_wasm';
+import { cosine_similarity_bulk, calculate_similarity_matrix, cosine_similarity_one_to_many } from '../linalg-wasm/pkg/linalg_wasm';
 
 // 依存関係のインポート
 import { ClickLogger } from './clickLogger';
@@ -11,6 +11,15 @@ import { Logger } from './logger';
 import { NewsArticleWithEmbedding, SelectPersonalizedArticlesRequest } from './types/wasm';
 import { Env } from './types/bindings';
 import { Hono } from 'hono';
+
+interface ScoredArticle extends NewsArticleWithEmbedding {
+    ucb: number;
+    freshnessScore: number;
+    longTermRelevance: number;
+    shortTermRelevance: number;
+    negativePenalty: number;
+    explorationScore: number;
+}
 
 export class WasmDO extends DurableObject<Env> {
     private wasmInitialized: boolean = false;
@@ -41,11 +50,13 @@ export class WasmDO extends DurableObject<Env> {
     private setupRoutes() {
         // Middleware to check WASM initialization
         this.app.use('*', async (c, next) => {
+            /* ログ過多のためコメントアウト
             this.logger.info(`WASM DO middleware check`, {
                 wasmInitialized: this.wasmInitialized,
                 path: c.req.path,
                 method: c.req.method
             });
+            */
 
             if (!this.wasmInitialized) {
                 this.logger.warn(`WASM not initialized yet for request: ${c.req.method} ${c.req.path}`);
@@ -128,6 +139,7 @@ export class WasmDO extends DurableObject<Env> {
         });
 
         // POST /select-personalized-articles
+        // Iterative Selection with Integrated Diversity (Refactored)
         this.app.post('/select-personalized-articles', async (c) => {
             try {
                 const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl, negativeFeedbackEmbeddings, recentInterestEmbeddings } = await c.req.json<SelectPersonalizedArticlesRequest>();
@@ -136,7 +148,7 @@ export class WasmDO extends DurableObject<Env> {
                     return c.text("Missing required parameters for personalized article selection.", 400);
                 }
 
-                this.logger.info(`Selecting personalized articles for user ${userId} using Portfolio Algorithm.`, { userId, articleCount: articles.length, count });
+                this.logger.info(`Selecting personalized articles for user ${userId} using Iterative Selection Algorithm.`, { userId, articleCount: articles.length, count });
 
                 // --- 1. Pre-calculate scores for all articles ---
 
@@ -177,19 +189,31 @@ export class WasmDO extends DurableObject<Env> {
                     }
                 }
 
-                // Short-Term Interest Relevance (Max Sim to Recent Clicks)
+                // Short-Term Interest Relevance (Time-Decayed Weighted Average)
+                // recentInterestEmbeddings は既に直近のもの順（新しい順）に来ていると仮定したいが、配列なのでインデックス0が最新かどうかに依存する。
+                // d1Service.ts の getRecentPositiveFeedbackEmbeddings 実装を見ると `ORDER BY timestamp DESC` なので、0が最新。
                 const shortTermRelevanceMap = new Map<string, number>();
                 if (recentInterestEmbeddings && recentInterestEmbeddings.length > 0) {
                     articles.forEach(article => {
                         if (article.embedding) {
-                            let maxSim = 0;
-                            for (const recentEmb of recentInterestEmbeddings) {
+                            let weightedSum = 0;
+                            let totalWeight = 0;
+                            const DECAY_FACTOR = 0.8; // 古いものほど影響力を下げる
+
+                            for (let i = 0; i < recentInterestEmbeddings.length; i++) {
+                                const recentEmb = recentInterestEmbeddings[i];
                                 if (article.embedding.length === recentEmb.length) {
                                     const sim = cosine_similarity(article.embedding, recentEmb);
-                                    if (sim > maxSim) maxSim = sim;
+                                    // 類似度が正の場合のみ加算（負の類似度はノイズになり得るので無視、あるいはそのまま加算もアリだが今回は正の興味にフォーカス）
+                                    if (sim > 0) {
+                                        const weight = Math.pow(DECAY_FACTOR, i);
+                                        weightedSum += sim * weight;
+                                        totalWeight += weight;
+                                    }
                                 }
                             }
-                            shortTermRelevanceMap.set(article.articleId, maxSim);
+                            // 重み付け平均。履歴がない場合は0。
+                            shortTermRelevanceMap.set(article.articleId, totalWeight > 0 ? weightedSum / totalWeight : 0);
                         }
                     });
                 }
@@ -211,112 +235,167 @@ export class WasmDO extends DurableObject<Env> {
                     });
                 }
 
-                // Freshness & UCB Scores
-                const articlesWithScores = articles.map(article => {
+                // Calculate Scores
+                const articlesWithScores: ScoredArticle[] = articles.map(article => {
                     const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.articleId);
-                    const ucb = ucbInfo ? ucbInfo.ucb : 0;
-                    let freshnessScore = 0;
+                    const ucb = ucbInfo ? ucbInfo.ucb : 0.0;
+                    
+                    let freshnessScore = 0.0;
+                    // Freshness is normalized 0 to 1 based on age in updated embedding
                     if (article.embedding && article.embedding.length > 0) {
                         const normalizedAge = article.embedding[article.embedding.length - 1];
+                        // normalizedAge is 0 (newest) to 1 (oldest/1week)
                         freshnessScore = Math.max(0, 1.0 - normalizedAge);
                     }
+                    
                     const longTerm = longTermRelevanceMap.get(article.articleId) || 0;
                     const shortTerm = shortTermRelevanceMap.get(article.articleId) || 0;
                     const negPenalty = negativePenaltyMap.get(article.articleId) || 0;
 
+                    // Exploration Score: Combine UCB and Freshness
+                    // UCB is typically small (e.g. 0.1 - 0.5 range for limited trials), Freshness is 0-1.
+                    // Normalize UCB? For now, we scale Freshness to match UCB's importance or vice versa.
+                    // Let's simply weight them.
+                    const explorationScore = (ucb * 1.5) + (freshnessScore * 1.0);
+
                     return {
                         ...article,
+                        embedding: article.embedding!, // Filter ensures this later
                         ucb,
                         freshnessScore,
                         longTermRelevance: longTerm,
                         shortTermRelevance: shortTerm,
                         negativePenalty: negPenalty,
+                        explorationScore: explorationScore
                     };
                 });
 
-                // Filter out articles with high negative penalty
-                const validCandidates = articlesWithScores.filter(a => a.embedding && a.negativePenalty < 0.75);
+                // Filter valid candidates
+                // Must have embedding, and must not be too similar to negative feedback
+                let candidates = articlesWithScores.filter(a => a.embedding !== undefined && a.negativePenalty < 0.75);
 
-                // --- 2. Portfolio Selection: 3 Buckets ---
+                // --- 2. Iterative Selection with Integrated Diversity ---
+                
+                const selectedArticles: ScoredArticle[] = [];
                 const selectedIds = new Set<string>();
-                const selected: typeof validCandidates = [];
+                
+                // Diversity Check Helper
+                const SIMILARITY_THRESHOLD = 0.85; // 重複とみなす閾値
+                const isTooSimilarToSelected = (candidate: ScoredArticle): boolean => {
+                    if (selectedArticles.length === 0) return false;
+                    const existingEmbeddings = selectedArticles.map(a => a.embedding);
+                    // cosine_similarity_one_to_many は1つのベクトルと複数のベクトルの類似度配列を返す
+                    const sims = cosine_similarity_one_to_many(candidate.embedding, existingEmbeddings) as number[];
+                    // どれか1つでも閾値を超えたら「類似しすぎ」と判定
+                    return sims.some(sim => sim > SIMILARITY_THRESHOLD);
+                };
 
-                const countA = Math.max(1, Math.floor(count * 0.4)); // Long-Term: 40%
-                const countB = Math.max(1, Math.floor(count * 0.4)); // Short-Term: 40%
-                const countC = Math.max(1, count - countA - countB);  // Exploration: 20%
+                // Sort candidates for each criterion beforehand to optimize selection
+                // Note: We need to re-scan for diversity, so we can't just pop from a stack,
+                // but we can iterate through a sorted list until we find a non-similar one.
+                const sortedByLong = [...candidates].sort((a, b) => b.longTermRelevance - a.longTermRelevance);
+                const sortedByShort = [...candidates].sort((a, b) => b.shortTermRelevance - a.shortTermRelevance);
+                const sortedByExplore = [...candidates].sort((a, b) => b.explorationScore - a.explorationScore);
 
-                // Bucket A: Long-Term Interest (Sort by longTermRelevance)
-                const bucketA = [...validCandidates]
-                    .sort((a, b) => b.longTermRelevance - a.longTermRelevance)
-                    .filter(a => !selectedIds.has(a.articleId))
-                    .slice(0, countA);
-                bucketA.forEach(a => { selected.push(a); selectedIds.add(a.articleId); });
-                this.logger.debug(`Portfolio Bucket A (Long-Term): Selected ${bucketA.length} articles.`);
+                // Pointers for each sorted list
+                let ptrLong = 0;
+                let ptrShort = 0;
+                let ptrExplore = 0;
 
-                // Bucket B: Short-Term Interest (Sort by shortTermRelevance)
-                const bucketB = [...validCandidates]
-                    .sort((a, b) => b.shortTermRelevance - a.shortTermRelevance)
-                    .filter(a => !selectedIds.has(a.articleId))
-                    .slice(0, countB);
-                bucketB.forEach(a => { selected.push(a); selectedIds.add(a.articleId); });
-                this.logger.debug(`Portfolio Bucket B (Short-Term): Selected ${bucketB.length} articles.`);
+                // Selection Ratios
+                // Pattern: A, B, A, B, C... (40% A, 40% B, 20% C)
+                // Cycle of 5: A, B, A, B, C
+                const selectionPattern = ['A', 'B', 'A', 'B', 'C'];
+                let patternIdx = 0;
 
-                // Bucket C: Exploration (Sort by UCB + Freshness)
-                const bucketC = [...validCandidates]
-                    .sort((a, b) => (b.ucb + b.freshnessScore) - (a.ucb + a.freshnessScore))
-                    .filter(a => !selectedIds.has(a.articleId))
-                    .slice(0, countC);
-                bucketC.forEach(a => { selected.push(a); selectedIds.add(a.articleId); });
-                this.logger.debug(`Portfolio Bucket C (Exploration): Selected ${bucketC.length} articles.`);
+                while (selectedArticles.length < count && candidates.length > selectedIds.size) {
+                    const turn = selectionPattern[patternIdx % selectionPattern.length];
+                    let chosen: ScoredArticle | null = null;
+                    let sourceBucket = '';
 
-                // --- 3. MMR De-duplication Pass (Relaxed) ---
-                // Remove near-duplicate articles from the final list
-                const { cosine_similarity_one_to_many } = await import('../linalg-wasm/pkg/linalg_wasm');
-                const finalSelected: typeof selected = [];
-                const SIMILARITY_THRESHOLD = 0.90;
-
-                for (const article of selected) {
-                    if (!article.embedding) {
-                        finalSelected.push(article);
-                        continue;
-                    }
-                    let isDuplicate = false;
-                    if (finalSelected.length > 0) {
-                        const existingEmbeddings = finalSelected.filter(a => a.embedding).map(a => a.embedding!);
-                        if (existingEmbeddings.length > 0) {
-                            try {
-                                const sims = cosine_similarity_one_to_many(article.embedding, existingEmbeddings) as number[];
-                                if (sims.some(s => s > SIMILARITY_THRESHOLD)) {
-                                    isDuplicate = true;
+                    if (turn === 'A') {
+                        // Long-Term
+                        while (ptrLong < sortedByLong.length) {
+                            const cand = sortedByLong[ptrLong];
+                            ptrLong++;
+                            if (!selectedIds.has(cand.articleId)) {
+                                if (!isTooSimilarToSelected(cand)) {
+                                    chosen = cand;
+                                    sourceBucket = 'Long-Term';
+                                    break;
                                 }
-                            } catch (e) {
-                                this.logger.warn("MMR dedup fallback", e);
+                            }
+                        }
+                    } else if (turn === 'B') {
+                        // Short-Term
+                        while (ptrShort < sortedByShort.length) {
+                            const cand = sortedByShort[ptrShort];
+                            ptrShort++;
+                            if (!selectedIds.has(cand.articleId)) {
+                                if (!isTooSimilarToSelected(cand)) {
+                                    chosen = cand;
+                                    sourceBucket = 'Short-Term';
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        // Exploration (C)
+                        while (ptrExplore < sortedByExplore.length) {
+                            const cand = sortedByExplore[ptrExplore];
+                            ptrExplore++;
+                            if (!selectedIds.has(cand.articleId)) {
+                                if (!isTooSimilarToSelected(cand)) {
+                                    chosen = cand;
+                                    sourceBucket = 'Exploration';
+                                    break;
+                                }
                             }
                         }
                     }
-                    if (!isDuplicate) {
-                        finalSelected.push(article);
+
+                    // If failed to find in the preferred bucket (due to diversity checks), 
+                    // try to fallback to the best remaining available from ANY list
+                    // (For simplicity, we just skip the turn if null, and the loop continues to next turn pattern)
+                    // But if we skip too many times, we might not fill the list.
+                    // Let's implement a fallback inside the loop if chosen is null.
+                    
+                    if (!chosen) {
+                         // Fallback: Pick highest "Long-Term" (safest) that isn't selected, ignorance of diversity check if strictly needed?
+                         // Better: Relax diversity check? Or just pick next available from sortedByLong skipping diversity check if we represent "Desperation"
+                         // For now, let's just proceed to next turn. If we circle through all patterns and can't find anything, we might be stuck.
+                         // But `candidates.length > selectedIds.size` ensures we have candidates.
+                         // If we iterated through ALL sorted lists and found nothing, it means everything remaining is "too similar".
+                         // In that case, we MUST pick something.
+                         if (ptrLong >= sortedByLong.length && ptrShort >= sortedByShort.length && ptrExplore >= sortedByExplore.length) {
+                             // All lists exhausted with diversity check.
+                             // Force pick from remaining unselected
+                             const remaining = candidates.filter(a => !selectedIds.has(a.articleId));
+                             if (remaining.length > 0) {
+                                 chosen = remaining[0]; // Pick any
+                                 sourceBucket = 'Fallback';
+                             } else {
+                                 break; // No more candidates
+                             }
+                         }
                     }
+
+                    if (chosen) {
+                        selectedArticles.push(chosen);
+                        selectedIds.add(chosen.articleId);
+                        // Log chosen article for debugging?
+                        // this.logger.debug(`Selected: ${chosen.title} [${sourceBucket}]`);
+                    }
+                    
+                    patternIdx++;
                 }
 
-                // If MMR removed too many, fill from remaining candidates
-                if (finalSelected.length < count) {
-                    const remaining = validCandidates
-                        .filter(a => !finalSelected.some(f => f.articleId === a.articleId))
-                        .sort((a, b) => (b.longTermRelevance + b.shortTermRelevance) - (a.longTermRelevance + a.shortTermRelevance));
-                    let idx = 0;
-                    while (finalSelected.length < count && idx < remaining.length) {
-                        finalSelected.push(remaining[idx]);
-                        idx++;
-                    }
-                }
+                this.logger.info(`Finished Iterative Selection. Selected ${selectedArticles.length} articles.`, { userId, selectedCount: selectedArticles.length });
 
-                this.logger.info(`Finished Portfolio Algorithm. Selected ${finalSelected.length} articles.`, { userId, selectedCount: finalSelected.length });
-
-                const avgRelevance = finalSelected.reduce((sum, a) => sum + (a.longTermRelevance || 0), 0) / (finalSelected.length || 1);
+                const avgRelevance = selectedArticles.reduce((sum, a) => sum + (a.longTermRelevance || 0), 0) / (selectedArticles.length || 1);
 
                 return c.json({
-                    articles: finalSelected,
+                    articles: selectedArticles,
                     avgRelevance: avgRelevance
                 });
 
@@ -342,18 +421,18 @@ export class WasmDO extends DurableObject<Env> {
 
     async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
-        this.logger.info(`WASM DO received request: ${request.method} ${url.pathname}`, {
-            method: request.method,
-            pathname: url.pathname,
-            fullUrl: request.url
-        });
+        // this.logger.info(`WASM DO received request: ${request.method} ${url.pathname}`, { // ログ削減
+        //     method: request.method,
+        //     pathname: url.pathname,
+        //     fullUrl: request.url
+        // });
 
         const response = await this.app.fetch(request, this.env);
 
-        this.logger.info(`WASM DO response status: ${response.status}`, {
-            status: response.status,
-            pathname: url.pathname
-        });
+        // this.logger.info(`WASM DO response status: ${response.status}`, { // ログ削減
+        //     status: response.status,
+        //     pathname: url.pathname
+        // });
 
         return response;
     }
