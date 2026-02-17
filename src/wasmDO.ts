@@ -142,7 +142,7 @@ export class WasmDO extends DurableObject<Env> {
         // Iterative Selection with Integrated Diversity (Refactored)
         this.app.post('/select-personalized-articles', async (c) => {
             try {
-                const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl, negativeFeedbackEmbeddings, recentInterestEmbeddings } = await c.req.json<SelectPersonalizedArticlesRequest>();
+                const { articles, userProfileEmbeddingForSelection, userId, count, userCTR, lambda = 0.5, workerBaseUrl, negativeFeedbackEmbeddings, recentInterestEmbeddings, explicitInterestEmbeddings } = await c.req.json<SelectPersonalizedArticlesRequest>();
 
                 if (!articles || !userProfileEmbeddingForSelection || !userId || !count || userCTR === undefined) {
                     return c.text("Missing required parameters for personalized article selection.", 400);

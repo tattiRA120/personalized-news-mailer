@@ -509,3 +509,47 @@ export async function getRecentPositiveFeedbackEmbeddings(env: Env, userId: stri
         return [];
     }
 }
+
+/**
+ * ユーザーが明示的に「興味あり」とフィードバックした記事の埋め込みを取得します。
+ * ポートフォリオ型推薦アルゴリズムにおける「教育的興味（Explicit Interest）」の計算に使用します。
+ * @param env 環境変数
+ * @param userId ユーザーID
+ * @param limit 取得する記事の最大数（デフォルト50）
+ * @returns 興味あり記事の埋め込みベクトルの配列
+ */
+export async function getExplicitPositiveFeedbackEmbeddings(env: Env, userId: string, limit: number = 50): Promise<number[][]> {
+    const logger = new Logger(env);
+    logger.info(`Fetching explicit positive feedback embeddings for user ${userId} (limit: ${limit}).`);
+    try {
+        // education_logs と articles (または sent_articles) を結合して埋め込みを取得
+        // action = 'interested' のもののみ
+        const { results } = await env.DB.prepare(
+            `SELECT a.embedding
+             FROM education_logs el
+             JOIN articles a ON el.article_id = a.article_id
+             WHERE el.user_id = ? AND el.action = 'interested' AND a.embedding IS NOT NULL
+             ORDER BY el.timestamp DESC
+             LIMIT ?`
+        ).bind(userId, limit).all<{ embedding: string }>();
+
+        const embeddings: number[][] = [];
+        if (results) {
+            for (const row of results) {
+                try {
+                    const embedding = JSON.parse(row.embedding);
+                    if (Array.isArray(embedding)) {
+                        embeddings.push(embedding);
+                    }
+                } catch (e) {
+                    logger.warn(`Failed to parse embedding for explicit positive feedback article`, e);
+                }
+            }
+        }
+        logger.info(`Fetched ${embeddings.length} explicit positive feedback embeddings for user ${userId}.`, { userId, count: embeddings.length });
+        return embeddings;
+    } catch (error) {
+        logger.error(`Error fetching explicit positive feedback embeddings for user ${userId}:`, error, { userId });
+        return [];
+    }
+}

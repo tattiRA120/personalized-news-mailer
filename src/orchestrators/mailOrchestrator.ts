@@ -220,6 +220,17 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                     }
                     logger.debug(`Fetched ${negativeFeedbackEmbeddings.length} negative feedback embeddings for user ${userId}.`, { userId, count: negativeFeedbackEmbeddings.length });
 
+                    // --- Fetch Recent Interest Embeddings (Short-Term Interest) ---
+                    // 直近のクリック（ポジティブフィードバック）記事の埋め込みを取得
+                    // d1Service.ts の getRecentPositiveFeedbackEmbeddings を使用 (これまで使われていなかったバグを修正)
+                    const recentInterestEmbeddings = await import('../services/d1Service').then(m => m.getRecentPositiveFeedbackEmbeddings(env, userId, 20));
+                    logger.debug(`Fetched ${recentInterestEmbeddings.length} recent interest embeddings for user ${userId}.`, { userId, count: recentInterestEmbeddings.length });
+
+                    // --- Fetch Explicit Interest Embeddings (Education) ---
+                    // 明示的に「興味あり」と判定された記事の埋め込みを取得
+                    const explicitInterestEmbeddings = await import('../services/d1Service').then(m => m.getExplicitPositiveFeedbackEmbeddings(env, userId, 50));
+                    logger.debug(`Fetched ${explicitInterestEmbeddings.length} explicit interest embeddings for user ${userId}.`, { userId, count: explicitInterestEmbeddings.length });
+
 
                     logger.debug(`Selecting personalized articles for user ${userId} from ${filteredArticlesForSelection.length} candidates.`, { userId, candidateCount: filteredArticlesForSelection.length });
 
@@ -239,6 +250,8 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
                             lambda: userMMRLambda,
                             workerBaseUrl: env.WORKER_BASE_URL,
                             negativeFeedbackEmbeddings: negativeFeedbackEmbeddings,
+                            recentInterestEmbeddings: recentInterestEmbeddings,
+                            explicitInterestEmbeddings: explicitInterestEmbeddings,
                         }),
                     }));
 

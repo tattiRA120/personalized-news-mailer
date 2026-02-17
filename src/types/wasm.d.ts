@@ -30,4 +30,5 @@ export interface SelectPersonalizedArticlesRequest {
     workerBaseUrl: string; // ClickLoggerへのフェッチのために必要
     negativeFeedbackEmbeddings?: number[][]; // 興味なし記事の埋め込みベクトル
     recentInterestEmbeddings?: number[][]; // 直近のポジティブフィードバック記事の埋め込みベクトル
+    explicitInterestEmbeddings?: number[][]; // ユーザーが明示的に「興味あり」とした記事の埋め込みベクトル
 }
