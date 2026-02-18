@@ -5,7 +5,7 @@
   },
   "dependencies": {
     "fast-xml-parser": "^5.3.6",
-    "hono": "^4.11.9",
+    "hono": "^4.11.10",
     "linalg-wasm": "^0.1.0",
     "typescript": "^5.8.3"
   },
