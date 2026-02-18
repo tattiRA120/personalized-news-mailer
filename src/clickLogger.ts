@@ -75,7 +75,19 @@ export class ClickLogger extends DurableObject {
                 if (!banditModel) {
                     return new Response(JSON.stringify({ score: 0.5, sampleSize: 0, message: 'No model found' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
                 }
-                const userVector = Array.from(banditModel.b);
+                // LinUCBの正しい推定パラメータ θ̂ = A_inv × b を計算する
+                // (生の b ベクトルは Σ(reward × embedding) の累積和であり、
+                //  cosine_similarity に使うと全記事のスコアが均一になりAUC=0.50になる)
+                const d = banditModel.dimension;
+                const aInvArr = Array.from(banditModel.A_inv);
+                const bArr = Array.from(banditModel.b);
+                const thetaHat: number[] = new Array(d).fill(0);
+                for (let i = 0; i < d; i++) {
+                    for (let j = 0; j < d; j++) {
+                        thetaHat[i] += aInvArr[i * d + j] * bArr[j];
+                    }
+                }
+                const userVector = thetaHat;
 
                 // Fetch recent feedback (both processed and unprocessed)
                 const Limit = 100;
