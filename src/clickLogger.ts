@@ -342,11 +342,21 @@ export class ClickLogger extends DurableObject {
     private async updateUserProfileEmbeddingInD1(userId: string, banditModel: BanditModelState): Promise<void> {
         this.logger.debug(`Attempting to update user profile embedding in D1 for user: ${userId}`);
         try {
-            // BanditModelのbベクトルをユーザーの興味プロファイルとして使用
-            // L2ノルムで正規化
-            const bVector = Array.from(banditModel.b);
-            const norm = Math.sqrt(bVector.reduce((sum, val) => sum + val * val, 0));
-            const normalizedEmbedding = norm > 0 ? bVector.map(val => val / norm) : new Array(banditModel.dimension).fill(0);
+            // LinUCBの正しい推定パラメータ θ̂ = A_inv × b を計算する
+            // (生の b ベクトルは Σ(reward × embedding) の累積和であり、
+            //  そのまま使うとユーザーの嗜好方向が正しく反映されない)
+            const d = banditModel.dimension;
+            const aInvArr = Array.from(banditModel.A_inv);
+            const bArr = Array.from(banditModel.b);
+            const thetaHat: number[] = new Array(d).fill(0);
+            for (let i = 0; i < d; i++) {
+                for (let j = 0; j < d; j++) {
+                    thetaHat[i] += aInvArr[i * d + j] * bArr[j];
+                }
+            }
+            // θ̂をL2ノルムで正規化
+            const norm = Math.sqrt(thetaHat.reduce((sum, val) => sum + val * val, 0));
+            const normalizedEmbedding = norm > 0 ? thetaHat.map(val => val / norm) : new Array(d).fill(0);
 
             // userProfile.ts の updateUserProfile 関数を呼び出す
             // email を保持するために、まず現在のユーザープロファイルを取得する
@@ -972,18 +982,11 @@ export class ClickLogger extends DurableObject {
                 }
 
                 if (userId) {
-                    let banditModel = await this.getModel(userId);
-                    if (!banditModel) {
-                        this.logger.warn(`No model found for user ${userId} during embedding callback. Initializing a new one.`);
-                        banditModel = this.initializeNewBanditModel(userId);
-                        await this.saveModel(userId, banditModel);
-                    }
-
-                    for (const embed of embeddings) {
-                        await this.updateBanditModel(banditModel, embed.embedding, 1.0, userId, true);
-                        this.logger.debug(`Updated bandit model for user ${userId} with embedding for article ${embed.articleId}.`);
-                    }
-                    await this.updateUserProfileEmbeddingInD1(userId, banditModel);
+                    // バンディットモデルの更新はここでは行わない。
+                    // education_logsに記録されたフィードバックが processPendingFeedback() で
+                    // 正しい報酬値（20.0/-20.0）で処理されるため、ここで無条件にreward=1.0で
+                    // 学習するとフィードバックの方向性が歪められる。
+                    this.logger.debug('Embedding completed callback received. Bandit model update is deferred to processPendingFeedback.', { userId, embeddingsCount: embeddings.length });
                 } else {
                     this.logger.debug('Embedding completed callback received without userId. Skipping bandit model update.', { embeddingsCount: embeddings.length });
                 }
@@ -1072,7 +1075,17 @@ export class ClickLogger extends DurableObject {
                     await this.saveModel(userId, banditModel); // Save it? Probably fine.
                 }
 
-                const userPreferenceVector = Array.from(banditModel.b);
+                // LinUCBの正しい推定パラメータ θ̂ = A_inv × b を計算する
+                const d = banditModel.dimension;
+                const aInvArr = Array.from(banditModel.A_inv);
+                const bArr = Array.from(banditModel.b);
+                const thetaHat: number[] = new Array(d).fill(0);
+                for (let i = 0; i < d; i++) {
+                    for (let j = 0; j < d; j++) {
+                        thetaHat[i] += aInvArr[i * d + j] * bArr[j];
+                    }
+                }
+                const userPreferenceVector = thetaHat;
 
                 const articlesWithEmbeddings = await getArticlesFromD1(this.env, selectedArticleIds.length, 0, `article_id IN (${selectedArticleIds.map(() => '?').join(',')}) AND embedding IS NOT NULL`, selectedArticleIds);
 

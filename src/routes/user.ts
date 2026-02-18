@@ -50,7 +50,7 @@ app.post('/submit-education-feedback', async (c) => {
         for (const item of feedbackData) {
             const article = item.article;
             const feedback = item.feedback;
-            const reward = feedback === 'interested' ? 5.0 : -1.0; // 興味あり: 5.0, 興味なし: -1.0
+            const reward = feedback === 'interested' ? 20.0 : -20.0; // 興味あり: 20.0, 興味なし: -20.0 (clickLoggerの教育フィードバックと統一)
 
             if (existingArticleIdsWithEmbeddingsSet.has(article.articleId)) {
                 const existingArticle = existingArticlesWithEmbeddingsInD1.find(a => a.articleId === article.articleId);
@@ -211,7 +211,7 @@ app.post('/submit-interests', async (c) => {
                             selectedArticles: batch.map(article => ({
                                 articleId: article.articleId,
                                 embedding: article.embedding!,
-                                reward: 5.0, // 興味ありとして報酬5.0
+                                reward: 20.0, // 興味ありとして報酬20.0 (clickLoggerの教育フィードバックと統一)
                             })),
                         }),
                     })
