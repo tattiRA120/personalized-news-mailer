@@ -233,37 +233,32 @@ export class ClickLogger extends DurableObject {
             return;
         }
 
-        this.logger.info('Starting migration from R2 to DO Storage...');
+        this.logger.info('Starting migration from R2 to DO Storage (new split format: A_inv->R2, rest->DO Storage)...');
         try {
             const object = await this.env.BANDIT_MODELS.get('bandit_models.json');
             if (object) {
                 const modelsRecord = await object.json<Record<string, { A_inv: number[], b: number[], dimension: number, alpha: number }>>();
                 const entries = Object.entries(modelsRecord);
-                this.logger.info(`Found ${entries.length} models in R2. saving to Storage...`);
-
-                // Batch put to storage
-                // Note: DO storage operations are optimized, but we should be careful with huge transactions.
-                // For < 1000 users, simple loop or singular put is fine. 
-                // If very large, we might need chunks, but SQLite backend handles transactions well.
-                const updates: Record<string, BanditModelState> = {};
+                this.logger.info(`Found ${entries.length} models in R2. Migrating to split format...`);
 
                 for (const [userId, model] of entries) {
-                    const banditModel: BanditModelState = {
-                        A_inv: new Float64Array(model.A_inv),
-                        b: new Float64Array(model.b),
+                    const aInv = new Float64Array(model.A_inv);
+                    const b = new Float64Array(model.b);
+
+                    // A_inv を R2 に保存 (2MB超のため DO Storage には入らない)
+                    await this.env.BANDIT_MODELS.put(`bandit_a_inv/${userId}.bin`, aInv.buffer as ArrayBuffer);
+
+                    // b / dimension / alpha を DO Storage に保存
+                    await this.state.storage.put(userId, {
+                        b,
                         dimension: model.dimension,
                         alpha: model.alpha,
-                    };
-                    // Save to storage (we can use put(entries) object style)
-                    updates[userId] = banditModel;
+                    });
                 }
 
-                if (entries.length > 0) {
-                    await this.state.storage.put(updates);
-                }
-                this.logger.info('Migration successful.');
+                this.logger.info('Migration to split format successful.');
             } else {
-                this.logger.info('No R2 file found. Skipping migration.');
+                this.logger.info('No R2 file (bandit_models.json) found. Skipping legacy migration.');
             }
 
             // Mark as done
@@ -271,29 +266,38 @@ export class ClickLogger extends DurableObject {
 
         } catch (e) {
             this.logger.error('Migration failed', e);
-            // Do not verify migration so we can retry on next restart if it failed halfway? 
-            // Or maybe partial success is dangerous. 
-            // For now, logging error and NOT setting flag so it retries.
+            // フラグをセットしないことで次回起動時にリトライ可能にする
         }
     }
 
     // New Helper: Get Model (Cache -> Storage -> Init)
+    // A_inv は R2 に、b/dimension/alpha は DO Storage に分割保存された形式を読み込む
     private async getModel(userId: string): Promise<BanditModelState | undefined> {
         if (this.inMemoryModels.has(userId)) {
             return this.inMemoryModels.get(userId);
         }
 
-        // Try storage
-        const stored = await this.state.storage.get<BanditModelState>(userId);
+        // DO Storage から b / dimension / alpha を取得
+        const stored = await this.state.storage.get<{ b: Float64Array | number[], dimension: number, alpha: number }>(userId);
         if (stored) {
-            // Restore Float64Arrays (Storage stores them as regular arrays/objects usually, need to verify serialization)
-            // Storing TypedArrays in DO Storage (SQLite) works via structured clone, but let's be safe.
-            // If it comes back as plain object/array:
+            // R2 から A_inv (ArrayBuffer) を取得
+            const r2Obj = await this.env.BANDIT_MODELS.get(`bandit_a_inv/${userId}.bin`);
+            let aInv: Float64Array;
+            if (r2Obj) {
+                aInv = new Float64Array(await r2Obj.arrayBuffer());
+            } else {
+                // R2 になければ単位行列で初期化（初回 or R2 消失時のフォールバック）
+                this.logger.warn(`A_inv not found in R2 for user ${userId}. Initializing as identity matrix.`, { userId });
+                const d = stored.dimension;
+                aInv = new Float64Array(d * d).fill(0);
+                for (let i = 0; i < d; i++) aInv[i * d + i] = 1.0;
+            }
+
             const model: BanditModelState = {
-                A_inv: stored.A_inv instanceof Float64Array ? stored.A_inv : new Float64Array(stored.A_inv),
+                A_inv: aInv,
                 b: stored.b instanceof Float64Array ? stored.b : new Float64Array(stored.b),
                 dimension: stored.dimension,
-                alpha: stored.alpha
+                alpha: stored.alpha,
             };
             this.inMemoryModels.set(userId, model);
             return model;
@@ -303,13 +307,21 @@ export class ClickLogger extends DurableObject {
     }
 
     // New Helper: Save Model (Cache + Storage)
+    // A_inv (約2MB超) は R2 に、b/dimension/alpha のみ DO Storage に保存する
+    // DO Storage の値サイズ上限 (2MB) を超えないようにするための分割保存
     private async saveModel(userId: string, model: BanditModelState): Promise<void> {
-        // Update Cache
-        this.inMemoryModels.set(userId, { ...model }); // Clone to be safe? 
+        // インメモリキャッシュを更新
+        this.inMemoryModels.set(userId, { ...model });
 
-        // Update Storage
-        // We assume structured clone algorithm works for Float64Array in put()
-        await this.state.storage.put(userId, model);
+        // A_inv を R2 に ArrayBuffer として保存（2MB超のため DO Storage には保存不可）
+        await this.env.BANDIT_MODELS.put(`bandit_a_inv/${userId}.bin`, model.A_inv.buffer as ArrayBuffer);
+
+        // b / dimension / alpha のみ DO Storage に保存
+        await this.state.storage.put(userId, {
+            b: model.b,
+            dimension: model.dimension,
+            alpha: model.alpha,
+        });
     }
 
 
