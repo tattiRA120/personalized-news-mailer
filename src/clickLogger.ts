@@ -314,7 +314,9 @@ export class ClickLogger extends DurableObject {
         this.inMemoryModels.set(userId, { ...model });
 
         // A_inv を R2 に ArrayBuffer として保存（2MB超のため DO Storage には保存不可）
-        await this.env.BANDIT_MODELS.put(`bandit_a_inv/${userId}.bin`, model.A_inv.buffer as ArrayBuffer);
+        // A_inv が Float64Array でない場合は変換する（WASM が number[] を返す場合のセーフティネット）
+        const aInvTyped = model.A_inv instanceof Float64Array ? model.A_inv : new Float64Array(model.A_inv);
+        await this.env.BANDIT_MODELS.put(`bandit_a_inv/${userId}.bin`, aInvTyped.buffer as ArrayBuffer);
 
         // b / dimension / alpha のみ DO Storage に保存
         await this.state.storage.put(userId, {
@@ -1751,8 +1753,9 @@ export class ClickLogger extends DurableObject {
             );
 
             // 更新されたモデルで inMemoryModels を更新
-            banditModel.A_inv = updatedWasmModel.a_inv;
-            banditModel.b = updatedWasmModel.b;
+            // WASM は a_inv/b を number[] (JS Array) として返すので、Float64Array に変換する
+            banditModel.A_inv = new Float64Array(updatedWasmModel.a_inv);
+            banditModel.b = new Float64Array(updatedWasmModel.b);
             // dimension は変わらないので更新不要
 
             this.logger.debug(`Bandit model updated for user ${userId} with reward ${reward.toFixed(2)}.`, { userId, reward });
