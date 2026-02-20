@@ -12,7 +12,7 @@ import { OPENAI_EMBEDDING_DIMENSION } from './config';
 import { getArticlesFromD1, updateArticleEmbeddingInD1 } from './services/d1Service';
 
 // 記事の鮮度情報を1次元追加するため、最終的な埋め込みベクトルの次元は OPENAI_EMBEDDING_DIMENSION + 1 となる
-export const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1; // orchestratorから参照するためexport
+const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1;
 
 // Contextual Bandit (LinUCB) モデルの状態を保持するインターフェース
 interface BanditModelState {

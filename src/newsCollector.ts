@@ -116,7 +116,7 @@ async function fetchRSSFeed(url: string, env: Env): Promise<string | null> {
     return null; // すべてのリトライが失敗した場合
 }
 
-export async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
+async function parseFeedWithFastXmlParser(xml: string, url: string, env: Env): Promise<NewsArticle[]> {
     const logger = new Logger(env);
     const articles: NewsArticle[] = [];
 

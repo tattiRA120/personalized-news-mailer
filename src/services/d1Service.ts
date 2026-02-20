@@ -338,38 +338,6 @@ export async function getSentArticlesForUser(env: Env, userId: string, sinceTime
 }
 
 /**
- * D1データベースから特定のユーザーが送信したが、クリックされていない記事を取得します。
- * @param env 環境変数
- * @param userId ユーザーID
- * @param sinceTimestamp このタイムスタンプ以降に送信された記事のみを対象
- * @returns 未クリックの送信済み記事の配列
- */
-export async function getUnclickedSentArticles(env: Env, userId: string, sinceTimestamp: number): Promise<{ article_id: string, timestamp: number, embedding: number[] }[]> {
-    const logger = new Logger(env);
-    logger.info(`Fetching unclicked sent articles for user ${userId} from DB since ${new Date(sinceTimestamp).toISOString()}.`);
-    try {
-        const { results } = await env.DB.prepare(
-            `SELECT sa.article_id, sa.timestamp, sa.embedding
-             FROM sent_articles sa
-             LEFT JOIN click_logs cl ON sa.user_id = cl.user_id AND sa.article_id = cl.article_id
-             WHERE sa.user_id = ? AND sa.timestamp >= ? AND cl.id IS NULL`
-        ).bind(userId, sinceTimestamp).all<{ article_id: string, timestamp: number, embedding: string }>();
-
-        const articles = results.map(row => ({
-            article_id: row.article_id,
-            timestamp: row.timestamp,
-            embedding: JSON.parse(row.embedding) as number[],
-        }));
-
-        logger.info(`Found ${articles.length} unclicked sent articles for user ${userId} since ${new Date(sinceTimestamp).toISOString()}.`, { userId, count: articles.length });
-        return articles;
-    } catch (error) {
-        logger.error(`Error fetching unclicked sent articles for user ${userId} from DB:`, error);
-        return [];
-    }
-}
-
-/**
  * D1データベースから未処理のクリックログを取得します。
  * @param env 環境変数
  * @param userId ユーザーID

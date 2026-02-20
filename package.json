@@ -1,16 +1,19 @@
 {
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260218.0",
+    "@types/node": "^25.3.0",
+    "knip": "^5.84.1",
+    "typescript": "^5.9.3",
     "wrangler": "^4.66.0"
   },
   "dependencies": {
     "fast-xml-parser": "^5.3.6",
     "hono": "^4.11.10",
-    "linalg-wasm": "^0.1.0",
-    "typescript": "^5.8.3"
+    "linalg-wasm": "^0.1.0"
   },
   "scripts": {
     "build:wasm": "cd linalg-wasm && wasm-pack build --target web && cp -r pkg/. ../public/wasm/",
-    "deploy": "npm run build:wasm && wrangler deploy"
+    "deploy": "npm run build:wasm && wrangler deploy",
+    "knip": "knip"
   }
 }

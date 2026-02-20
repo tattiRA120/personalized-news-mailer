@@ -1,7 +1,7 @@
 // src/logger.ts
 import { Env } from './types/bindings';
 
-export enum LogLevel {
+enum LogLevel {
     DEBUG = 0,
     INFO = 1,
     WARN = 2,

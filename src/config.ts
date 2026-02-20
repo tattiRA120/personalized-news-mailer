@@ -39,7 +39,7 @@ export const OPENAI_EMBEDDING_DIMENSION = 512; // OpenAI埋め込みベクトル
 export const CHUNK_SIZE = 1000; // OpenAI Batch API のチャンクサイズ
 export const RSS_FETCH_CHUNK_SIZE = 10; // RSSフィード取得時のチャンクサイズ
 
-export const NEWS_SOURCE_LOGOS: { [key: string]: string } = {
+export const NEWS_SOURCE_LOGOS: Record<string, string> = {
     'Reuters': 'https://cdn.freebiesupply.com/logos/large/2x/reuters-6-logo-png-transparent.png',
     'Bloomberg': 'https://images.ctfassets.net/lr0atmu04u9z/1PGS2NP94z5RP7L61GzIbm/85665ad1eadfd9c965448ad67097aba0/new_bloomberg_logosvg.png',
     'NHK': 'https://news.web.nhk/assets/ogp/nhk-one-news.png',

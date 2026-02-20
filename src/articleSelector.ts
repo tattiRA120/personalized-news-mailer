@@ -1,19 +1,12 @@
 // @ts-nocheck
 // src/articleSelector.ts
 
-import { UserProfile } from './userProfile';
-import { ClickLogger } from './clickLogger';
 import { Logger } from './logger';
 import { NewsArticle } from './newsCollector';
-import { UserProfile } from './userProfile';
-import { ClickLogger } from './clickLogger';
-import { Logger } from './logger';
-import { NewsArticle } from './newsCollector';
-import { getArticleByIdFromD1 } from './services/d1Service';
 import { Env } from './index';
 
 // コサイン類似度をバッチで計算するヘルパー関数 (Durable Object経由)
-export async function cosineSimilarityBulk(vec1s: number[][], vec2s: number[][], logger: Logger, env: Env): Promise<number[]> {
+async function cosineSimilarityBulk(vec1s: number[][], vec2s: number[][], logger: Logger, env: Env): Promise<number[]> {
     if (vec1s.length === 0 || vec1s.length !== vec2s.length) {
         logger.warn("Input vector arrays are empty or have mismatched lengths for bulk cosine similarity.", { vec1sLength: vec1s.length, vec2sLength: vec2s.length });
         return new Array(vec1s.length).fill(0);
@@ -45,7 +38,7 @@ export async function cosineSimilarityBulk(vec1s: number[][], vec2s: number[][],
 }
 
 // 全記事間の類似度行列を計算するヘルパー関数 (Durable Object経由)
-export async function calculateSimilarityMatrix(vectors: number[][], logger: Logger, env: Env): Promise<number[][]> {
+async function calculateSimilarityMatrix(vectors: number[][], logger: Logger, env: Env): Promise<number[][]> {
     if (vectors.length === 0) {
         logger.warn("Input vector array is empty for similarity matrix calculation.", { vectorsLength: vectors.length });
         return [];
@@ -88,7 +81,7 @@ export async function selectDissimilarArticles(
     count: number,
     env: Env
 ): Promise<NewsArticle[]> {
-    const logger = new Logger(env); // Loggerインスタンスを生成
+    const logger = new Logger(env);
 
     if (articles.length === 0 || count <= 0) {
         logger.info("No articles or count is zero, returning empty selection for dissimilar articles.", { articleCount: articles.length, count });
@@ -171,14 +164,3 @@ export async function selectDissimilarArticles(
     return selected;
 }
 
-// Basic function to select top N articles based on score (元の関数も残しておく)
-export function selectTopArticles(articles: NewsArticle[], count: number): NewsArticle[] {
-    // logInfo(`Selecting top ${count} articles based on score.`, { count, articleCount: articles.length }); // ログ出力を削除
-    // Sort articles by score in descending order
-    const sortedArticles = articles.sort((a, b) => (b.score || 0) - (a.score || 0));
-
-    // Select the top N articles
-    const selected = sortedArticles.slice(0, count);
-    // logInfo(`Selected ${selected.length} top articles.`, { selectedCount: selected.length }); // ログ出力を削除
-    return selected;
-}

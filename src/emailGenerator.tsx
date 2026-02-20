@@ -1,3 +1,4 @@
+import { collectNews, NewsArticle } from './newsCollector';
 import { Logger } from './logger';
 import { sendEmail as sendEmailWithGmail, GmailClientEnv } from './gmailClient';
 import { Env } from './types/bindings';
@@ -11,13 +12,6 @@ interface EmailRecipient {
     name?: string;
 }
 
-export interface NewsArticle {
-    articleId: string
-    title: string;
-    link: string;
-    sourceName: string;
-    summary?: string;
-}
 
 export async function generateNewsEmail(articles: NewsArticle[], userId: string, env: Env): Promise<string> {
     const logger = new Logger(env);
