@@ -7,7 +7,7 @@
     "wrangler": "^4.66.0"
   },
   "dependencies": {
-    "fast-xml-parser": "^5.3.6",
+    "fast-xml-parser": "^5.3.7",
     "hono": "^4.11.10",
     "linalg-wasm": "^0.1.0"
   },
