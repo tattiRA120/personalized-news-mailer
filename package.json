@@ -1,10 +1,10 @@
 {
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260218.0",
-    "@types/node": "^25.3.0",
-    "knip": "^5.84.1",
+    "@cloudflare/workers-types": "^4.20260226.1",
+    "@types/node": "^25.3.2",
+    "knip": "^5.85.0",
     "typescript": "^5.9.3",
-    "wrangler": "^4.66.0"
+    "wrangler": "^4.69.0"
   },
   "dependencies": {
     "fast-xml-parser": "^5.3.6",
