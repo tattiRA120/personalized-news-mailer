@@ -10,6 +10,9 @@ import wasm from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
 import { updateUserProfile } from './userProfile';
 import { OPENAI_EMBEDDING_DIMENSION } from './config';
 import { getArticlesFromD1, updateArticleEmbeddingInD1 } from './services/d1Service';
+import { getDb } from './db/index';
+import { articles, users, clickLogs, sentArticles, educationLogs } from './db/schema';
+import { eq, inArray, sql, count, desc, and, isNotNull, gte } from 'drizzle-orm';
 
 // 記事の鮮度情報を1次元追加するため、最終的な埋め込みベクトルの次元は OPENAI_EMBEDDING_DIMENSION + 1 となる
 const EXTENDED_EMBEDDING_DIMENSION = OPENAI_EMBEDDING_DIMENSION + 1;
@@ -91,15 +94,18 @@ export class ClickLogger extends DurableObject {
 
                 // Fetch recent feedback (both processed and unprocessed)
                 const Limit = 100;
-                const feedbackLogs = await this.env.DB.prepare(
-                    `SELECT article_id, action FROM education_logs WHERE user_id = ? AND action IN ('interested', 'not_interested') ORDER BY timestamp DESC LIMIT ?`
-                ).bind(userId, Limit).all<{ article_id: string, action: 'interested' | 'not_interested' }>();
+                const db = getDb(this.env);
+                const feedbackLogsResults = await db.select({ article_id: educationLogs.article_id, action: educationLogs.action })
+                    .from(educationLogs)
+                    .where(and(eq(educationLogs.user_id, userId), inArray(educationLogs.action, ['interested', 'not_interested'])))
+                    .orderBy(desc(educationLogs.timestamp))
+                    .limit(Limit);
 
-                if (!feedbackLogs.results || feedbackLogs.results.length === 0) {
+                if (!feedbackLogsResults || feedbackLogsResults.length === 0) {
                     return new Response(JSON.stringify({ score: 0.5, sampleSize: 0, message: 'No feedback logs' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
                 }
 
-                const articleIds = feedbackLogs.results.map(l => l.article_id);
+                const articleIds = feedbackLogsResults.map((l) => l.article_id);
                 // Fetch embeddings
                 // Note: unique IDs only for fetching
                 const uniqueArticleIds = [...new Set(articleIds)];
@@ -107,16 +113,18 @@ export class ClickLogger extends DurableObject {
                 // Fetch from articles table (assuming most are there, some might be in sent_articles but processed ones should surely be in articles context... simply checking both is safer but let's try articles first for speed or reuse the logic?)
                 // Actually reuse the batch fetch logic style or just simple IN query.
                 // LIMIT 100 is small enough.
-                const placeholders = uniqueArticleIds.map(() => '?').join(',');
-                const embeddingsResult = await this.env.DB.prepare(
-                    `SELECT article_id, embedding FROM articles WHERE article_id IN (${placeholders}) AND embedding IS NOT NULL`
-                ).bind(...uniqueArticleIds).all<{ article_id: string, embedding: string }>();
+                const embeddingsResults = await db.select({ article_id: articles.article_id, embedding: articles.embedding })
+                    .from(articles)
+                    .where(and(inArray(articles.article_id, uniqueArticleIds), isNotNull(articles.embedding)));
+
 
                 const embeddingMap = new Map<string, number[]>();
-                if (embeddingsResult.results) {
-                    for (const row of embeddingsResult.results) {
+                if (embeddingsResults) {
+                    for (const row of embeddingsResults) {
                         try {
-                            embeddingMap.set(row.article_id, JSON.parse(row.embedding));
+                            if (row.embedding) {
+                                embeddingMap.set(row.article_id, JSON.parse(row.embedding));
+                            }
                         } catch (e) { /* ignore */ }
                     }
                 }
@@ -126,7 +134,7 @@ export class ClickLogger extends DurableObject {
                 const interestedScores: number[] = [];
                 const notInterestedScores: number[] = [];
 
-                for (const log of feedbackLogs.results) {
+                for (const log of feedbackLogsResults) {
                     const embed = embeddingMap.get(log.article_id);
                     if (!embed) continue;
 
@@ -203,9 +211,10 @@ export class ClickLogger extends DurableObject {
 
                 // 2. Reset User Profile in D1
                 // We keep the email, but nuke embedding and mmr_lambda
-                await this.env.DB.prepare(
-                    `UPDATE users SET embedding = NULL, mmr_lambda = 0.5 WHERE user_id = ?`
-                ).bind(userId).run();
+                const db = getDb(this.env);
+                await db.update(users)
+                    .set({ embedding: null, mmr_lambda: 0.5 })
+                    .where(eq(users.user_id, userId));
 
                 // 3. (Optional) Mark all education logs as processed? Or delete them? 
                 // If we reset, old feedback is now "invalid" for the new model history wise?
@@ -374,9 +383,12 @@ export class ClickLogger extends DurableObject {
 
             // userProfile.ts の updateUserProfile 関数を呼び出す
             // email を保持するために、まず現在のユーザープロファイルを取得する
-            const currentUserProfile = await this.env.DB.prepare(
-                `SELECT email FROM users WHERE user_id = ?`
-            ).bind(userId).first<{ email: string }>();
+            const db = getDb(this.env);
+            const currentUserProfileResults = await db.select({ email: users.email })
+                .from(users)
+                .where(eq(users.user_id, userId))
+                .limit(1);
+            const currentUserProfile = currentUserProfileResults[0];
 
             const emailToUpdate = currentUserProfile?.email || ''; // 既存のemailを使用、なければ空文字列
 
@@ -394,23 +406,26 @@ export class ClickLogger extends DurableObject {
         const userCTR = await this.getUserCTR(userId);
 
         // フィードバック履歴を取得してlambdaを計算
-        const feedbackLogs = await this.env.DB.prepare(
-            `SELECT action FROM education_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT 20`
-        ).bind(userId).all<{ action: string }>();
+        const db = getDb(this.env);
+        const feedbackLogsResults = await db.select({ action: educationLogs.action })
+            .from(educationLogs)
+            .where(eq(educationLogs.user_id, userId))
+            .orderBy(desc(educationLogs.timestamp))
+            .limit(20);
 
         let lambda = 0.5; // デフォルト値
 
-        if (feedbackLogs.results && feedbackLogs.results.length > 0) {
-            this.logger.info(`Calculating optimized MMR lambda with ${feedbackLogs.results.length} feedback entries.`, { userId, feedbackCount: feedbackLogs.results.length });
+        if (feedbackLogsResults && feedbackLogsResults.length > 0) {
+            this.logger.info(`Calculating optimized MMR lambda with ${feedbackLogsResults.length} feedback entries.`, { userId, feedbackCount: feedbackLogsResults.length });
             // 詳細なフィードバック分析
-            const interestedCount = feedbackLogs.results.filter(log => log.action === 'interested').length;
-            const notInterestedCount = feedbackLogs.results.filter(log => log.action === 'not_interested').length;
-            const totalCount = feedbackLogs.results.length;
+            const interestedCount = feedbackLogsResults.filter(log => log.action === 'interested').length;
+            const notInterestedCount = feedbackLogsResults.filter(log => log.action === 'not_interested').length;
+            const totalCount = feedbackLogsResults.length;
             const interestRatio = interestedCount / totalCount;
             const notInterestRatio = notInterestedCount / totalCount;
 
             // 最近の傾向分析（最近10件）
-            const recentLogs = feedbackLogs.results.slice(0, 10);
+            const recentLogs = feedbackLogsResults.slice(0, 10);
             const recentInterestedCount = recentLogs.filter(log => log.action === 'interested').length;
             const recentNotInterestedCount = recentLogs.filter(log => log.action === 'not_interested').length;
             const recentTotalCount = recentLogs.length;
@@ -481,10 +496,10 @@ export class ClickLogger extends DurableObject {
             });
 
         } else {
-            this.logger.info(`No feedback logs found for user ${userId} or feedbackLogs.results is empty. Calculating initial MMR lambda based on CTR.`, {
+            this.logger.info(`No feedback logs found for user ${userId} or feedbackLogsResults is empty. Calculating initial MMR lambda based on CTR.`, {
                 userId,
-                feedbackLogsResultsExists: !!feedbackLogs.results,
-                feedbackLogsLength: feedbackLogs.results?.length ?? 0
+                feedbackLogsResultsExists: !!feedbackLogsResults,
+                feedbackLogsLength: feedbackLogsResults?.length ?? 0
             });
             // フィードバックがない場合はCTRに基づいて調整（少し類似性を高めに）
             lambda = 0.5 + (userCTR * 0.2); // CTRに応じて0.5-0.7の範囲
@@ -503,18 +518,19 @@ export class ClickLogger extends DurableObject {
     private async getUserCTR(userId: string): Promise<number> {
         try {
             const sinceTimestamp = Date.now() - 30 * 24 * 60 * 60 * 1000; // 30日間
+            const db = getDb(this.env);
 
             // 配信された記事数を取得
-            const sentCountResult = await this.env.DB.prepare(
-                `SELECT COUNT(DISTINCT article_id) as count FROM sent_articles WHERE user_id = ? AND timestamp >= ?`
-            ).bind(userId, sinceTimestamp).first<{ count: number }>();
-            const sentCount = sentCountResult?.count ?? 0;
+            const sentCountResults = await db.select({ count: count(sql`DISTINCT ${sentArticles.article_id}`) })
+                .from(sentArticles)
+                .where(and(eq(sentArticles.user_id, userId), gte(sentArticles.timestamp, sinceTimestamp)));
+            const sentCount = sentCountResults[0]?.count ?? 0;
 
             // クリックされた記事数を取得
-            const clickCountResult = await this.env.DB.prepare(
-                `SELECT COUNT(DISTINCT article_id) as count FROM click_logs WHERE user_id = ? AND timestamp >= ?`
-            ).bind(userId, sinceTimestamp).first<{ count: number }>();
-            const clickCount = clickCountResult?.count ?? 0;
+            const clickCountResults = await db.select({ count: count(sql`DISTINCT ${clickLogs.article_id}`) })
+                .from(clickLogs)
+                .where(and(eq(clickLogs.user_id, userId), gte(clickLogs.timestamp, sinceTimestamp)));
+            const clickCount = clickCountResults[0]?.count ?? 0;
 
             if (sentCount === 0) {
                 return 0.5; // 配信履歴がない場合はデフォルト値0.5を返す
@@ -641,9 +657,12 @@ export class ClickLogger extends DurableObject {
                     return new Response('Missing parameters', { status: 400 });
                 }
 
-                this.state.waitUntil(this.env.DB.prepare(
-                    `INSERT INTO click_logs (user_id, article_id, timestamp) VALUES (?, ?, ?)`
-                ).bind(userId, articleId, timestamp).run());
+                const db = getDb(this.env);
+                this.state.waitUntil(db.insert(clickLogs).values({
+                    user_id: userId,
+                    article_id: articleId,
+                    timestamp: timestamp
+                }).run());
 
                 this.logger.info(`Logged click for user ${userId}, article ${articleId}`);
                 return new Response('Click logged', { status: 200 });
@@ -681,9 +700,15 @@ export class ClickLogger extends DurableObject {
                 let embedding: number[] | undefined;
                 let source = 'unknown';
 
-                const sentArticleResult = await this.env.DB.prepare(
-                    `SELECT embedding FROM sent_articles WHERE user_id = ? AND article_id = ? ORDER BY timestamp DESC LIMIT 1`
-                ).bind(userId, articleId).first<{ embedding: string }>();
+                const db = getDb(this.env);
+
+                const sentArticleResults = await db.select({ embedding: sentArticles.embedding })
+                    .from(sentArticles)
+                    .where(and(eq(sentArticles.user_id, userId), eq(sentArticles.article_id, articleId)))
+                    .orderBy(desc(sentArticles.timestamp))
+                    .limit(1);
+
+                const sentArticleResult = sentArticleResults[0];
 
                 if (sentArticleResult && sentArticleResult.embedding) {
                     this.logger.debug(`Found embedding in sent_articles for article ${articleId} for user ${userId}.`, { userId, articleId });
@@ -691,9 +716,13 @@ export class ClickLogger extends DurableObject {
                     source = 'sent_articles';
                 } else {
                     this.logger.debug(`Embedding not found in sent_articles for article ${articleId} for user ${userId}. Fetching from articles table.`, { userId, articleId });
-                    const originalArticle = await this.env.DB.prepare(
-                        `SELECT embedding, published_at FROM articles WHERE article_id = ?`
-                    ).bind(articleId).first<{ embedding: string | null, published_at: string | null }>();
+
+                    const originalArticleResults = await db.select({ embedding: articles.embedding, published_at: articles.published_at })
+                        .from(articles)
+                        .where(eq(articles.article_id, articleId))
+                        .limit(1);
+
+                    const originalArticle = originalArticleResults[0];
 
                     if (originalArticle && originalArticle.embedding && originalArticle.published_at) {
                         try {
@@ -768,28 +797,39 @@ export class ClickLogger extends DurableObject {
                 }
 
                 if (!immediateUpdate) {
-                    await this.env.DB.prepare(
-                        `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
-                    ).bind(userId, articleId, timestamp, feedback).run();
+                    await db.insert(educationLogs).values({
+                        user_id: userId,
+                        article_id: articleId,
+                        timestamp: timestamp,
+                        action: feedback
+                    }).run();
                     this.logger.info(`Logged feedback to education_logs for user ${userId}, article ${articleId}, feedback: ${feedback}`);
                 } else {
                     this.logger.info(`Skipped logging to education_logs because immediate update was performed for user ${userId}, article ${articleId}`);
                 }
 
                 if (embedding) {
-                    await this.env.DB.prepare(
-                        `INSERT OR IGNORE INTO sent_articles (user_id, article_id, timestamp, embedding, published_at) VALUES (?, ?, ?, ?, ?)`
-                    ).bind(userId, articleId, timestamp, JSON.stringify(embedding), new Date().toISOString()).run();
+                    await db.insert(sentArticles).values({
+                        user_id: userId,
+                        article_id: articleId,
+                        timestamp: timestamp,
+                        embedding: JSON.stringify(embedding),
+                        published_at: Math.floor(Date.now() / 1000)
+                    }).onConflictDoNothing().run();
                 } else {
-                    await this.env.DB.prepare(
-                        `INSERT OR IGNORE INTO sent_articles (user_id, article_id, timestamp) VALUES (?, ?, ?)`
-                    ).bind(userId, articleId, timestamp).run();
+                    await db.insert(sentArticles).values({
+                        user_id: userId,
+                        article_id: articleId,
+                        timestamp: timestamp
+                    }).onConflictDoNothing().run();
                 }
 
                 if (feedback === 'interested') {
-                    await this.env.DB.prepare(
-                        `INSERT INTO click_logs (user_id, article_id, timestamp) VALUES (?, ?, ?)`
-                    ).bind(userId, articleId, timestamp).run();
+                    await db.insert(clickLogs).values({
+                        user_id: userId,
+                        article_id: articleId,
+                        timestamp: timestamp
+                    }).run();
                     this.logger.info(`Logged interested feedback as click for user ${userId}, article ${articleId}`);
                 }
 
@@ -849,31 +889,39 @@ export class ClickLogger extends DurableObject {
         this.app.post('/log-sent-articles', async (c) => {
             const request = c.req.raw;
             try {
-                const { userId, sentArticles } = await request.json() as LogSentArticlesRequestBody;
-                if (!userId || !Array.isArray(sentArticles)) {
+                const { userId, sentArticles: payloadSentArticles } = await request.json() as LogSentArticlesRequestBody;
+                if (!userId || !Array.isArray(payloadSentArticles)) {
                     return new Response('Invalid input: userId and sentArticles array are required', { status: 400 });
                 }
 
-                const statements = [];
-                for (const article of sentArticles) {
-                    const articleExists = await this.env.DB.prepare(`SELECT article_id FROM articles WHERE article_id = ?`).bind(article.articleId).all();
-                    if (articleExists.results && articleExists.results.length > 0) {
-                        statements.push(
-                            this.env.DB.prepare(
-                                `INSERT INTO sent_articles (user_id, article_id, timestamp, embedding, published_at) VALUES (?, ?, ?, ?, ?)`
-                            ).bind(userId, article.articleId, article.timestamp, article.embedding ? JSON.stringify(article.embedding) : null, article.publishedAt)
-                        );
+                const db = getDb(this.env);
+                const valuesToInsert: any[] = [];
+                for (const article of payloadSentArticles) {
+                    const articleExistsResults = await db.select({ article_id: articles.article_id })
+                        .from(articles)
+                        .where(eq(articles.article_id, article.articleId))
+                        .limit(1);
+
+                    if (articleExistsResults && articleExistsResults.length > 0) {
+                        valuesToInsert.push({
+                            user_id: userId,
+                            article_id: article.articleId,
+                            timestamp: article.timestamp,
+                            embedding: article.embedding ? JSON.stringify(article.embedding) : null,
+                            published_at: article.publishedAt
+                        });
                     } else {
                         this.logger.warn(`Skipping logging sent article ${article.articleId} for user ${userId} due to missing article in 'articles' table.`, { userId, articleId: article.articleId });
                     }
                 }
-                if (statements.length > 0) {
-                    this.state.waitUntil(this.env.DB.batch(statements));
+
+                if (valuesToInsert.length > 0) {
+                    this.state.waitUntil(db.insert(sentArticles).values(valuesToInsert).run());
                 } else {
                     this.logger.debug(`No valid sent articles to log for user ${userId}.`, { userId });
                 }
 
-                this.logger.debug(`Successfully logged ${sentArticles.length} sent articles for user ${userId}`);
+                this.logger.debug(`Successfully logged ${payloadSentArticles.length} sent articles for user ${userId}`);
                 return new Response('Sent articles logged', { status: 200 });
 
             } catch (error: unknown) {
@@ -910,7 +958,7 @@ export class ClickLogger extends DurableObject {
                     await this.saveModel(userId, banditModel);
                 }
 
-                const logStatements = [];
+                let logStatementsCount = 0;
                 for (const article of selectedArticles) {
                     if (article.embedding && article.reward !== undefined) {
                         let embeddingToUse = article.embedding;
@@ -923,9 +971,13 @@ export class ClickLogger extends DurableObject {
                                 modelDimension: banditModel.dimension
                             });
 
-                            const originalArticle = await this.env.DB.prepare(
-                                `SELECT embedding, published_at FROM articles WHERE article_id = ?`
-                            ).bind(article.articleId).first<{ embedding: string, published_at: string | null }>()
+                            const db = getDb(this.env);
+                            const originalArticleResults = await db.select({ embedding: articles.embedding, published_at: articles.published_at })
+                                .from(articles)
+                                .where(eq(articles.article_id, article.articleId))
+                                .limit(1);
+
+                            const originalArticle = originalArticleResults[0];
 
                             if (originalArticle && originalArticle.embedding && originalArticle.published_at !== null) {
                                 const originalEmbedding = JSON.parse(originalArticle.embedding) as number[];
@@ -958,17 +1010,19 @@ export class ClickLogger extends DurableObject {
                         }
 
                         await this.updateBanditModel(banditModel, embeddingToUse, article.reward, userId, true);
-                        logStatements.push(
-                            this.env.DB.prepare(
-                                `INSERT INTO education_logs (user_id, article_id, timestamp, action) VALUES (?, ?, ?, ?)`
-                            ).bind(userId, article.articleId, Date.now(), article.reward > 0 ? 'interested' : 'not_interested')
-                        );
+                        const db = getDb(this.env);
+                        await db.insert(educationLogs).values({
+                            user_id: userId,
+                            article_id: article.articleId,
+                            timestamp: Date.now(),
+                            action: article.reward > 0 ? 'interested' : 'not_interested'
+                        }).run();
+                        logStatementsCount++;
                     }
                 }
 
-                if (logStatements.length > 0) {
-                    this.state.waitUntil(this.env.DB.batch(logStatements));
-                    this.logger.debug(`Learned from ${logStatements.length} articles and updated bandit model for user ${userId}.`);
+                if (logStatementsCount > 0) {
+                    this.logger.debug(`Learned from ${logStatementsCount} articles and updated bandit model for user ${userId}.`);
                     await this.updateUserProfileEmbeddingInD1(userId, banditModel);
                 }
                 return new Response('Learning from education completed', { status: 200 });
@@ -1197,16 +1251,17 @@ export class ClickLogger extends DurableObject {
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                const sentCountResult = await this.env.DB.prepare(
-                    `SELECT COUNT(*) as count FROM sent_articles WHERE user_id = ?`
-                ).bind(userId).first<{ count: number }>();
+                const db = getDb(this.env);
+                const sentCountResults = await db.select({ count: count() })
+                    .from(sentArticles)
+                    .where(eq(sentArticles.user_id, userId));
 
-                const clickCountResult = await this.env.DB.prepare(
-                    `SELECT COUNT(*) as count FROM click_logs WHERE user_id = ?`
-                ).bind(userId).first<{ count: number }>();
+                const clickCountResults = await db.select({ count: count() })
+                    .from(clickLogs)
+                    .where(eq(clickLogs.user_id, userId));
 
-                const sentCount = sentCountResult?.count || 0;
-                const clickCount = clickCountResult?.count || 0;
+                const sentCount = sentCountResults[0]?.count || 0;
+                const clickCount = clickCountResults[0]?.count || 0;
 
                 const preferenceScore = Math.min(clickCount, 100);
 
@@ -1240,11 +1295,13 @@ export class ClickLogger extends DurableObject {
                     return new Response('Missing userId', { status: 400 });
                 }
 
-                const userProfile = await this.env.DB.prepare(
-                    `SELECT mmr_lambda FROM users WHERE user_id = ?`
-                ).bind(userId).first<{ mmr_lambda: number | null }>();
+                const db = getDb(this.env);
+                const userProfileResults = await db.select({ mmr_lambda: users.mmr_lambda })
+                    .from(users)
+                    .where(eq(users.user_id, userId))
+                    .limit(1);
 
-                const lambda = userProfile?.mmr_lambda ?? 0.5;
+                const lambda = userProfileResults[0]?.mmr_lambda ?? 0.5;
 
                 this.logger.debug(`Retrieved MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
 
@@ -1279,9 +1336,11 @@ export class ClickLogger extends DurableObject {
                 const lambda = await this.calculateMMRLambda(userId);
 
                 if (immediate) {
-                    this.state.waitUntil(this.env.DB.prepare(
-                        `UPDATE users SET mmr_lambda = ? WHERE user_id = ?`
-                    ).bind(lambda, userId).run());
+                    const db = getDb(this.env);
+                    this.state.waitUntil(db.update(users)
+                        .set({ mmr_lambda: lambda })
+                        .where(eq(users.user_id, userId))
+                        .run());
                     this.logger.debug(`Immediately updated MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
                 }
 
@@ -1312,25 +1371,31 @@ export class ClickLogger extends DurableObject {
     private async processUnclickedArticles(): Promise<void> {
         try {
             const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000); // 24時間前
+            const db = getDb(this.env);
             // Get all user IDs that have sent articles in the last 24 hours (OPTIMIZATION)
-            const { results } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM sent_articles WHERE timestamp >= ?`).bind(twentyFourHoursAgo).all<{ user_id: string }>();
+            const distinctUserResults = await db.selectDistinct({ user_id: sentArticles.user_id })
+                .from(sentArticles)
+                .where(gte(sentArticles.timestamp, twentyFourHoursAgo));
 
             // 過去24時間以内に送信され、かつクリックされていないすべての記事を、すべてのユーザーに対して一度に取得
-            const allUnclickedArticles = await this.env.DB.prepare(
-                `SELECT sa.user_id, sa.article_id, sa.embedding, sa.published_at
-                 FROM sent_articles sa
-                 LEFT JOIN click_logs cl ON sa.user_id = cl.user_id AND sa.article_id = cl.article_id
-                 WHERE sa.timestamp >= ? AND cl.id IS NULL`
-            ).bind(twentyFourHoursAgo).all<{ user_id: string, article_id: string, embedding: string, published_at: string }>();
+            const allUnclickedArticlesResults = await db.select({
+                user_id: sentArticles.user_id,
+                article_id: sentArticles.article_id,
+                embedding: sentArticles.embedding,
+                published_at: sentArticles.published_at
+            })
+                .from(sentArticles)
+                .leftJoin(clickLogs, and(eq(sentArticles.user_id, clickLogs.user_id), eq(sentArticles.article_id, clickLogs.article_id)))
+                .where(and(gte(sentArticles.timestamp, twentyFourHoursAgo), sql`${clickLogs.id} IS NULL`));
 
-            if (!allUnclickedArticles.results || allUnclickedArticles.results.length === 0) {
+            if (!allUnclickedArticlesResults || allUnclickedArticlesResults.length === 0) {
                 this.logger.debug('No unclicked articles found within the last 24 hours for any user.');
                 return;
             }
 
             // ユーザーIDごとに記事をグループ化
-            const articlesByUser = new Map<string, { article_id: string, embedding: string, published_at: string }[]>();
-            for (const article of allUnclickedArticles.results) {
+            const articlesByUser = new Map<string, { article_id: string, embedding: string | null, published_at: number | null }[]>();
+            for (const article of allUnclickedArticlesResults) {
                 if (!articlesByUser.has(article.user_id)) {
                     articlesByUser.set(article.user_id, []);
                 }
@@ -1419,24 +1484,33 @@ export class ClickLogger extends DurableObject {
         this.logger.debug('Starting to process pending feedback.');
         try {
             // Get all user IDs that have feedback logs
-            const { results: distinctUsersWithFeedback } = await this.env.DB.prepare(`SELECT DISTINCT user_id FROM education_logs`).all<{ user_id: string }>();
+            const db = getDb(this.env);
+            const distinctUsersWithFeedback = await db.selectDistinct({ user_id: educationLogs.user_id })
+                .from(educationLogs);
             this.logger.info(`Found ${distinctUsersWithFeedback.length} distinct users with feedback logs.`, { distinctUsersWithFeedbackCount: distinctUsersWithFeedback.length });
 
             // すべてのユーザーの最近の未処理フィードバックログを一度に取得
             const BATCH_SIZE = 50; // D1のSQL変数制限を考慮してバッチサイズを調整
-            const allFeedbackLogs = await this.env.DB.prepare(
-                `SELECT user_id, article_id, action, timestamp FROM education_logs WHERE processed = 0 ORDER BY timestamp DESC LIMIT 500`
-            ).all<{ user_id: string, article_id: string, action: string, timestamp: number }>();
+            const allFeedbackLogsResults = await db.select({
+                user_id: educationLogs.user_id,
+                article_id: educationLogs.article_id,
+                action: educationLogs.action,
+                timestamp: educationLogs.timestamp
+            })
+                .from(educationLogs)
+                .where(eq(educationLogs.processed, 0))
+                .orderBy(desc(educationLogs.timestamp))
+                .limit(500);
 
-            if (!allFeedbackLogs.results || allFeedbackLogs.results.length === 0) {
+            if (!allFeedbackLogsResults || allFeedbackLogsResults.length === 0) {
                 this.logger.info('No feedback logs found in the database for any user.');
                 return;
             }
-            this.logger.info(`Fetched ${allFeedbackLogs.results.length} feedback logs from the database.`, { totalFeedbackLogsFetched: allFeedbackLogs.results.length });
+            this.logger.info(`Fetched ${allFeedbackLogsResults.length} feedback logs from the database.`, { totalFeedbackLogsFetched: allFeedbackLogsResults.length });
 
             // ユーザーIDごとにフィードバックログをグループ化
             const feedbackLogsByUser = new Map<string, { article_id: string, action: string, timestamp: number }[]>();
-            for (const log of allFeedbackLogs.results) {
+            for (const log of allFeedbackLogsResults) {
                 if (!feedbackLogsByUser.has(log.user_id)) {
                     feedbackLogsByUser.set(log.user_id, []);
                 }
@@ -1464,22 +1538,28 @@ export class ClickLogger extends DurableObject {
                 const chunk = articleIdsArray.slice(i, i + CHUNK_SIZE);
                 if (chunk.length === 0) continue;
 
-                const placeholders = chunk.map(() => "?").join(",");
-
                 // Fetch from sent_articles
-                const sentChunk = await this.env.DB.prepare(
-                    `SELECT article_id, embedding, published_at FROM sent_articles WHERE article_id IN (${placeholders})`
-                ).bind(...chunk).all<{ article_id: string, embedding: string, published_at: string }>();
-                if (sentChunk.results) {
-                    sentArticlesEmbeddingsAccumulator.push(...sentChunk.results);
+                const sentChunkResults = await db.select({
+                    article_id: sentArticles.article_id,
+                    embedding: sentArticles.embedding,
+                    published_at: sentArticles.published_at
+                })
+                    .from(sentArticles)
+                    .where(inArray(sentArticles.article_id, chunk));
+                if (sentChunkResults) {
+                    sentArticlesEmbeddingsAccumulator.push(...sentChunkResults as any[]);
                 }
 
                 // Fetch from articles
-                const articlesChunk = await this.env.DB.prepare(
-                    `SELECT article_id, embedding, published_at FROM articles WHERE article_id IN (${placeholders})`
-                ).bind(...chunk).all<{ article_id: string, embedding: string | null, published_at: string | null }>();
-                if (articlesChunk.results) {
-                    articlesEmbeddingsAccumulator.push(...articlesChunk.results);
+                const articlesChunkResults = await db.select({
+                    article_id: articles.article_id,
+                    embedding: articles.embedding,
+                    published_at: articles.published_at
+                })
+                    .from(articles)
+                    .where(inArray(articles.article_id, chunk));
+                if (articlesChunkResults) {
+                    articlesEmbeddingsAccumulator.push(...articlesChunkResults as any[]);
                 }
             }
 
@@ -1508,9 +1588,15 @@ export class ClickLogger extends DurableObject {
                 this.logger.info(`Found ${articleIdsMissingEmbeddings.length} articles missing embeddings. Triggering batch generation.`, { count: articleIdsMissingEmbeddings.length });
 
                 // Fetch article content for embedding generation
-                const { results: articlesForEmbedding } = await this.env.DB.prepare(
-                    `SELECT article_id, title, url, content, published_at FROM articles WHERE article_id IN (${articleIdsMissingEmbeddings.map(() => "?").join(",")})`
-                ).bind(...articleIdsMissingEmbeddings).all<any>();
+                const articlesForEmbedding = await db.select({
+                    article_id: articles.article_id,
+                    title: articles.title,
+                    url: articles.url,
+                    content: articles.content,
+                    published_at: articles.published_at
+                })
+                    .from(articles)
+                    .where(inArray(articles.article_id, articleIdsMissingEmbeddings));
 
                 if (articlesForEmbedding.length > 0) {
                     const articlesToEmbed = articlesForEmbedding.map(row => ({
@@ -1519,7 +1605,7 @@ export class ClickLogger extends DurableObject {
                         link: row.url,
                         sourceName: '',
                         summary: row.content ? row.content.substring(0, Math.min(row.content.length, 200)) : '',
-                        content: row.content,
+                        content: row.content || '',
                         publishedAt: row.published_at,
                     }));
 
@@ -1548,7 +1634,7 @@ export class ClickLogger extends DurableObject {
 
                 let updatedCount = 0;
                 const now = Date.now();
-                const logStatements = []; // バッチ処理用のステートメントリスト
+                // Drizzle ORM: 個別にawaitでupdateするためバッチは不要
 
                 for (const log of feedbackLogsForUser) {
                     const articleEmbeddingData = allEmbeddingsMap.get(log.article_id);
@@ -1587,11 +1673,14 @@ export class ClickLogger extends DurableObject {
                             updatedCount++;
 
                             // Successfully processed, mark as processed
-                            logStatements.push(
-                                this.env.DB.prepare(
-                                    `UPDATE education_logs SET processed = 1 WHERE user_id = ? AND article_id = ? AND timestamp = ?`
-                                ).bind(userId, log.article_id, log.timestamp)
-                            );
+                            await db.update(educationLogs)
+                                .set({ processed: 1 })
+                                .where(and(
+                                    eq(educationLogs.user_id, userId),
+                                    eq(educationLogs.article_id, log.article_id),
+                                    eq(educationLogs.timestamp, log.timestamp)
+                                ))
+                                .run();
                         } else {
                             this.logger.warn(`Skipping feedback for article ${log.article_id} due to missing or mismatched embedding.`, { userId, articleId: log.article_id });
                         }
@@ -1599,17 +1688,6 @@ export class ClickLogger extends DurableObject {
                         // No embedding available - keep the log for next processing cycle
                         this.logger.debug(`Deferring feedback for article ${log.article_id} - embedding not yet available.`, { userId, articleId: log.article_id });
                     }
-
-                    // バッチサイズに達したら実行
-                    if (logStatements.length >= BATCH_SIZE) {
-                        this.state.waitUntil(this.env.DB.batch(logStatements));
-                        logStatements.length = 0; // リストをクリア
-                    }
-                }
-
-                // 残りのステートメントを実行
-                if (logStatements.length > 0) {
-                    this.state.waitUntil(this.env.DB.batch(logStatements));
                 }
 
                 if (updatedCount > 0) {
@@ -1620,9 +1698,10 @@ export class ClickLogger extends DurableObject {
 
                 // Calculate and update MMR lambda
                 const lambda = await this.calculateMMRLambda(userId);
-                this.state.waitUntil(this.env.DB.prepare(
-                    `UPDATE users SET mmr_lambda = ? WHERE user_id = ?`
-                ).bind(lambda, userId).run());
+                this.state.waitUntil(db.update(users)
+                    .set({ mmr_lambda: lambda })
+                    .where(eq(users.user_id, userId))
+                    .run());
                 this.logger.debug(`Updated MMR lambda for user ${userId}: ${lambda}`, { userId, lambda });
             }
             this.logger.debug('Finished processing pending feedback.');

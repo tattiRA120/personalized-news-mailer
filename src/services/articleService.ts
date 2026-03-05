@@ -3,6 +3,9 @@ import { collectNews, NewsArticle } from '../newsCollector';
 import { saveArticlesToD1, ArticleWithEmbedding } from './d1Service';
 import { Logger } from '../logger';
 import { chunkArray } from '../utils/textProcessor';
+import { getDb } from '../db';
+import { articles } from '../db/schema';
+import { inArray } from 'drizzle-orm';
 
 /**
  * Collects fresh articles from RSS feeds, saves only new ones to D1, and returns only the new articles with persistent IDs.
@@ -35,10 +38,10 @@ export async function collectAndSaveNews(env: Env): Promise<ArticleWithEmbedding
     const existingArticleIds = new Set<string>();
 
     for (const chunk of articleIdChunks) {
-        const placeholders = chunk.map(() => '?').join(',');
-        const query = `SELECT article_id FROM articles WHERE article_id IN (${placeholders})`;
-        const stmt = env.DB.prepare(query);
-        const { results: existingRows } = await stmt.bind(...chunk).all<{ article_id: string }>();
+        const db = getDb(env);
+        const existingRows = await db.select({ article_id: articles.article_id })
+            .from(articles)
+            .where(inArray(articles.article_id, chunk));
         existingRows.forEach(row => existingArticleIds.add(row.article_id));
     }
     logger.debug(`Found ${existingArticleIds.size} existing article IDs in D1.`, { count: existingArticleIds.size });
@@ -62,10 +65,17 @@ export async function collectAndSaveNews(env: Env): Promise<ArticleWithEmbedding
     const newArticlesWithIds: ArticleWithEmbedding[] = [];
 
     for (const chunk of newArticleIdChunks) {
-        const placeholders = chunk.map(() => '?').join(',');
-        const { results: d1Articles } = await env.DB.prepare(
-            `SELECT article_id, title, url, content, embedding, published_at FROM articles WHERE article_id IN (${placeholders})`
-        ).bind(...chunk).all<any>();
+        const db = getDb(env);
+        const d1Articles = await db.select({
+            article_id: articles.article_id,
+            title: articles.title,
+            url: articles.url,
+            content: articles.content,
+            embedding: articles.embedding,
+            published_at: articles.published_at
+        })
+            .from(articles)
+            .where(inArray(articles.article_id, chunk));
 
         const articlesFromChunk = d1Articles.map(row => ({
             articleId: row.article_id,
@@ -73,7 +83,7 @@ export async function collectAndSaveNews(env: Env): Promise<ArticleWithEmbedding
             link: row.url,
             sourceName: '',
             summary: row.content ? row.content.substring(0, Math.min(row.content.length, 200)) : '',
-            content: row.content,
+            content: row.content || '',
             embedding: row.embedding ? JSON.parse(row.embedding) : undefined,
             publishedAt: row.published_at,
         }));

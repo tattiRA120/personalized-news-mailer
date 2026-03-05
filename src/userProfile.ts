@@ -2,6 +2,9 @@
 
 import { Logger } from './logger';
 import { Env } from './types/bindings';
+import { getDb } from './db';
+import { users } from './db/schema';
+import { eq } from 'drizzle-orm';
 
 interface UserProfile {
     userId: string;
@@ -13,9 +16,16 @@ interface UserProfile {
 export async function getUserProfile(userId: string, env: Env): Promise<UserProfile | null> {
     const logger = new Logger(env);
     try {
-        const { results } = await env.DB.prepare(
-            `SELECT user_id, email, embedding, mmr_lambda FROM users WHERE user_id = ?`
-        ).bind(userId).all<{ user_id: string; email: string; embedding: string | null; mmr_lambda: number | null; }>();
+        const db = getDb(env);
+        const results = await db.select({
+            user_id: users.user_id,
+            email: users.email,
+            embedding: users.embedding,
+            mmr_lambda: users.mmr_lambda
+        })
+            .from(users)
+            .where(eq(users.user_id, userId))
+            .limit(1);
 
         if (results && results.length > 0) {
             const rawProfile = results[0];
@@ -42,9 +52,15 @@ export async function updateUserProfile(profile: UserProfile, env: Env): Promise
     try {
         // embeddingを文字列として保存
         const embeddingString = profile.embedding ? JSON.stringify(profile.embedding) : null;
-        await env.DB.prepare(
-            `UPDATE users SET email = ?, embedding = ?, mmr_lambda = ? WHERE user_id = ?`
-        ).bind(profile.email, embeddingString, profile.mmrLambda || 0.5, profile.userId).run();
+        const db = getDb(env);
+        await db.update(users)
+            .set({
+                email: profile.email,
+                embedding: embeddingString,
+                mmr_lambda: profile.mmrLambda || 0.5
+            })
+            .where(eq(users.user_id, profile.userId))
+            .run();
         logger.info(`Updated user profile for ${profile.userId}.`, { userId: profile.userId });
     } catch (error) {
         logger.error(`Error updating user profile for ${profile.userId}:`, error, { userId: profile.userId });
@@ -61,9 +77,13 @@ export async function createUserProfile(userId: string, email: string, env: Env)
     };
 
     try {
-        await env.DB.prepare(
-            `INSERT INTO users (user_id, email, embedding, mmr_lambda) VALUES (?, ?, ?, ?)`
-        ).bind(newUserProfile.userId, newUserProfile.email, null, newUserProfile.mmrLambda).run();
+        const db = getDb(env);
+        await db.insert(users).values({
+            user_id: newUserProfile.userId,
+            email: newUserProfile.email,
+            embedding: null,
+            mmr_lambda: newUserProfile.mmrLambda
+        }).run();
         logger.info(`Created new user profile for ${userId} with email ${email}`, { userId, email });
         return newUserProfile;
     } catch (error) {
@@ -75,9 +95,10 @@ export async function createUserProfile(userId: string, email: string, env: Env)
 export async function getAllUserIds(env: Env): Promise<string[]> {
     const logger = new Logger(env);
     try {
-        const { results } = await env.DB.prepare(
-            `SELECT user_id FROM users`
-        ).all<{ user_id: string }>();
+        const db = getDb(env);
+        const results = await db.select({
+            user_id: users.user_id
+        }).from(users);
 
         const userIds = results ? results.map(row => row.user_id) : [];
         logger.info(`Retrieved ${userIds.length} user IDs.`, { userCount: userIds.length });
@@ -97,9 +118,13 @@ export async function getAllUserIds(env: Env): Promise<string[]> {
 export async function getMMRLambda(userId: string, env: Env): Promise<number> {
     const logger = new Logger(env);
     try {
-        const { results } = await env.DB.prepare(
-            `SELECT mmr_lambda FROM users WHERE user_id = ?`
-        ).bind(userId).all<{ mmr_lambda: number | null }>();
+        const db = getDb(env);
+        const results = await db.select({
+            mmr_lambda: users.mmr_lambda
+        })
+            .from(users)
+            .where(eq(users.user_id, userId))
+            .limit(1);
 
         if (results && results.length > 0) {
             const lambda = results[0].mmr_lambda ?? 0.5;

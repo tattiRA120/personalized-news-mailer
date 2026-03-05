@@ -7,6 +7,9 @@ import { collectNews, NewsArticle } from '../newsCollector';
 import { saveArticlesToD1 } from '../services/d1Service';
 import { generateAndSaveEmbeddings } from '../services/embeddingService';
 import { orchestrateMailDelivery } from '../orchestrators/mailOrchestrator';
+import { getDb } from '../db';
+import { users, clickLogs, sentArticles, educationLogs, articles } from '../db/schema';
+import { eq, and, isNotNull, gte } from 'drizzle-orm';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -90,16 +93,17 @@ debug.post('/delete-user-data', async (c) => {
 
         logger.debug(`Debug: Deleting user data for user ${userId} from DB...`, { userId });
 
-        await c.env.DB.prepare(`DELETE FROM users WHERE user_id = ?`).bind(userId).run();
+        const db = getDb(c.env);
+        await db.delete(users).where(eq(users.user_id, userId)).run();
         logger.debug(`Debug: Deleted user profile for ${userId}.`, { userId });
 
-        await c.env.DB.prepare(`DELETE FROM click_logs WHERE user_id = ?`).bind(userId).run();
+        await db.delete(clickLogs).where(eq(clickLogs.user_id, userId)).run();
         logger.debug(`Debug: Deleted click logs for ${userId}.`, { userId });
 
-        await c.env.DB.prepare(`DELETE FROM sent_articles WHERE user_id = ?`).bind(userId).run();
+        await db.delete(sentArticles).where(eq(sentArticles.user_id, userId)).run();
         logger.debug(`Debug: Deleted sent articles for ${userId}.`, { userId });
 
-        await c.env.DB.prepare(`DELETE FROM education_logs WHERE user_id = ?`).bind(userId).run();
+        await db.delete(educationLogs).where(eq(educationLogs.user_id, userId)).run();
         logger.debug(`Debug: Deleted education logs for ${userId}.`, { userId });
 
         await c.env['mail-news-gmail-tokens'].delete(`refresh_token:${userId}`);
@@ -231,19 +235,30 @@ debug.get('/check-exclusions', async (c) => {
         const userId = c.req.query('userId');
         if (!userId) return new Response('Missing userId', { status: 400 });
 
+        const db = getDb(c.env);
         // 1. User's feedback history
-        const feedbackLogs = await c.env.DB.prepare(`SELECT article_id, action, timestamp FROM education_logs WHERE user_id = ?`).bind(userId).all();
+        const feedbackLogs = await db.select({
+            article_id: educationLogs.article_id,
+            action: educationLogs.action,
+            timestamp: educationLogs.timestamp
+        }).from(educationLogs).where(eq(educationLogs.user_id, userId));
 
         // 2. Articles that WOULD be returned without exclusion
         const cutoffDate = new Date();
         cutoffDate.setHours(cutoffDate.getHours() - 24);
         const cutoffTimestamp = cutoffDate.getTime();
 
-        const candidates = await c.env.DB.prepare(`SELECT article_id, title, published_at FROM articles WHERE embedding IS NOT NULL AND published_at >= ? LIMIT 50`).bind(cutoffTimestamp).all();
+        const candidates = await db.select({
+            article_id: articles.article_id,
+            title: articles.title,
+            published_at: articles.published_at
+        }).from(articles)
+            .where(and(isNotNull(articles.embedding), gte(articles.published_at, cutoffTimestamp)))
+            .limit(50);
 
         return c.json({
-            feedbackLogs: feedbackLogs.results,
-            candidates: candidates.results,
+            feedbackLogs: feedbackLogs,
+            candidates: candidates,
             cutoffTimestamp
         }, 200);
     } catch (e) {

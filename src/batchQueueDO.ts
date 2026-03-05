@@ -6,6 +6,9 @@ import { DurableObject } from 'cloudflare:workers';
 import { ClickLogger } from "./clickLogger";
 import { OPENAI_EMBEDDING_DIMENSION } from "./config";
 import { Hono } from 'hono';
+import { getDb } from './db';
+import { articles } from './db/schema';
+import { eq } from 'drizzle-orm';
 
 interface BatchChunk {
   chunkIndex: number;
@@ -505,33 +508,34 @@ export class BatchQueueDO extends DurableObject { // DurableObject を継承
     }[],
     env: Env
   ): Promise<void> {
+    const db = getDb(env);
+
     // デバッグ: 更新対象の articleId が存在するか確認
     for (const rec of records) {
-      const existingArticle = await env.DB.prepare('SELECT article_id FROM articles WHERE article_id = ?').bind(rec.articleId).first();
-      if (!existingArticle) {
+      const existingArticle = await db.select({ article_id: articles.article_id })
+        .from(articles)
+        .where(eq(articles.article_id, rec.articleId))
+        .limit(1);
+
+      if (existingArticle.length === 0) {
         this.logger.warn(`Attempted to update non-existent articleId in D1: ${rec.articleId}`, { articleId: rec.articleId });
       } else {
         this.logger.debug(`ArticleId exists in D1: ${rec.articleId}`, { articleId: rec.articleId });
       }
     }
 
-    const stmt = env.DB.prepare(`
-      UPDATE articles
-      SET embedding = ?
-      WHERE article_id = ?
-    `);
     const batch = records.map((rec) => {
-      return stmt.bind(
-        JSON.stringify(rec.embedding),
-        rec.articleId
-      );
+      return db.update(articles)
+        .set({ embedding: JSON.stringify(rec.embedding) })
+        .where(eq(articles.article_id, rec.articleId));
     });
-    const batchResult = await env.DB.batch(batch);
+
+    const batchResult = await db.batch(batch as any);
     this.logger.debug(`D1 batch update result for job:`, { batchResult });
 
     // 更新された行数をチェックし、更新されなかった記事があればエラーログを出力
     for (let i = 0; i < batchResult.length; i++) {
-      const result = batchResult[i];
+      const result: any = batchResult[i];
       const articleId = records[i].articleId;
       if (result.success && result.meta?.changes === 0) {
         this.logger.error(`Failed to update embedding for article ${articleId} in D1: Article not found or no changes made.`, null, { articleId });

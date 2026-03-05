@@ -2,11 +2,13 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260218.0",
     "@types/node": "^25.3.0",
+    "drizzle-kit": "^0.31.9",
     "knip": "^5.84.1",
     "typescript": "^5.9.3",
     "wrangler": "^4.66.0"
   },
   "dependencies": {
+    "drizzle-orm": "^0.45.1",
     "fast-xml-parser": "^5.3.6",
     "hono": "^4.11.10",
     "linalg-wasm": "^0.1.0"

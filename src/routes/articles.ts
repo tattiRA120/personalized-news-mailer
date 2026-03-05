@@ -7,6 +7,9 @@ import { selectDissimilarArticles } from '../articleSelector';
 import { getUserProfile } from '../userProfile';
 import { NewsArticle } from '../newsCollector';
 import { OPENAI_EMBEDDING_DIMENSION } from '../config';
+import { getDb } from '../db';
+import { articles, educationLogs } from '../db/schema';
+import { isNotNull, gte, and, count, eq, desc } from 'drizzle-orm';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -145,7 +148,11 @@ app.get('/get-personalized-articles', async (c) => {
         const allArticlesWithEmbeddings = await getArticlesFromD1(c.env, 1000, 0, whereClause, [userId, userId, cutoffTimestamp]);
 
         // 除外された記事の数を確認するためのログ (デバッグ用)
-        const totalArticlesCount = await c.env.DB.prepare(`SELECT COUNT(*) as count FROM articles WHERE embedding IS NOT NULL AND published_at >= ?`).bind(cutoffTimestamp).first<{ count: number }>();
+        const db = getDb(c.env);
+        const totalArticlesCountResult = await db.select({ count: count() })
+            .from(articles)
+            .where(and(isNotNull(articles.embedding), gte(articles.published_at, cutoffTimestamp)));
+        const totalArticlesCount = { count: totalArticlesCountResult[0]?.count || 0 };
         const excludedCount = (totalArticlesCount?.count || 0) - allArticlesWithEmbeddings.length;
 
         logger.info(`Found ${allArticlesWithEmbeddings.length} articles with embeddings in D1 (newer than 24 hours, excluding feedbacked articles for user ${userId}). Excluded approx ${excludedCount} articles based on feedback.`, { count: allArticlesWithEmbeddings.length, userId, cutoffDate: cutoffDate.toISOString() });
@@ -161,20 +168,24 @@ app.get('/get-personalized-articles', async (c) => {
         // --- Fetch Negative Feedback Embeddings ---
         // 興味なしと判定された記事の埋め込みを取得 (sent_articlesとarticlesの両方から)
         // 今回は全ての記事テーブル(articles)と結合して、WebでのDiscoveriesも含める
-        const negativeFeedbackResult = await c.env.DB.prepare(
-            `SELECT a.embedding
-             FROM education_logs el
-             JOIN articles a ON el.article_id = a.article_id
-             WHERE el.user_id = ? AND el.action = 'not_interested' AND a.embedding IS NOT NULL
-             ORDER BY el.timestamp DESC
-             LIMIT 50`
-        ).bind(userId).all<{ embedding: string }>();
+        const negativeFeedbackResult = await db.select({
+            embedding: articles.embedding
+        })
+            .from(educationLogs)
+            .innerJoin(articles, eq(educationLogs.article_id, articles.article_id))
+            .where(and(
+                eq(educationLogs.user_id, userId),
+                eq(educationLogs.action, 'not_interested'),
+                isNotNull(articles.embedding)
+            ))
+            .orderBy(desc(educationLogs.timestamp))
+            .limit(50);
 
         const negativeFeedbackEmbeddings: number[][] = [];
-        if (negativeFeedbackResult.results) {
-            for (const row of negativeFeedbackResult.results) {
+        if (negativeFeedbackResult) {
+            for (const row of negativeFeedbackResult) {
                 try {
-                    const embedding = JSON.parse(row.embedding);
+                    const embedding = row.embedding ? JSON.parse(row.embedding) : null;
                     if (Array.isArray(embedding)) {
                         negativeFeedbackEmbeddings.push(embedding);
                     }

@@ -3,6 +3,9 @@ import { Logger } from '../logger';
 import { NewsArticle } from '../newsCollector';
 import { chunkArray } from '../utils/textProcessor';
 import { Env } from '../types/bindings';
+import { getDb } from '../db';
+import { articles, clickLogs, sentArticles, educationLogs } from '../db/schema';
+import { eq, inArray, lt, and, desc, sql, gte, countDistinct } from 'drizzle-orm';
 
 export interface ArticleWithEmbedding extends NewsArticle {
     embedding?: number[];
@@ -22,53 +25,64 @@ interface D1Result {
  * @param env 環境変数
  * @returns 保存された記事の数
  */
-export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promise<number> {
+export async function saveArticlesToD1(newsArticlesToSave: NewsArticle[], env: Env): Promise<number> {
     const logger = new Logger(env);
-    if (articles.length === 0) {
+    if (newsArticlesToSave.length === 0) {
         logger.info('No articles to save to D1. Skipping.');
         return 0;
     }
 
-    logger.info(`Attempting to save ${articles.length} articles to D1.`, { count: articles.length });
+    logger.info(`Attempting to save ${newsArticlesToSave.length} articles to D1.`, { count: newsArticlesToSave.length });
     let savedCount = 0;
 
     try {
         const CHUNK_SIZE_SQL_VARIABLES = 10; // SQLiteの変数制限を考慮してチャンクサイズを設定
-        const articleChunks = chunkArray(articles, CHUNK_SIZE_SQL_VARIABLES); // 記事の配列をチャンクに分割
+        const articleChunks = chunkArray(newsArticlesToSave, CHUNK_SIZE_SQL_VARIABLES); // 記事の配列をチャンクに分割
 
         const result = await logger.logBatchProcess(
             'D1 article batch insert',
             articleChunks,
             async (chunk: NewsArticle[], chunkIndex: number) => {
-                const placeholders = chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(','); // articleId, title, url, publishedAt, content, embedding
-                // ON CONFLICT(url) DO UPDATE SET ...: URLが重複する場合、title, published_at, contentを更新。
-                // contentが変更された場合、embeddingをNULLにリセットして再生成を促す。
-                const query = `
-                    INSERT INTO articles (article_id, title, url, published_at, content, embedding) VALUES ${placeholders}
-                    ON CONFLICT(url) DO UPDATE SET
-                        title = EXCLUDED.title,
-                        published_at = EXCLUDED.published_at,
-                        content = EXCLUDED.content,
-                        embedding = CASE WHEN articles.content != EXCLUDED.content THEN NULL ELSE articles.embedding END
-                `;
-                const stmt = env.DB.prepare(query);
+                let success = false;
+                let error = '';
+                const db = getDb(env);
+                let changes = 0;
 
-                const bindParams: (string | number | null)[] = [];
-                for (const article of chunk) {
-                    bindParams.push(
-                        article.articleId,
-                        article.title,
-                        article.link,
-                        isNaN(article.publishedAt) ? Date.now() : article.publishedAt, // publishedAtがNaNの場合は現在時刻をセット
-                        article.content || '', // contentがundefinedの場合は空文字列
-                        null // 新しい記事のembeddingはNULLに設定 (新規挿入時)
-                    );
+                // DrizzleORM doesn't natively support ON CONFLICT DO UPDATE where condition like `articles.content != EXCLUDED.content` easily inside a single batch insert for complex logic.
+                // However, we can use `onConflictDoUpdate` from SQLite dialect.
+
+                try {
+                    // D1 with Drizzle batch or single insert with onConflictDoUpdate
+                    // To do it efficiently, we insert chunk by chunk
+                    const valuesToInsert = chunk.map(article => ({
+                        article_id: article.articleId,
+                        title: article.title,
+                        url: article.link,
+                        published_at: isNaN(article.publishedAt) ? Date.now() : article.publishedAt,
+                        content: article.content || '',
+                        embedding: null as string | null // null indicates it needs generating
+                    }));
+
+                    const res = await db.insert(articles).values(valuesToInsert)
+                        .onConflictDoUpdate({
+                            target: articles.url,
+                            set: {
+                                title: sql`excluded.title`,
+                                published_at: sql`excluded.published_at`,
+                                content: sql`excluded.content`,
+                                // If content changed, reset embedding. Otherwise keep old one.
+                                embedding: sql`CASE WHEN articles.content != excluded.content THEN NULL ELSE articles.embedding END`
+                            }
+                        }).run();
+
+                    success = true;
+                    changes = res.meta?.changes || 0;
+                } catch (e: any) {
+                    success = false;
+                    error = e instanceof Error ? e.message : String(e);
                 }
 
-                const { success, error, meta } = await stmt.bind(...bindParams).run() as D1Result;
-
                 if (success) {
-                    const changes = meta?.changes || 0;
                     const skippedCount = chunk.length - changes;
                     savedCount += changes;
 
@@ -93,7 +107,7 @@ export async function saveArticlesToD1(articles: NewsArticle[], env: Env): Promi
         logger.info(`Finished saving articles to D1. Total saved: ${savedCount}.`, { totalSaved: savedCount });
         return savedCount;
     } catch (error) {
-        logger.error('Error saving articles to D1:', error, { count: articles.length });
+        logger.error('Error saving articles to D1:', error, { count: newsArticlesToSave.length });
         return savedCount;
     }
 }
@@ -111,6 +125,13 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
     const logger = new Logger(env);
     logger.info(`Fetching articles from D1 with limit ${limit}, offset ${offset}, where: ${whereClause}.`);
     try {
+        const db = getDb(env);
+
+        // This function is tricky because whereClause is passed as string.
+        // For safe migration, we'll keep raw SQL for `getArticlesFromD1` since the parameter `whereClause` assumes string injection.
+        // It's mostly used by embedding generators.
+        // Wait, we can rewrite it to use DB.prepare still, or Drizzle `sql`
+        // We will keep raw DB.prepare for this specific function as it dynamically builds strings like "embedding IS NULL".
         let query = `SELECT article_id, title, url, published_at, content, embedding FROM articles`;
 
         let finalWhereClause = whereClause;
@@ -127,7 +148,7 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
         const stmt = env.DB.prepare(query);
         const { results } = await stmt.bind(...bindParams, limit, offset).all<any>();
 
-        const articles: ArticleWithEmbedding[] = (results as any[]).map(row => ({
+        const articlesFromDb: ArticleWithEmbedding[] = (results as any[]).map(row => ({
             articleId: row.article_id,
             title: row.title,
             link: row.url,
@@ -137,8 +158,8 @@ export async function getArticlesFromD1(env: Env, limit: number = 1000, offset: 
             embedding: row.embedding ? JSON.parse(row.embedding) : undefined, // embeddingはD1から取得し、必要に応じて付与
             publishedAt: row.published_at,
         }));
-        logger.info(`Fetched ${articles.length} articles from D1.`, { count: articles.length });
-        return articles;
+        logger.info(`Fetched ${articlesFromDb.length} articles from D1.`, { count: articlesFromDb.length });
+        return articlesFromDb;
     } catch (error) {
         logger.error('Error fetching articles from D1:', error, { errorDetails: error instanceof Error ? error.message : error });
         return [];
@@ -155,7 +176,19 @@ export async function getArticleByIdFromD1(articleId: string, env: Env): Promise
     const logger = new Logger(env);
     logger.debug(`Fetching article by ID from D1: ${articleId}.`);
     try {
-        const { results } = await env.DB.prepare("SELECT article_id, title, url, published_at, content, embedding FROM articles WHERE article_id = ?").bind(articleId).all<any>();
+        const db = getDb(env);
+        const results = await db.select({
+            article_id: articles.article_id,
+            title: articles.title,
+            url: articles.url,
+            published_at: articles.published_at,
+            content: articles.content,
+            embedding: articles.embedding
+        })
+            .from(articles)
+            .where(eq(articles.article_id, articleId))
+            .limit(1);
+
         if (results && results.length > 0) {
             const row = results[0];
             const article: ArticleWithEmbedding = {
@@ -164,7 +197,7 @@ export async function getArticleByIdFromD1(articleId: string, env: Env): Promise
                 link: row.url,
                 sourceName: '',
                 summary: row.content ? row.content.substring(0, Math.min(row.content.length, 200)) : '',
-                content: row.content,
+                content: row.content || '',
                 embedding: row.embedding ? JSON.parse(row.embedding) : undefined, // embeddingはD1から取得し、必要に応じて付与
                 publishedAt: row.published_at,
             };
@@ -190,12 +223,18 @@ export async function updateArticleEmbeddingInD1(articleId: string, embedding: n
     const logger = new Logger(env);
     logger.info(`Updating embedding for article ${articleId} in D1.`);
     try {
-        const { success, error, meta } = await env.DB.prepare("UPDATE articles SET embedding = ? WHERE article_id = ?").bind(JSON.stringify(embedding), articleId).run() as D1Result;
+        const db = getDb(env);
+        const res = await db.update(articles)
+            .set({ embedding: JSON.stringify(embedding) })
+            .where(eq(articles.article_id, articleId))
+            .run();
+        const success = res.success;
+        const meta = res.meta;
         if (success) {
             logger.info(`Successfully updated embedding for article ${articleId}. Changes: ${meta?.changes || 0}`, { articleId, changes: meta?.changes || 0 });
             return true;
         } else {
-            logger.error(`Failed to update embedding for article ${articleId}: ${error}`, null, { articleId, error });
+            logger.error(`Failed to update embedding for article ${articleId}`, null, { articleId });
             return false;
         }
     } catch (error) {
@@ -215,8 +254,9 @@ export async function deleteOldArticlesFromD1(env: Env, articleIdsToKeep: string
     logger.info(`Starting D1 article cleanup. Articles to keep: ${articleIdsToKeep.length} IDs.`);
     try {
         // データベース上のすべての記事IDを取得
-        const { results: allArticles } = await env.DB.prepare(`SELECT article_id FROM articles`).all<{ article_id: string }>();
-        const allArticleIds = new Set(allArticles.map(article => article.article_id));
+        const db = getDb(env);
+        const allArticlesResults = await db.select({ article_id: articles.article_id }).from(articles);
+        const allArticleIds = new Set(allArticlesResults.map(article => article.article_id));
         logger.debug(`Found ${allArticleIds.size} total articles in D1.`);
 
         // 残す記事IDのセットを作成
@@ -242,31 +282,43 @@ export async function deleteOldArticlesFromD1(env: Env, articleIdsToKeep: string
         let totalDeleted = 0;
 
         // 関連テーブルからレコードを削除
-        const tablesToClean = ['click_logs', 'sent_articles', 'education_logs'];
-        for (const table of tablesToClean) {
-            for (const chunk of articleIdChunks) {
-                const placeholders = chunk.map(() => '?').join(',');
-                const deleteQuery = `DELETE FROM ${table} WHERE article_id IN (${placeholders})`;
-                const { success, error, meta } = await env.DB.prepare(deleteQuery).bind(...chunk).run() as D1Result;
-                if (success) {
-                    logger.info(`Deleted ${meta?.changes || 0} entries from ${table} for old articles.`, { table, deletedCount: meta?.changes || 0 });
-                    totalDeleted += meta?.changes || 0;
-                } else {
-                    logger.error(`Failed to delete entries from ${table} for old articles:`, error, { table });
-                }
+        for (const chunk of articleIdChunks) {
+            // click_logs
+            let res = await db.delete(clickLogs).where(inArray(clickLogs.article_id, chunk)).run();
+            if (res.success) {
+                logger.info(`Deleted ${res.meta?.changes || 0} entries from click_logs for old articles.`, { table: 'click_logs', deletedCount: res.meta?.changes || 0 });
+                totalDeleted += res.meta?.changes || 0;
+            } else {
+                logger.error(`Failed to delete entries from click_logs for old articles:`, res.error, { table: 'click_logs' });
+            }
+
+            // sent_articles
+            res = await db.delete(sentArticles).where(inArray(sentArticles.article_id, chunk)).run();
+            if (res.success) {
+                logger.info(`Deleted ${res.meta?.changes || 0} entries from sent_articles for old articles.`, { table: 'sent_articles', deletedCount: res.meta?.changes || 0 });
+                totalDeleted += res.meta?.changes || 0;
+            } else {
+                logger.error(`Failed to delete entries from sent_articles for old articles:`, res.error, { table: 'sent_articles' });
+            }
+
+            // education_logs
+            res = await db.delete(educationLogs).where(inArray(educationLogs.article_id, chunk)).run();
+            if (res.success) {
+                logger.info(`Deleted ${res.meta?.changes || 0} entries from education_logs for old articles.`, { table: 'education_logs', deletedCount: res.meta?.changes || 0 });
+                totalDeleted += res.meta?.changes || 0;
+            } else {
+                logger.error(`Failed to delete entries from education_logs for old articles:`, res.error, { table: 'education_logs' });
             }
         }
 
         // 最後にarticlesテーブルから記事を削除
         for (const chunk of articleIdChunks) {
-            const placeholders = chunk.map(() => '?').join(',');
-            const deleteArticlesQuery = `DELETE FROM articles WHERE article_id IN (${placeholders})`;
-            const { success, error, meta } = await env.DB.prepare(deleteArticlesQuery).bind(...chunk).run() as D1Result;
-            if (success) {
-                logger.info(`Successfully deleted ${meta?.changes || 0} old articles from 'articles' table.`, { deletedCount: meta?.changes || 0 });
-                totalDeleted += meta?.changes || 0;
+            const res = await db.delete(articles).where(inArray(articles.article_id, chunk)).run();
+            if (res.success) {
+                logger.info(`Successfully deleted ${res.meta?.changes || 0} old articles from 'articles' table.`, { deletedCount: res.meta?.changes || 0 });
+                totalDeleted += res.meta?.changes || 0;
             } else {
-                logger.error(`Failed to delete old articles from 'articles' table:`, error, { error });
+                logger.error(`Failed to delete old articles from 'articles' table:`, res.error, { error: res.error });
             }
         }
 
@@ -290,16 +342,34 @@ export async function cleanupOldUserLogs(env: Env, userId: string, cutoffTimesta
     logger.info(`Cleaning up old logs for user ${userId} in DB older than ${new Date(cutoffTimestamp).toISOString()}.`);
     let totalDeleted = 0;
     try {
-        const tables = ['click_logs', 'sent_articles', 'education_logs'];
-        for (const table of tables) {
-            const { success, error, meta } = await env.DB.prepare(`DELETE FROM ${table} WHERE user_id = ? AND timestamp < ?`).bind(userId, cutoffTimestamp).run() as D1Result;
-            if (success) {
-                totalDeleted += meta?.changes || 0;
-                logger.info(`Deleted ${meta?.changes || 0} old entries from ${table} for user ${userId}.`, { table, userId, deletedCount: meta?.changes || 0 });
-            } else {
-                logger.error(`Failed to delete old entries from ${table} for user ${userId}: ${error}`, null, { table, userId, error });
-            }
+        const db = getDb(env);
+        // click_logs
+        let res = await db.delete(clickLogs).where(and(eq(clickLogs.user_id, userId), lt(clickLogs.timestamp, cutoffTimestamp))).run();
+        if (res.success) {
+            totalDeleted += res.meta?.changes || 0;
+            logger.info(`Deleted ${res.meta?.changes || 0} old entries from click_logs for user ${userId}.`, { table: 'click_logs', userId, deletedCount: res.meta?.changes || 0 });
+        } else {
+            logger.error(`Failed to delete old entries from click_logs for user ${userId}: ${res.error}`, null, { table: 'click_logs', userId, error: res.error });
         }
+
+        // sent_articles
+        res = await db.delete(sentArticles).where(and(eq(sentArticles.user_id, userId), lt(sentArticles.timestamp, cutoffTimestamp))).run();
+        if (res.success) {
+            totalDeleted += res.meta?.changes || 0;
+            logger.info(`Deleted ${res.meta?.changes || 0} old entries from sent_articles for user ${userId}.`, { table: 'sent_articles', userId, deletedCount: res.meta?.changes || 0 });
+        } else {
+            logger.error(`Failed to delete old entries from sent_articles for user ${userId}: ${res.error}`, null, { table: 'sent_articles', userId, error: res.error });
+        }
+
+        // education_logs
+        res = await db.delete(educationLogs).where(and(eq(educationLogs.user_id, userId), lt(educationLogs.timestamp, cutoffTimestamp))).run();
+        if (res.success) {
+            totalDeleted += res.meta?.changes || 0;
+            logger.info(`Deleted ${res.meta?.changes || 0} old entries from education_logs for user ${userId}.`, { table: 'education_logs', userId, deletedCount: res.meta?.changes || 0 });
+        } else {
+            logger.error(`Failed to delete old entries from education_logs for user ${userId}: ${res.error}`, null, { table: 'education_logs', userId, error: res.error });
+        }
+
         logger.info(`Finished cleanup of old logs for user ${userId} in DB. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
         return totalDeleted;
     } catch (error) {
@@ -319,14 +389,19 @@ export async function getSentArticlesForUser(env: Env, userId: string, sinceTime
     const logger = new Logger(env);
     logger.info(`Fetching sent articles for user ${userId} from DB since ${new Date(sinceTimestamp).toISOString()}.`);
     try {
-        const { results } = await env.DB.prepare(
-            `SELECT article_id, timestamp, embedding FROM sent_articles WHERE user_id = ? AND timestamp >= ?`
-        ).bind(userId, sinceTimestamp).all<{ article_id: string, timestamp: number, embedding: string }>();
+        const db = getDb(env);
+        const results = await db.select({
+            article_id: sentArticles.article_id,
+            timestamp: sentArticles.timestamp,
+            embedding: sentArticles.embedding
+        })
+            .from(sentArticles)
+            .where(and(eq(sentArticles.user_id, userId), gte(sentArticles.timestamp, sinceTimestamp)));
 
         const articles = results.map(row => ({
             article_id: row.article_id,
             timestamp: row.timestamp,
-            embedding: JSON.parse(row.embedding) as number[],
+            embedding: (row.embedding ? JSON.parse(row.embedding) : []) as number[],
         }));
 
         logger.info(`Found ${articles.length} sent articles for user ${userId} since ${new Date(sinceTimestamp).toISOString()}.`, { userId, count: articles.length });
@@ -347,9 +422,13 @@ export async function getClickLogsForUser(env: Env, userId: string): Promise<{ a
     const logger = new Logger(env);
     logger.info(`Fetching click logs for user ${userId} from DB.`);
     try {
-        const { results } = await env.DB.prepare(
-            `SELECT article_id, timestamp FROM click_logs WHERE user_id = ?`
-        ).bind(userId).all<{ article_id: string, timestamp: number }>();
+        const db = getDb(env);
+        const results = await db.select({
+            article_id: clickLogs.article_id,
+            timestamp: clickLogs.timestamp
+        })
+            .from(clickLogs)
+            .where(eq(clickLogs.user_id, userId));
         logger.info(`Found ${results.length} click logs for user ${userId}.`, { userId, count: results.length });
         return results;
     } catch (error) {
@@ -377,17 +456,17 @@ export async function deleteProcessedClickLogs(env: Env, userId: string, article
         const CHUNK_SIZE_SQL_VARIABLES = 50;
         const articleIdChunks = chunkArray(articleIdsToDelete, CHUNK_SIZE_SQL_VARIABLES);
 
+        const db = getDb(env);
         for (const chunk of articleIdChunks) {
-            const placeholders = chunk.map(() => '?').join(',');
-            const query = `DELETE FROM click_logs WHERE user_id = ? AND article_id IN (${placeholders})`;
-            const stmt = env.DB.prepare(query);
-            const { success, error, meta } = await stmt.bind(userId, ...chunk).run() as D1Result;
+            const res = await db.delete(clickLogs)
+                .where(and(eq(clickLogs.user_id, userId), inArray(clickLogs.article_id, chunk)))
+                .run();
 
-            if (success) {
-                totalDeleted += meta?.changes || 0;
-                logger.info(`Deleted ${meta?.changes || 0} click logs in batch for user ${userId}.`, { userId, deletedCount: meta?.changes || 0 });
+            if (res.success) {
+                totalDeleted += res.meta?.changes || 0;
+                logger.info(`Deleted ${res.meta?.changes || 0} click logs in batch for user ${userId}.`, { userId, deletedCount: res.meta?.changes || 0 });
             } else {
-                logger.error(`Failed to delete click logs in batch for user ${userId}: ${error}`, null, { userId, error });
+                logger.error(`Failed to delete click logs in batch for user ${userId}: ${res.error}`, null, { userId, error: res.error });
             }
         }
         logger.info(`Finished deleting processed click logs for user ${userId}. Total deleted: ${totalDeleted}.`, { userId, totalDeleted });
@@ -410,17 +489,18 @@ export async function getUserCTR(env: Env, userId: string, days: number = 30): P
     try {
         const sinceTimestamp = Date.now() - days * 24 * 60 * 60 * 1000;
 
+        const db = getDb(env);
         // 配信された記事数を取得
-        const sentCountResult = await env.DB.prepare(
-            `SELECT COUNT(DISTINCT article_id) as count FROM sent_articles WHERE user_id = ? AND timestamp >= ?`
-        ).bind(userId, sinceTimestamp).first<{ count: number }>();
-        const sentCount = sentCountResult?.count ?? 0;
+        const sentCountResults = await db.select({ count: countDistinct(sentArticles.article_id) })
+            .from(sentArticles)
+            .where(and(eq(sentArticles.user_id, userId), gte(sentArticles.timestamp, sinceTimestamp)));
+        const sentCount = sentCountResults[0]?.count ?? 0;
 
         // クリックされた記事数を取得
-        const clickCountResult = await env.DB.prepare(
-            `SELECT COUNT(DISTINCT article_id) as count FROM click_logs WHERE user_id = ? AND timestamp >= ?`
-        ).bind(userId, sinceTimestamp).first<{ count: number }>();
-        const clickCount = clickCountResult?.count ?? 0;
+        const clickCountResults = await db.select({ count: countDistinct(clickLogs.article_id) })
+            .from(clickLogs)
+            .where(and(eq(clickLogs.user_id, userId), gte(clickLogs.timestamp, sinceTimestamp)));
+        const clickCount = clickCountResults[0]?.count ?? 0;
 
         if (sentCount === 0) {
             return 0.5; // 配信履歴がない場合はデフォルト値0.5を返す
@@ -448,20 +528,21 @@ export async function getRecentPositiveFeedbackEmbeddings(env: Env, userId: stri
     const logger = new Logger(env);
     logger.info(`Fetching recent positive feedback embeddings for user ${userId} (limit: ${limit}).`);
     try {
-        const { results } = await env.DB.prepare(
-            `SELECT a.embedding
-             FROM click_logs cl
-             JOIN articles a ON cl.article_id = a.article_id
-             WHERE cl.user_id = ? AND a.embedding IS NOT NULL
-             ORDER BY cl.timestamp DESC
-             LIMIT ?`
-        ).bind(userId, limit).all<{ embedding: string }>();
+        const db = getDb(env);
+        const results = await db.select({
+            embedding: articles.embedding
+        })
+            .from(clickLogs)
+            .innerJoin(articles, eq(clickLogs.article_id, articles.article_id))
+            .where(and(eq(clickLogs.user_id, userId), sql`${articles.embedding} IS NOT NULL`))
+            .orderBy(desc(clickLogs.timestamp))
+            .limit(limit);
 
         const embeddings: number[][] = [];
         if (results) {
             for (const row of results) {
                 try {
-                    const embedding = JSON.parse(row.embedding);
+                    const embedding = row.embedding ? JSON.parse(row.embedding) : null;
                     if (Array.isArray(embedding)) {
                         embeddings.push(embedding);
                     }
@@ -490,22 +571,23 @@ export async function getExplicitPositiveFeedbackEmbeddings(env: Env, userId: st
     const logger = new Logger(env);
     logger.info(`Fetching explicit positive feedback embeddings for user ${userId} (limit: ${limit}).`);
     try {
+        const db = getDb(env);
         // education_logs と articles (または sent_articles) を結合して埋め込みを取得
         // action = 'interested' のもののみ
-        const { results } = await env.DB.prepare(
-            `SELECT a.embedding
-             FROM education_logs el
-             JOIN articles a ON el.article_id = a.article_id
-             WHERE el.user_id = ? AND el.action = 'interested' AND a.embedding IS NOT NULL
-             ORDER BY el.timestamp DESC
-             LIMIT ?`
-        ).bind(userId, limit).all<{ embedding: string }>();
+        const results = await db.select({
+            embedding: articles.embedding
+        })
+            .from(educationLogs)
+            .innerJoin(articles, eq(educationLogs.article_id, articles.article_id))
+            .where(and(eq(educationLogs.user_id, userId), eq(educationLogs.action, 'interested'), sql`${articles.embedding} IS NOT NULL`))
+            .orderBy(desc(educationLogs.timestamp))
+            .limit(limit);
 
         const embeddings: number[][] = [];
         if (results) {
             for (const row of results) {
                 try {
-                    const embedding = JSON.parse(row.embedding);
+                    const embedding = row.embedding ? JSON.parse(row.embedding) : null;
                     if (Array.isArray(embedding)) {
                         embeddings.push(embedding);
                     }

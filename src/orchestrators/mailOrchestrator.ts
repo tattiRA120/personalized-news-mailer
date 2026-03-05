@@ -11,6 +11,9 @@ import { Logger } from '../logger';
 import { chunkArray } from '../utils/textProcessor';
 import { DurableObjectStub } from '@cloudflare/workers-types';
 import { OPENAI_EMBEDDING_DIMENSION } from '../config';
+import { getDb } from '../db';
+import { articles, educationLogs } from '../db/schema';
+import { gte, isNull, isNotNull, eq, and, desc } from 'drizzle-orm';
 
 interface EmailRecipient {
     email: string;
@@ -72,14 +75,19 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                 // 1. 過去7日間に公開された記事 (RSSフィードからの再取得を防ぐため)
                 const sevenDaysAgo = now - (7 * 24 * 60 * 60 * 1000);
-                const recentArticles = await env.DB.prepare(`SELECT DISTINCT article_id FROM articles WHERE published_at >= ?`).bind(sevenDaysAgo).all<{ article_id: string }>();
-                recentArticles.results?.forEach(row => articleIdsToKeep.add(row.article_id));
-                logger.debug(`Keeping ${recentArticles.results?.length || 0} articles published in the last 7 days.`);
+                const db = getDb(env);
+                const recentArticles = await db.selectDistinct({ article_id: articles.article_id })
+                    .from(articles)
+                    .where(gte(articles.published_at, sevenDaysAgo));
+                recentArticles.forEach(row => articleIdsToKeep.add(row.article_id));
+                logger.debug(`Keeping ${recentArticles.length || 0} articles published in the last 7 days.`);
 
                 // 2. embeddingがまだ生成されていない記事 (published_atに関わらず)
-                const articlesMissingEmbedding = await env.DB.prepare(`SELECT DISTINCT article_id FROM articles WHERE embedding IS NULL`).all<{ article_id: string }>();
-                articlesMissingEmbedding.results?.forEach(row => articleIdsToKeep.add(row.article_id));
-                logger.debug(`Keeping ${articlesMissingEmbedding.results?.length || 0} articles missing embeddings.`);
+                const missingEmbeddingArticles = await db.selectDistinct({ article_id: articles.article_id })
+                    .from(articles)
+                    .where(isNull(articles.embedding));
+                missingEmbeddingArticles.forEach(row => articleIdsToKeep.add(row.article_id));
+                logger.debug(`Keeping ${missingEmbeddingArticles.length || 0} articles missing embeddings.`);
 
                 // 最終的な残す記事のIDリストを渡してクリーンアップを実行
                 await deleteOldArticlesFromD1(env, Array.from(articleIdsToKeep));
@@ -196,20 +204,21 @@ export async function orchestrateMailDelivery(env: Env, scheduledTime: Date, isT
 
                     // --- Fetch Negative Feedback Embeddings ---
                     // 興味なしと判定された記事の埋め込みを取得 (sent_articlesと結合)
-                    const negativeFeedbackResult = await env.DB.prepare(
-                        `SELECT a.embedding
-                         FROM education_logs el
-                         JOIN articles a ON el.article_id = a.article_id
-                         WHERE el.user_id = ? AND el.action = 'not_interested' AND a.embedding IS NOT NULL
-                         ORDER BY el.timestamp DESC
-                         LIMIT 50`
-                    ).bind(userId).all<{ embedding: string }>();
+                    const db = getDb(env);
+                    const negativeFeedbackResult = await db.select({
+                        embedding: articles.embedding
+                    })
+                        .from(educationLogs)
+                        .innerJoin(articles, eq(educationLogs.article_id, articles.article_id))
+                        .where(and(eq(educationLogs.user_id, userId), eq(educationLogs.action, 'not_interested'), isNotNull(articles.embedding)))
+                        .orderBy(desc(educationLogs.timestamp))
+                        .limit(50);
 
                     const negativeFeedbackEmbeddings: number[][] = [];
-                    if (negativeFeedbackResult.results) {
-                        for (const row of negativeFeedbackResult.results) {
+                    if (negativeFeedbackResult) {
+                        for (const row of negativeFeedbackResult) {
                             try {
-                                const embedding = JSON.parse(row.embedding);
+                                const embedding = row.embedding ? JSON.parse(row.embedding) : null;
                                 if (Array.isArray(embedding)) {
                                     negativeFeedbackEmbeddings.push(embedding);
                                 }
