@@ -9,6 +9,7 @@ import { cosine_similarity_bulk, calculate_similarity_matrix, cosine_similarity_
 import { ClickLogger } from './clickLogger';
 import { Logger } from './logger';
 import { NewsArticleWithEmbedding, SelectPersonalizedArticlesRequest } from './types/wasm';
+import { OPENAI_EMBEDDING_DIMENSION } from './config';
 import { Env } from './types/bindings';
 import { Hono } from 'hono';
 
@@ -178,8 +179,9 @@ export class WasmDO extends DurableObject<Env> {
                 // Long-Term Interest Relevance (Sim to User Profile)
                 const longTermRelevanceMap = new Map<string, number>();
                 if (userProfileEmbeddingForSelection) {
-                    const vec1s = articles.filter(a => a.embedding).map(() => userProfileEmbeddingForSelection);
-                    const vec2s = articles.filter(a => a.embedding).map(a => a.embedding!);
+                    const profileEmb512 = userProfileEmbeddingForSelection.slice(0, OPENAI_EMBEDDING_DIMENSION);
+                    const vec1s = articles.filter(a => a.embedding).map(() => profileEmb512);
+                    const vec2s = articles.filter(a => a.embedding).map(a => a.embedding!.slice(0, OPENAI_EMBEDDING_DIMENSION));
                     if (vec1s.length > 0) {
                         const results = cosine_similarity_bulk(vec1s, vec2s);
                         const articlesWithEmb = articles.filter(a => a.embedding);
@@ -203,7 +205,9 @@ export class WasmDO extends DurableObject<Env> {
                             for (let i = 0; i < recentInterestEmbeddings.length; i++) {
                                 const recentEmb = recentInterestEmbeddings[i];
                                 if (article.embedding.length === recentEmb.length) {
-                                    const sim = cosine_similarity(article.embedding, recentEmb);
+                                    const artEmb512 = article.embedding.slice(0, OPENAI_EMBEDDING_DIMENSION);
+                                    const recEmb512 = recentEmb.slice(0, OPENAI_EMBEDDING_DIMENSION);
+                                    const sim = cosine_similarity(artEmb512, recEmb512);
                                     // 類似度が正の場合のみ加算（負の類似度はノイズになり得るので無視、あるいはそのまま加算もアリだが今回は正の興味にフォーカス）
                                     if (sim > 0) {
                                         const weight = Math.pow(DECAY_FACTOR, i);
@@ -224,9 +228,11 @@ export class WasmDO extends DurableObject<Env> {
                     articles.forEach(article => {
                         if (article.embedding) {
                             let maxSim = 0.0;
+                            const artEmb512 = article.embedding.slice(0, OPENAI_EMBEDDING_DIMENSION);
                             for (const negEmb of negativeFeedbackEmbeddings) {
                                 if (article.embedding.length === negEmb.length) {
-                                    const sim = cosine_similarity(article.embedding, negEmb);
+                                    const negEmb512 = negEmb.slice(0, OPENAI_EMBEDDING_DIMENSION);
+                                    const sim = cosine_similarity(artEmb512, negEmb512);
                                     if (sim > maxSim) maxSim = sim;
                                 }
                             }
@@ -239,7 +245,7 @@ export class WasmDO extends DurableObject<Env> {
                 const articlesWithScores: ScoredArticle[] = articles.map(article => {
                     const ucbInfo = ucbValues.find(ucb => ucb.articleId === article.articleId);
                     const ucb = ucbInfo ? ucbInfo.ucb : 0.0;
-                    
+
                     let freshnessScore = 0.0;
                     // Freshness is normalized 0 to 1 based on age in updated embedding
                     if (article.embedding && article.embedding.length > 0) {
@@ -247,7 +253,7 @@ export class WasmDO extends DurableObject<Env> {
                         // normalizedAge is 0 (newest) to 1 (oldest/1week)
                         freshnessScore = Math.max(0, 1.0 - normalizedAge);
                     }
-                    
+
                     const longTerm = longTermRelevanceMap.get(article.articleId) || 0;
                     const shortTerm = shortTermRelevanceMap.get(article.articleId) || 0;
                     const negPenalty = negativePenaltyMap.get(article.articleId) || 0;
@@ -275,17 +281,17 @@ export class WasmDO extends DurableObject<Env> {
                 let candidates = articlesWithScores.filter(a => a.embedding !== undefined && a.negativePenalty < 0.75);
 
                 // --- 2. Iterative Selection with Integrated Diversity ---
-                
+
                 const selectedArticles: ScoredArticle[] = [];
                 const selectedIds = new Set<string>();
-                
+
                 // Diversity Check Helper
-                const SIMILARITY_THRESHOLD = 0.85; // 重複とみなす閾値
+                const SIMILARITY_THRESHOLD = 0.72; // 重複とみなす閾値
                 const isTooSimilarToSelected = (candidate: ScoredArticle): boolean => {
                     if (selectedArticles.length === 0) return false;
-                    const existingEmbeddings = selectedArticles.map(a => a.embedding);
+                    const existingEmbeddings = selectedArticles.map(a => a.embedding.slice(0, OPENAI_EMBEDDING_DIMENSION));
                     // cosine_similarity_one_to_many は1つのベクトルと複数のベクトルの類似度配列を返す
-                    const sims = cosine_similarity_one_to_many(candidate.embedding, existingEmbeddings) as number[];
+                    const sims = cosine_similarity_one_to_many(candidate.embedding.slice(0, OPENAI_EMBEDDING_DIMENSION), existingEmbeddings) as number[];
                     // どれか1つでも閾値を超えたら「類似しすぎ」と判定
                     return sims.some(sim => sim > SIMILARITY_THRESHOLD);
                 };
@@ -359,25 +365,25 @@ export class WasmDO extends DurableObject<Env> {
                     // (For simplicity, we just skip the turn if null, and the loop continues to next turn pattern)
                     // But if we skip too many times, we might not fill the list.
                     // Let's implement a fallback inside the loop if chosen is null.
-                    
+
                     if (!chosen) {
-                         // Fallback: Pick highest "Long-Term" (safest) that isn't selected, ignorance of diversity check if strictly needed?
-                         // Better: Relax diversity check? Or just pick next available from sortedByLong skipping diversity check if we represent "Desperation"
-                         // For now, let's just proceed to next turn. If we circle through all patterns and can't find anything, we might be stuck.
-                         // But `candidates.length > selectedIds.size` ensures we have candidates.
-                         // If we iterated through ALL sorted lists and found nothing, it means everything remaining is "too similar".
-                         // In that case, we MUST pick something.
-                         if (ptrLong >= sortedByLong.length && ptrShort >= sortedByShort.length && ptrExplore >= sortedByExplore.length) {
-                             // All lists exhausted with diversity check.
-                             // Force pick from remaining unselected
-                             const remaining = candidates.filter(a => !selectedIds.has(a.articleId));
-                             if (remaining.length > 0) {
-                                 chosen = remaining[0]; // Pick any
-                                 sourceBucket = 'Fallback';
-                             } else {
-                                 break; // No more candidates
-                             }
-                         }
+                        // Fallback: Pick highest "Long-Term" (safest) that isn't selected, ignorance of diversity check if strictly needed?
+                        // Better: Relax diversity check? Or just pick next available from sortedByLong skipping diversity check if we represent "Desperation"
+                        // For now, let's just proceed to next turn. If we circle through all patterns and can't find anything, we might be stuck.
+                        // But `candidates.length > selectedIds.size` ensures we have candidates.
+                        // If we iterated through ALL sorted lists and found nothing, it means everything remaining is "too similar".
+                        // In that case, we MUST pick something.
+                        if (ptrLong >= sortedByLong.length && ptrShort >= sortedByShort.length && ptrExplore >= sortedByExplore.length) {
+                            // All lists exhausted with diversity check.
+                            // Force pick from remaining unselected
+                            const remaining = candidates.filter(a => !selectedIds.has(a.articleId));
+                            if (remaining.length > 0) {
+                                chosen = remaining[0]; // Pick any
+                                sourceBucket = 'Fallback';
+                            } else {
+                                break; // No more candidates
+                            }
+                        }
                     }
 
                     if (chosen) {
@@ -386,7 +392,7 @@ export class WasmDO extends DurableObject<Env> {
                         // Log chosen article for debugging?
                         // this.logger.debug(`Selected: ${chosen.title} [${sourceBucket}]`);
                     }
-                    
+
                     patternIdx++;
                 }
 
