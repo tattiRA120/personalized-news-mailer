@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "drizzle-orm": "^0.45.1",
-    "fast-xml-parser": "^5.3.6",
+    "fast-xml-parser": "^5.3.8",
     "hono": "^4.12.5",
     "linalg-wasm": "^0.1.0"
   },
