@@ -6,7 +6,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NewsArticle } from './newsCollector';
 import { Env } from './types/bindings';
 import init, { get_ucb_values_bulk, update_bandit_model, cosine_similarity } from '../public/wasm/linalg_wasm';
-import wasm from 'LINALG_WASM';
+import wasm from 'linalg-wasm-bg.wasm';
 import { updateUserProfile } from './userProfile';
 import { OPENAI_EMBEDDING_DIMENSION } from './config';
 import { getArticlesFromD1, updateArticleEmbeddingInD1 } from './services/d1Service';

@@ -18,7 +18,7 @@
     "linalg-wasm": "^0.1.0"
   },
   "scripts": {
-    "build": "vite build --mode client && vite build",
+    "build": "vite build --mode client && vite build && cp public/wasm/linalg_wasm_bg.wasm dist/linalg_wasm_bg.wasm",
     "build:wasm": "cd linalg-wasm && wasm-pack build --target web && mkdir -p ../public/wasm && cp -r pkg/. ../public/wasm/",
     "deploy": "npm run build && npm run build:wasm && wrangler deploy",
     "dev": "vite dev",

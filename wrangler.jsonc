@@ -7,9 +7,6 @@
 	"name": "mail-news-worker",
 	"main": "dist/index.js",
 	"compatibility_date": "2025-07-09",
-	"wasm_modules": {
-		"LINALG_WASM": "./public/wasm/linalg_wasm_bg.wasm"
-	},
 	"preview_urls": false,
 	"observability": {
 		"enabled": true

@@ -3,7 +3,7 @@ declare module "*.wasm" {
     export default value;
 }
 
-declare module "LINALG_WASM" {
+declare module "linalg-wasm-bg.wasm" {
     const value: WebAssembly.Module;
     export default value;
 }
