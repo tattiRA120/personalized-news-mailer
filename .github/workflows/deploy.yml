@@ -87,6 +87,9 @@ jobs:
       - name: Build WASM module
         run: npm run build:wasm
 
+      - name: Build application
+        run: npm run build
+
       # Workers Secrets 設定
       - name: Set OPENAI_API_KEY Secret
         run: echo "${{ secrets.OPENAI_API_KEY }}" | npx wrangler secret put OPENAI_API_KEY --env ""
