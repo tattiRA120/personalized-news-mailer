@@ -1,13 +1,3 @@
-declare module "*.wasm?url" {
-    const value: string;
-    export default value;
-}
-
-declare module 'wrangler-wasm:*.wasm' {
-    const value: WebAssembly.Module;
-    export default value;
-}
-
 export interface NewsArticle {
     articleId: string;
     title: string;

@@ -27,7 +27,7 @@ export default defineConfig(({ mode }) => {
             ],
             build: {
                 rollupOptions: {
-                    external: [/^cloudflare:/, /\.wasm$/]
+                    external: [/^cloudflare:/, /\.wasm$/, 'linalg-wasm-bg.wasm', 'LINALG_WASM']
                 }
             }
         }

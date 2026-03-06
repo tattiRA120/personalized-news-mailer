@@ -1,9 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 
 // WASMモジュールをインポート
-import init, { cosine_similarity } from '../linalg-wasm/pkg/linalg_wasm.js';
-import wasmModule from '../linalg-wasm/pkg/linalg_wasm_bg.wasm';
-import { cosine_similarity_bulk, calculate_similarity_matrix, cosine_similarity_one_to_many } from '../linalg-wasm/pkg/linalg_wasm';
+import init, { cosine_similarity } from '../public/wasm/linalg_wasm.js';
+import wasmModule from 'LINALG_WASM';
+import { cosine_similarity_bulk, calculate_similarity_matrix, cosine_similarity_one_to_many } from '../public/wasm/linalg_wasm';
 
 // 依存関係のインポート
 import { ClickLogger } from './clickLogger';
