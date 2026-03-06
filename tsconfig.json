@@ -30,6 +30,8 @@
   "include": [
     "src/**/*.ts",
     "src/**/*.d.ts",
-    "linalg-wasm/pkg/**/*.d.ts"
+    "linalg-wasm/pkg/**/*.d.ts",
+    "app/**/*.ts",
+    "app/**/*.tsx"
   ]
 }

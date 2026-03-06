@@ -1,21 +1,27 @@
 {
+  "type": "module",
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260305.1",
+    "@hono/vite-build": "^1.10.0",
     "@types/node": "^25.3.3",
     "drizzle-kit": "^0.31.9",
     "knip": "^5.85.0",
     "typescript": "^5.9.3",
+    "vite": "^7.3.1",
     "wrangler": "^4.70.0"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.1",
     "fast-xml-parser": "^5.3.8",
     "hono": "^4.12.5",
+    "honox": "^0.1.54",
     "linalg-wasm": "^0.1.0"
   },
   "scripts": {
+    "build": "vite build --mode client && vite build",
     "build:wasm": "cd linalg-wasm && wasm-pack build --target web && cp -r pkg/. ../public/wasm/",
-    "deploy": "npm run build:wasm && wrangler deploy",
+    "deploy": "npm run build && npm run build:wasm && wrangler deploy",
+    "dev": "vite dev",
     "knip": "knip"
   }
 }

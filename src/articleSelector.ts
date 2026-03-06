@@ -3,7 +3,7 @@
 
 import { Logger } from './logger';
 import { NewsArticle } from './newsCollector';
-import { Env } from './index';
+import { Env } from './types/bindings';
 
 // コサイン類似度をバッチで計算するヘルパー関数 (Durable Object経由)
 async function cosineSimilarityBulk(vec1s: number[][], vec2s: number[][], logger: Logger, env: Env): Promise<number[]> {
