@@ -30,15 +30,20 @@ app.route('/', staticRoutes);
 
 showRoutes(app)
 
+// Exports for Durable Objects
+import { ClickLogger } from '../src/clickLogger';
+import { BatchQueueDO } from '../src/batchQueueDO';
+import { WasmDO } from '../src/wasmDO';
+
 export default {
     fetch: app.fetch,
     async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
         // Scheduled task logic remains same
         await orchestrateMailDelivery(env, new Date(controller.scheduledTime));
     },
+    ClickLogger,
+    BatchQueueDO,
+    WasmDO,
 };
 
-// Exports for Durable Objects
-export { ClickLogger } from '../src/clickLogger';
-export { BatchQueueDO } from '../src/batchQueueDO';
-export { WasmDO } from '../src/wasmDO';
+export { ClickLogger, BatchQueueDO, WasmDO };

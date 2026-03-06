@@ -23,7 +23,22 @@ export default defineConfig(({ mode }) => {
                 honox(),
                 build({
                     entry: 'app/server.ts'
-                })
+                }),
+                {
+                    name: 'export-durable-objects',
+                    apply: 'build',
+                    generateBundle(options, bundle) {
+                        for (const fileName in bundle) {
+                            const chunk = bundle[fileName];
+                            if (chunk.type === 'chunk' && chunk.isEntry) {
+                                chunk.code = chunk.code.replace(
+                                    /export\s*\{\s*([a-zA-Z0-9_$]+)\s*as\s*default\s*\};/g,
+                                    'export { $1 as default }; export const ClickLogger = $1.ClickLogger; export const BatchQueueDO = $1.BatchQueueDO; export const WasmDO = $1.WasmDO;'
+                                );
+                            }
+                        }
+                    }
+                }
             ],
             build: {
                 rollupOptions: {
