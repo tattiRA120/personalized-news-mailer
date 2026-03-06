@@ -92,7 +92,7 @@ app.get('/track-feedback', async (c) => {
         }
 
         // Redirect to new education page with toast params
-        const educationUrl = `/education.html?userId=${encodeURIComponent(userId)}&feedback_success=true&articleId=${encodeURIComponent(articleId)}`;
+        const educationUrl = `/education?userId=${encodeURIComponent(userId)}&feedback_success=true&articleId=${encodeURIComponent(articleId)}`;
         return c.redirect(educationUrl, 302);
 
     } catch (error) {

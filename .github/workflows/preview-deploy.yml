@@ -110,7 +110,7 @@ jobs:
           echo "Wrangler PID: $PID"
           
           echo "Waiting for server to be ready on port 8787..."
-          timeout 120 bash -c 'until curl -s http://127.0.0.1:8787/personalized-education.html > /dev/null; do sleep 2; done' || (echo "Server failed to start within timeout" && echo "--- Wrangler Logs ---" && cat wrangler.log && echo "--- Curl Diagnostic ---" && curl -v http://127.0.0.1:8787/personalized-education.html && exit 1)
+          timeout 120 bash -c 'until curl -sf http://127.0.0.1:8787/personalized-education > /dev/null; do sleep 2; done' || (echo "Server failed to start within timeout" && echo "--- Wrangler Logs ---" && cat wrangler.log && echo "--- Curl Diagnostic ---" && curl -v http://127.0.0.1:8787/personalized-education && exit 1)
           
           echo "Server is ready!"
           echo "BASE_URL=http://127.0.0.1:8787" >> $GITHUB_ENV
@@ -137,8 +137,8 @@ jobs:
             // Test 1: Static File
             // ----------------------------------------------------------------
             try {
-              console.log('Test 1: GET /personalized-education.html');
-              const res = await fetch('/personalized-education.html');
+              console.log('Test 1: GET /personalized-education');
+              const res = await fetch('/personalized-education');
               if (!res.ok) throw new Error(`Failed to fetch static file: ${res.status} ${res.statusText}`);
               const text = await res.text();
               
