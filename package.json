@@ -3,12 +3,12 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260305.1",
     "@hono/vite-build": "^1.10.0",
-    "@types/node": "^25.3.3",
+    "@types/node": "^25.3.5",
     "drizzle-kit": "^0.31.9",
     "knip": "^5.85.0",
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
-    "wrangler": "^4.70.0"
+    "wrangler": "^4.71.0"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.1",
