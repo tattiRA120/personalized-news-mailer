@@ -5,6 +5,7 @@ on:
     branches:
       - main # デプロイをトリガーするブランチを指定
     paths:
+      - 'app/**'
       - 'src/**'
       - 'public/**'
       - 'linalg-wasm/**'
@@ -13,6 +14,7 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'
+      - 'vite.config.ts'
       - '.github/workflows/**'
 
 jobs:

@@ -19,7 +19,7 @@
   },
   "scripts": {
     "build": "vite build --mode client && vite build",
-    "build:wasm": "cd linalg-wasm && wasm-pack build --target web && cp -r pkg/. ../public/wasm/",
+    "build:wasm": "cd linalg-wasm && wasm-pack build --target web && mkdir -p ../public/wasm && cp -r pkg/. ../public/wasm/",
     "deploy": "npm run build && npm run build:wasm && wrangler deploy",
     "dev": "vite dev",
     "knip": "knip"
