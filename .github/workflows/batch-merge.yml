@@ -24,6 +24,9 @@ jobs:
           egress-policy: audit
 
       - name: Wait for Stability (Wait for other PR labels)
+        if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Waiting for other potential 'merge-queue' labels to be added..."
           # 30秒待機して、連続してラベルが付与される場合に備える

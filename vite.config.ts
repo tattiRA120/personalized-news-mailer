@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import honox from 'honox/vite'
 import build from '@hono/vite-build/cloudflare-workers'
+import path from 'path'
 
 export default defineConfig(({ mode }) => {
     if (mode === 'client') {
@@ -19,6 +20,12 @@ export default defineConfig(({ mode }) => {
         }
     } else {
         return {
+            resolve: {
+                alias: {
+                    'cloudflare:workers': path.resolve(__dirname, 'src/mocks/cloudflare-workers.ts'),
+                    'linalg-wasm-bg.wasm': path.resolve(__dirname, 'src/mocks/wasm-module.ts')
+                }
+            },
             plugins: [
                 honox(),
                 build({
