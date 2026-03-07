@@ -131,5 +131,12 @@ jobs:
 
           echo "⏰ Timeout waiting for checks."
           exit 1
-      - name: Auto-merge for Dependabot PRs
-        run: gh pr merge --auto --merge "$PR_URL"
+
+      - name: Add merge-queue label for Batch Merge
+        env:
+          PR_URL: ${{ env.PR_URL }}
+        run: |
+          if [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
+            echo "Adding 'merge-queue' label to $PR_URL"
+            gh pr edit "$PR_URL" --add-label "merge-queue"
+          fi
