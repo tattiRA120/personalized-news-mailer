@@ -74,7 +74,8 @@ jobs:
             
             if (targetPrs.length === 0) {
               console.log("No PRs with label '" + label + "' found.");
-              return "skip";
+              core.setOutput("result", "skip");
+              return;
             }
 
             console.log(`Found ${targetPrs.length} PRs to merge: ${targetPrs.map(p => "#" + p.number).join(', ')}`);
@@ -95,10 +96,10 @@ jobs:
               }
               
               console.log("All PRs merged into staging branch locally.");
-              return "success";
+              core.setOutput("result", "success");
             } catch (error) {
               core.setFailed(`Merge failed: ${error.message}`);
-              return "error";
+              core.setOutput("result", "error");
             }
 
       - name: Setup Node.js
