@@ -133,12 +133,12 @@ jobs:
           echo "⏰ Timeout waiting for checks."
           exit 1
 
-      - name: Add merge-queue label for Batch Merge
+      - name: Auto-merge for Dependabot PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_URL: ${{ steps.check-workflows.outputs.pr_url }}
         run: |
           if [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
-            echo "Adding 'merge-queue' label to $PR_URL"
-            gh pr edit "$PR_URL" --add-label "merge-queue"
+            echo "Enabling auto-merge for $PR_URL"
+            gh pr merge --auto --merge "$PR_URL"
           fi
