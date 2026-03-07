@@ -23,6 +23,12 @@ jobs:
         with:
           egress-policy: audit
 
+      - name: Checkout main
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
       - name: Wait for Stability (Wait for other PR labels)
         if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
         env:
@@ -46,12 +52,6 @@ jobs:
             echo "Attempt $i: Still found active monitoring workflows. Waiting 10s..."
             sleep 10
           done
-
-      - name: Checkout main
-        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
-        with:
-          fetch-depth: 0
-          ref: main
 
       - name: Setup Git
         run: |
