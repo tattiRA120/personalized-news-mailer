@@ -41,33 +41,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Check for WASM changes
-        id: wasm_check
-        run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            # PRの場合はベースブランチとの比較
-            DIFF=$(git diff --name-only origin/${{ github.base_ref }} ${{ github.sha }} | grep '^linalg-wasm/' || true)
-          else
-            DIFF="force-build"
-          fi
-
-          if [ -n "$DIFF" ]; then
-            echo "should_build=true" >> $GITHUB_OUTPUT
-            echo "WASM changes detected or forced build."
-          else
-            echo "should_build=false" >> $GITHUB_OUTPUT
-            echo "No WASM changes detected. Skipping WASM build."
-          fi
+      - name: Cache WASM build artifacts
+        id: cache-wasm
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+        with:
+          path: public/wasm
+          key: ${{ runner.os }}-wasm-${{ hashFiles('linalg-wasm/src/**', 'linalg-wasm/Cargo.toml', 'linalg-wasm/Cargo.lock') }}
 
       - name: Setup Rust
-        if: steps.wasm_check.outputs.should_build == 'true'
+        if: steps.cache-wasm.outputs.cache-hit != 'true'
         uses: dtolnay/rust-toolchain@6d9817901c499d6b02debbb57edb38d33daa680b # stable
         with:
           toolchain: stable
           target: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        if: steps.wasm_check.outputs.should_build == 'true'
+        if: steps.cache-wasm.outputs.cache-hit != 'true'
         run: |
           curl -L https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz -o wasm-pack.tar.gz
           tar xzf wasm-pack.tar.gz
@@ -75,7 +64,7 @@ jobs:
           wasm-pack --version
 
       - name: Build WASM module
-        if: steps.wasm_check.outputs.should_build == 'true'
+        if: steps.cache-wasm.outputs.cache-hit != 'true'
         run: npm run build:wasm
 
       - name: Build HonoX app
