@@ -35,7 +35,7 @@ jobs:
           echo "Checking if other 'Dependabot auto-merge' workflows are active..."
           # 他の Dependabot 監視が動いている場合は、それらが終わるまで最大5分待機
           for i in {1..30}; do
-            ACTIVE_RUNS=$(gh api repos/:owner/:repo/actions/runs \
+            ACTIVE_RUNS=$(gh api repos/${{ github.repository }}/actions/runs \
               --jq ".workflow_runs[] | select(.name == \"Dependabot auto-merge\" and (.status == \"queued\" or .status == \"in_progress\")) | .id")
             
             if [ -z "$ACTIVE_RUNS" ]; then
