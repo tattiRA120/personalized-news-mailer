@@ -34,7 +34,7 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Harden the runner
-        uses: step-security/harden-runner@58077d3c7e43986b6b15fba718e8ea69e387dfcc # v2.15.1
+        uses: step-security/harden-runner@a90bcbc6539c36a85cdfeb73f7e2f433735f215b # v2.15.0
         with:
           egress-policy: audit
 
@@ -131,5 +131,12 @@ jobs:
 
           echo "⏰ Timeout waiting for checks."
           exit 1
-      - name: Auto-merge for Dependabot PRs
-        run: gh pr merge --auto --merge "$PR_URL"
+
+      - name: Add merge-queue label for Batch Merge
+        env:
+          PR_URL: ${{ env.PR_URL }}
+        run: |
+          if [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
+            echo "Adding 'merge-queue' label to $PR_URL"
+            gh pr edit "$PR_URL" --add-label "merge-queue"
+          fi
