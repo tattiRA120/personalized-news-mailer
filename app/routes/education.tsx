@@ -13,7 +13,7 @@ export default createRoute(async (c) => {
     const newDiscoveriesData = await getArticlesForEducationData(env, userId);
 
     return c.render(
-        <div class="app-container" style={{ width: '100vw', height: '100vh', margin: 0, padding: 0 }}>
+        <div className="app-container" style={{ height: '100vh', margin: 0, padding: 0 }}>
             <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet" />
             <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 

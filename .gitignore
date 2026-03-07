@@ -13,6 +13,10 @@ build/
 
 # Cloudflare Wrangler
 .wrangler/
+.dev.vars
+
+# HonoX
+.hono/
 
 # Log files
 *.log
@@ -25,7 +29,16 @@ Thumbs.db
 .vscode/
 
 # Local environment variables
-.dev.vars
+# .dev.vars (Moved to Wrangler section)
+
+# Drizzle / SQLite
+.drizzle/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-shm
+*.db-wal
 
 # Review results
 review_results/
