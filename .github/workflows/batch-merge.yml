@@ -74,8 +74,7 @@ jobs:
             
             if (targetPrs.length === 0) {
               console.log("No PRs with label '" + label + "' found.");
-              core.setOutput("result", "skip");
-              return;
+              return "skip";
             }
 
             console.log(`Found ${targetPrs.length} PRs to merge: ${targetPrs.map(p => "#" + p.number).join(', ')}`);
@@ -96,55 +95,55 @@ jobs:
               }
               
               console.log("All PRs merged into staging branch locally.");
-              core.setOutput("result", "success");
+              return "success";
             } catch (error) {
               core.setFailed(`Merge failed: ${error.message}`);
-              core.setOutput("result", "error");
+              return "error";
             }
 
       - name: Setup Node.js
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         run: npm ci
 
       # --- 強化された検証ステップ ---
       
       # 1. Dependency Review
       - name: Dependency Review
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
 
       # 2. CodeQL Analysis (JavaScript/TypeScript)
       - name: Initialize CodeQL
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         uses: github/codeql-action/init@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
         with:
           languages: javascript, typescript
 
       - name: Autobuild CodeQL
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         uses: github/codeql-action/autobuild@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
 
       - name: Perform CodeQL Analysis
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         uses: github/codeql-action/analyze@0d579ffd059c29b07949a3cce3983f0780820c98 # v4.32.6
 
       # 3. WASM & App Build
       - name: Setup Rust
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         uses: dtolnay/rust-toolchain@6d9817901c499d6b02debbb57edb38d33daa680b # stable
         with:
           toolchain: stable
           target: wasm32-unknown-unknown
 
       - name: Install wasm-pack
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         run: |
           curl -L https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz -o wasm-pack.tar.gz
           tar xzf wasm-pack.tar.gz
@@ -152,14 +151,14 @@ jobs:
           wasm-pack --version
 
       - name: Build WASM and App
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         run: |
           npm run build:wasm
           npm run build
 
       # 4. Deployment Test (Localhost)
       - name: Verify Deployment (test-preview-deployment)
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -178,13 +177,13 @@ jobs:
       # --- 本番反映 ---
 
       - name: Push to main
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         run: |
           echo "Pushing combined changes to main..."
           git push origin automation/batch-merge-staging:main
 
       - name: Cleanup Labels
-        if: steps.merge-prs.outputs.result == 'success'
+        if: fromJSON(steps.merge-prs.outputs.result) == 'success'
         uses: actions/github-script@v8
         with:
           script: |
