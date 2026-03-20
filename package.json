@@ -5,7 +5,7 @@
     "@hono/vite-build": "^1.10.1",
     "@types/node": "^25.5.0",
     "drizzle-kit": "^0.31.10",
-    "knip": "^5.87.0",
+    "knip": "^6.0.0",
     "typescript": "^5.9.3",
     "vite": "^8.0.1",
     "wrangler": "^4.76.0"
