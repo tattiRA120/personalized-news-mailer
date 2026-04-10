@@ -22,7 +22,7 @@ jobs:
       # and we don't want to run secrets on arbitrary PRs without a check.
       - name: Check for 'safe-to-preview' label
         id: check-label
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const run_id = context.payload.workflow_run.id;
@@ -118,7 +118,7 @@ jobs:
       - name: Verify Endpoints
         if: steps.check-label.outputs.deploy == 'true'
         id: verify
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         env:
           BASE_URL: http://127.0.0.1:8787
         with:
@@ -274,7 +274,7 @@ jobs:
 
       - name: Report Status
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           script: |
             const run_id = context.payload.workflow_run.id;
