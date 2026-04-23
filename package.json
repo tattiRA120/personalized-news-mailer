@@ -1,14 +1,14 @@
 {
   "type": "module",
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260416.2",
+    "@cloudflare/workers-types": "^4.20260423.1",
     "@hono/vite-build": "^1.11.1",
     "@types/node": "^25.6.0",
     "drizzle-kit": "^0.31.10",
-    "knip": "^6.4.1",
-    "typescript": "^6.0.2",
-    "vite": "^8.0.8",
-    "wrangler": "^4.83.0"
+    "knip": "^6.6.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10",
+    "wrangler": "^4.84.1"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
