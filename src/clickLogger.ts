@@ -242,6 +242,12 @@ export class ClickLogger extends DurableObject {
             return;
         }
 
+        if (!this.env.BANDIT_MODELS) {
+            this.logger.warn('BANDIT_MODELS R2 bucket binding is not defined. Skipping migration.');
+            await this.state.storage.put('migration_v1_r2_to_storage_done', true);
+            return;
+        }
+
         this.logger.info('Starting migration from R2 to DO Storage (new split format: A_inv->R2, rest->DO Storage)...');
         try {
             const object = await this.env.BANDIT_MODELS.get('bandit_models.json');
@@ -290,13 +296,20 @@ export class ClickLogger extends DurableObject {
         const stored = await this.state.storage.get<{ b: Float64Array | number[], dimension: number, alpha: number }>(userId);
         if (stored) {
             // R2 から A_inv (ArrayBuffer) を取得
-            const r2Obj = await this.env.BANDIT_MODELS.get(`bandit_a_inv/${userId}.bin`);
             let aInv: Float64Array;
-            if (r2Obj) {
-                aInv = new Float64Array(await r2Obj.arrayBuffer());
+            if (this.env.BANDIT_MODELS) {
+                const r2Obj = await this.env.BANDIT_MODELS.get(`bandit_a_inv/${userId}.bin`);
+                if (r2Obj) {
+                    aInv = new Float64Array(await r2Obj.arrayBuffer());
+                } else {
+                    // R2 になければ単位行列で初期化（初回 or R2 消失時のフォールバック）
+                    this.logger.warn(`A_inv not found in R2 for user ${userId}. Initializing as identity matrix.`, { userId });
+                    const d = stored.dimension;
+                    aInv = new Float64Array(d * d).fill(0);
+                    for (let i = 0; i < d; i++) aInv[i * d + i] = 1.0;
+                }
             } else {
-                // R2 になければ単位行列で初期化（初回 or R2 消失時のフォールバック）
-                this.logger.warn(`A_inv not found in R2 for user ${userId}. Initializing as identity matrix.`, { userId });
+                this.logger.warn(`BANDIT_MODELS R2 bucket binding is not defined. Initializing A_inv as identity matrix for user ${userId}.`, { userId });
                 const d = stored.dimension;
                 aInv = new Float64Array(d * d).fill(0);
                 for (let i = 0; i < d; i++) aInv[i * d + i] = 1.0;
@@ -324,8 +337,12 @@ export class ClickLogger extends DurableObject {
 
         // A_inv を R2 に ArrayBuffer として保存（2MB超のため DO Storage には保存不可）
         // A_inv が Float64Array でない場合は変換する（WASM が number[] を返す場合のセーフティネット）
-        const aInvTyped = model.A_inv instanceof Float64Array ? model.A_inv : new Float64Array(model.A_inv);
-        await this.env.BANDIT_MODELS.put(`bandit_a_inv/${userId}.bin`, aInvTyped.buffer as ArrayBuffer);
+        if (this.env.BANDIT_MODELS) {
+            const aInvTyped = model.A_inv instanceof Float64Array ? model.A_inv : new Float64Array(model.A_inv);
+            await this.env.BANDIT_MODELS.put(`bandit_a_inv/${userId}.bin`, aInvTyped.buffer as ArrayBuffer);
+        } else {
+            this.logger.warn(`BANDIT_MODELS R2 bucket binding is not defined. Skipping saving A_inv to R2 for user ${userId}.`);
+        }
 
         // b / dimension / alpha のみ DO Storage に保存
         await this.state.storage.put(userId, {

@@ -149,13 +149,7 @@
 					"migrations_dir": "./migrations"
 				}
 			],
-			"r2_buckets": [
-				{
-					"binding": "BANDIT_MODELS",
-					"bucket_name": "mail-news-bandit-models-preview",
-					"preview_bucket_name": "mail-news-bandit-models-preview"
-				}
-			]
+			"r2_buckets": []
 		},
 		"production": {
 			// Environment configuration for production (allows 'wrangler dev --env production')
