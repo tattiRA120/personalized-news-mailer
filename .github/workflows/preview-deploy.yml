@@ -109,7 +109,10 @@ jobs:
           WORKER_BASE_URL=http://127.0.0.1:8787
           LOG_LEVEL=DEBUG
           EOF
-          
+
+          echo "Applying D1 migrations for preview..."
+          npx wrangler d1 migrations apply mail-news-articles-db --env preview --remote --yes
+
           echo "Deploying to preview environment (mail-news-worker-preview)..."
           DEPLOY_FAILED=false
           npx wrangler deploy --env preview > deploy.log 2>&1 || DEPLOY_FAILED=true
