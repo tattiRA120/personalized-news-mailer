@@ -125,6 +125,10 @@ jobs:
           echo "Deployed to: $DEPLOY_URL"
           echo "BASE_URL=$DEPLOY_URL" >> $GITHUB_ENV
 
+          # Set WORKER_BASE_URL to the preview URL via wrangler secret so Durable Objects can call back correctly
+          if [ -n "$DEPLOY_URL" ]; then
+            echo "$DEPLOY_URL" | npx wrangler secret put WORKER_BASE_URL --env preview || echo "Warning: Failed to set WORKER_BASE_URL secret (non-fatal)"
+          fi
       - name: Verify Endpoints
         if: steps.check-label.outputs.deploy == 'true'
         id: verify
