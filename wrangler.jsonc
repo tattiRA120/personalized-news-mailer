@@ -112,6 +112,9 @@
 		"preview": {
 			// Environment configuration for preview deployments (CI/CD test)
 			"name": "mail-news-worker-preview",
+			"triggers": {
+				"crons": []
+			},
 			"kv_namespaces": [
 				{
 					"binding": "mail-news-gmail-tokens",
