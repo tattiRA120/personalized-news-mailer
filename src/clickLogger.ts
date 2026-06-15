@@ -703,8 +703,13 @@ export class ClickLogger extends DurableObject {
         // POST /log-feedback
         this.app.post('/log-feedback', async (c) => {
             const request = c.req.raw;
+            let userId: string | undefined;
+            let articleId: string | undefined;
             try {
-                const { userId, articleId, feedback, timestamp, immediateUpdate } = await request.json() as LogFeedbackRequestBody;
+                const requestBody = await request.json() as LogFeedbackRequestBody;
+                userId = requestBody.userId;
+                articleId = requestBody.articleId;
+                const { feedback, timestamp, immediateUpdate } = requestBody;
                 this.logger.info(`Log feedback request: userId=${userId}, articleId=${articleId}, feedback=${feedback}, immediateUpdate=${immediateUpdate}`);
 
                 if (!userId || !articleId || !feedback || !timestamp) {
@@ -854,6 +859,10 @@ export class ClickLogger extends DurableObject {
 
             } catch (error: unknown) {
                 const err = this.normalizeError(error);
+                if (err.message.includes('FOREIGN KEY constraint failed')) {
+                    this.logger.warn(`Ignoring feedback log due to foreign key constraint failure (user_id: ${userId}, article_id: ${articleId}). Article or user may have been deleted.`, { userId, articleId, errorName: err.name, errorMessage: err.message });
+                    return new Response('Feedback ignored due to missing foreign key', { status: 200 });
+                }
                 this.logger.error('Error logging feedback:', err, {
                     requestUrl: request.url,
                     errorName: err.name,
