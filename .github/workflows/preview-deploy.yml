@@ -111,7 +111,7 @@ jobs:
           EOF
 
           echo "Applying D1 migrations for preview..."
-          npx wrangler d1 migrations apply mail-news-articles-db --env preview --remote
+          npx wrangler d1 migrations apply mail-news-articles-db --env preview --remote --account-id=$CLOUDFLARE_ACCOUNT_ID
 
           echo "Deploying to preview environment (mail-news-worker-preview)..."
           DEPLOY_FAILED=false
