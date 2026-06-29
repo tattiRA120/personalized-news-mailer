@@ -69,6 +69,26 @@ jobs:
                       pull_number: pr.number,
                     });
                     console.log(`✅ PR #${pr.number} branch updated successfully.`);
+
+                    // ブランチ更新後は safe-to-preview ラベルを削除する。
+                    // 新しいコミットが追加されたため、古いコミットSHAで付与された
+                    // セキュリティチェック結果（CodeQL・Dependency Review）は無効になる。
+                    // ラベルを外すことで auto-label.yml が新コミットで再チェックし、
+                    // 安全が確認されたら再びラベルを付与して自動マージをトリガーする。
+                    try {
+                      await github.rest.issues.removeLabel({
+                        owner,
+                        repo,
+                        issue_number: pr.number,
+                        name: 'safe-to-preview',
+                      });
+                      console.log(`🏷️ Removed 'safe-to-preview' label from PR #${pr.number} (awaiting re-check on updated branch).`);
+                    } catch (labelErr) {
+                      // ラベルが存在しない場合（404）は無視
+                      if (labelErr.status !== 404) {
+                        console.warn(`⚠️ Could not remove label from PR #${pr.number}: ${labelErr.message}`);
+                      }
+                    }
                   } catch (updateErr) {
                     // 競合などで更新できない場合はスキップ（Dependabotが次回再作成する）
                     console.warn(`⚠️ Could not update PR #${pr.number}: ${updateErr.message}`);
