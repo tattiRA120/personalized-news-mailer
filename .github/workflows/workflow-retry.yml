@@ -1,0 +1,136 @@
+name: Workflow Auto Retry
+
+on:
+  schedule:
+    # 毎日UTC 0:00に実行
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  pull-requests: write
+  contents: write
+
+jobs:
+  retry-failed-workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Update Behind PR Branches and Retry Failed Runs
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // このワークフロー自身のファイル名（無限ループ防止用）
+            const THIS_WORKFLOW = 'workflow-retry.yml';
+
+            // ── STEP 1: BEHINDなオープンPRのブランチをUpdateする ──────────────
+            // mainに新しい修正（例: tsconfig修正）が入った後、
+            // PRブランチ側に反映されないと再実行しても同じエラーが続くため、
+            // Update branch を先に実施してCIを最新の状態で再実行させる。
+            console.log('=== STEP 1: Updating behind PR branches ===');
+            const prsRes = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 50,
+            });
+
+            for (const pr of prsRes.data) {
+              // head と base のコミット比較で behind を確認
+              try {
+                const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                  owner,
+                  repo,
+                  basehead: `${pr.head.sha}...${pr.base.sha}`,
+                });
+                const behindBy = comparison.data.behind_by ?? 0;
+
+                if (behindBy > 0) {
+                  console.log(`PR #${pr.number} is ${behindBy} commit(s) behind base. Updating branch...`);
+                  try {
+                    await github.rest.pulls.updateBranch({
+                      owner,
+                      repo,
+                      pull_number: pr.number,
+                    });
+                    console.log(`✅ PR #${pr.number} branch updated successfully.`);
+
+                    // ブランチ更新後は safe-to-preview ラベルを削除する。
+                    // 新しいコミットが追加されたため、古いコミットSHAで付与された
+                    // セキュリティチェック結果（CodeQL・Dependency Review）は無効になる。
+                    // ラベルを外すことで auto-label.yml が新コミットで再チェックし、
+                    // 安全が確認されたら再びラベルを付与して自動マージをトリガーする。
+                    try {
+                      await github.rest.issues.removeLabel({
+                        owner,
+                        repo,
+                        issue_number: pr.number,
+                        name: 'safe-to-preview',
+                      });
+                      console.log(`🏷️ Removed 'safe-to-preview' label from PR #${pr.number} (awaiting re-check on updated branch).`);
+                    } catch (labelErr) {
+                      // ラベルが存在しない場合（404）は無視
+                      if (labelErr.status !== 404) {
+                        console.warn(`⚠️ Could not remove label from PR #${pr.number}: ${labelErr.message}`);
+                      }
+                    }
+                  } catch (updateErr) {
+                    // 競合などで更新できない場合はスキップ（Dependabotが次回再作成する）
+                    console.warn(`⚠️ Could not update PR #${pr.number}: ${updateErr.message}`);
+                  }
+                } else {
+                  console.log(`PR #${pr.number} is up to date.`);
+                }
+              } catch (cmpErr) {
+                console.warn(`⚠️ Could not compare PR #${pr.number}: ${cmpErr.message}`);
+              }
+            }
+
+            // ── STEP 2: 過去48時間以内に失敗したワークフローランを再実行 ────
+            console.log('=== STEP 2: Retrying failed workflow runs ===');
+            const cutoffTime = new Date(Date.now() - 48 * 60 * 60 * 1000);
+
+            const runsRes = await github.rest.actions.listWorkflowRunsForRepo({
+              owner,
+              repo,
+              status: 'failure',
+              per_page: 50,
+            });
+
+            const runsToRetry = runsRes.data.workflow_runs.filter(run => {
+              // 自分自身は除外（無限ループ防止）
+              if (run.path && run.path.endsWith(THIS_WORKFLOW)) return false;
+              // 48時間以内のものだけ
+              return new Date(run.created_at) > cutoffTime;
+            });
+
+            console.log(`Found ${runsToRetry.length} failed run(s) in the last 48 hours.`);
+
+            for (const run of runsToRetry) {
+              console.log(`Re-triggering: [${run.name}] #${run.run_number} (ID: ${run.id}) - created at ${run.created_at}`);
+              try {
+                await github.rest.actions.reRunWorkflow({
+                  owner,
+                  repo,
+                  run_id: run.id,
+                });
+                console.log(`✅ Successfully re-triggered run ID: ${run.id}`);
+              } catch (error) {
+                console.error(`❌ Failed to re-trigger run ID: ${run.id}: ${error.message}`);
+              }
+            }
