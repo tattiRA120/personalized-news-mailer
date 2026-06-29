@@ -1,0 +1,70 @@
+name: Workflow Auto Retry
+
+on:
+  schedule:
+    # 毎日UTC 0:00に実行
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  retry-failed-workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Retry All Failed Workflow Runs
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // このワークフロー自身のファイル名（無限ループ防止用）
+            const THIS_WORKFLOW = 'workflow-retry.yml';
+
+            // 過去48時間以内に失敗したリポジトリ全体のワークフローランを取得
+            const cutoffTime = new Date(Date.now() - 48 * 60 * 60 * 1000);
+
+            const runsRes = await github.rest.actions.listWorkflowRunsForRepo({
+              owner,
+              repo,
+              status: 'failure',
+              per_page: 50,
+            });
+
+            const runsToRetry = runsRes.data.workflow_runs.filter(run => {
+              // 自分自身は除外（無限ループ防止）
+              if (run.path && run.path.endsWith(THIS_WORKFLOW)) return false;
+              // 48時間以内のものだけ
+              return new Date(run.created_at) > cutoffTime;
+            });
+
+            console.log(`Found ${runsToRetry.length} failed run(s) in the last 48 hours.`);
+
+            for (const run of runsToRetry) {
+              console.log(`Re-triggering failed run: [${run.name}] #${run.run_number} (ID: ${run.id}) - ${run.path} - created at ${run.created_at}`);
+              try {
+                await github.rest.actions.reRunWorkflow({
+                  owner,
+                  repo,
+                  run_id: run.id,
+                });
+                console.log(`✅ Successfully re-triggered run ID: ${run.id}`);
+              } catch (error) {
+                console.error(`❌ Failed to re-trigger run ID: ${run.id}: ${error.message}`);
+              }
+            }
