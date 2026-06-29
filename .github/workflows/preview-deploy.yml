@@ -294,15 +294,6 @@ jobs:
               core.setFailed('Batch feedback verification failed');
             }
 
-      - name: Cleanup Preview Deployment
-        if: always() && steps.check-label.outputs.deploy == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: |
-          echo "Deleting preview worker..."
-          npx wrangler delete --env preview 2>&1 || echo "Warning: Failed to delete preview worker (may not exist)"
-
       - name: Report Status
         if: always()
         uses: actions/github-script@v9
