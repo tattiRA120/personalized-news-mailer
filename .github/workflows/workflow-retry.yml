@@ -8,6 +8,8 @@ on:
 
 permissions:
   actions: write
+  pull-requests: write
+  contents: write
 
 jobs:
   retry-failed-workflows:
@@ -25,7 +27,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - name: Retry All Failed Workflow Runs
+      - name: Update Behind PR Branches and Retry Failed Runs
         uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
@@ -36,7 +38,51 @@ jobs:
             // このワークフロー自身のファイル名（無限ループ防止用）
             const THIS_WORKFLOW = 'workflow-retry.yml';
 
-            // 過去48時間以内に失敗したリポジトリ全体のワークフローランを取得
+            // ── STEP 1: BEHINDなオープンPRのブランチをUpdateする ──────────────
+            // mainに新しい修正（例: tsconfig修正）が入った後、
+            // PRブランチ側に反映されないと再実行しても同じエラーが続くため、
+            // Update branch を先に実施してCIを最新の状態で再実行させる。
+            console.log('=== STEP 1: Updating behind PR branches ===');
+            const prsRes = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              per_page: 50,
+            });
+
+            for (const pr of prsRes.data) {
+              // head と base のコミット比較で behind を確認
+              try {
+                const comparison = await github.rest.repos.compareCommitsWithBasehead({
+                  owner,
+                  repo,
+                  basehead: `${pr.head.sha}...${pr.base.sha}`,
+                });
+                const behindBy = comparison.data.behind_by ?? 0;
+
+                if (behindBy > 0) {
+                  console.log(`PR #${pr.number} is ${behindBy} commit(s) behind base. Updating branch...`);
+                  try {
+                    await github.rest.pulls.updateBranch({
+                      owner,
+                      repo,
+                      pull_number: pr.number,
+                    });
+                    console.log(`✅ PR #${pr.number} branch updated successfully.`);
+                  } catch (updateErr) {
+                    // 競合などで更新できない場合はスキップ（Dependabotが次回再作成する）
+                    console.warn(`⚠️ Could not update PR #${pr.number}: ${updateErr.message}`);
+                  }
+                } else {
+                  console.log(`PR #${pr.number} is up to date.`);
+                }
+              } catch (cmpErr) {
+                console.warn(`⚠️ Could not compare PR #${pr.number}: ${cmpErr.message}`);
+              }
+            }
+
+            // ── STEP 2: 過去48時間以内に失敗したワークフローランを再実行 ────
+            console.log('=== STEP 2: Retrying failed workflow runs ===');
             const cutoffTime = new Date(Date.now() - 48 * 60 * 60 * 1000);
 
             const runsRes = await github.rest.actions.listWorkflowRunsForRepo({
@@ -56,7 +102,7 @@ jobs:
             console.log(`Found ${runsToRetry.length} failed run(s) in the last 48 hours.`);
 
             for (const run of runsToRetry) {
-              console.log(`Re-triggering failed run: [${run.name}] #${run.run_number} (ID: ${run.id}) - ${run.path} - created at ${run.created_at}`);
+              console.log(`Re-triggering: [${run.name}] #${run.run_number} (ID: ${run.id}) - created at ${run.created_at}`);
               try {
                 await github.rest.actions.reRunWorkflow({
                   owner,
