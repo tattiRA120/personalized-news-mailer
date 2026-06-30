@@ -2,10 +2,8 @@ name: Dependabot auto-merge
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-  workflow_run:
-    workflows: ["Auto Label Safe Preview"]
-    types:
-      - completed
+  # workflow_run は廃止: auto-label.yml が workflow_dispatch で pr_url を直接渡すため不要。
+  # workflow_run では head_sha が main ブランチの SHA になり PR の特定が不可能。
   workflow_dispatch:
     inputs:
       pr_url:
@@ -14,7 +12,8 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # workflow_dispatch 時は pr_url を使ってグループ化し、同一PRへの並列実行をキャンセル
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_url || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -30,7 +29,6 @@ jobs:
     if: |
       (
         (github.event_name == 'pull_request' && (github.event.pull_request.user.login == 'dependabot[bot]' || github.event.pull_request.user.login == 'tattiRA120') && contains(join(github.event.pull_request.labels.*.name, ','), 'safe-to-preview')) ||
-        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success') ||
         github.event_name == 'workflow_dispatch'
       ) &&
       github.repository == 'tattiRA120/personalized-news-mailer'
@@ -60,14 +58,6 @@ jobs:
           # Dynamically determine PR_URL
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             PR_URL="${{ github.event.pull_request.html_url }}"
-          elif [ "${{ github.event_name }}" == "workflow_run" ]; then
-            HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
-            echo "Searching for PR associated with SHA: $HEAD_SHA"
-            # gh pr list --search はコミットSHAによる検索をサポートしていないため、
-            # GitHub API の commits/{sha}/pulls エンドポイントを使用する
-            PR_URL=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls" \
-              -H "Accept: application/vnd.github.v3+json" \
-              --jq '.[0] | select(.state == "open") | .html_url // empty')
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             PR_URL="${{ inputs.pr_url }}"
           fi
