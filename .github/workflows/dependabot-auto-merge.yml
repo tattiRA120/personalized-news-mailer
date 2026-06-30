@@ -63,7 +63,11 @@ jobs:
           elif [ "${{ github.event_name }}" == "workflow_run" ]; then
             HEAD_SHA="${{ github.event.workflow_run.head_sha }}"
             echo "Searching for PR associated with SHA: $HEAD_SHA"
-            PR_URL=$(gh pr list --search "$HEAD_SHA" --state open --json url --jq '.[0].url')
+            # gh pr list --search はコミットSHAによる検索をサポートしていないため、
+            # GitHub API の commits/{sha}/pulls エンドポイントを使用する
+            PR_URL=$(gh api "repos/${{ github.repository }}/commits/${HEAD_SHA}/pulls" \
+              -H "Accept: application/vnd.github.v3+json" \
+              --jq '.[0] | select(.state == "open") | .html_url // empty')
           elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             PR_URL="${{ inputs.pr_url }}"
           fi
