@@ -132,6 +132,12 @@ jobs:
           if [ -n "$DEPLOY_URL" ]; then
             echo "$DEPLOY_URL" | npx wrangler secret put WORKER_BASE_URL --env preview || echo "Warning: Failed to set WORKER_BASE_URL secret (non-fatal)"
           fi
+      - name: Wait for secret propagation
+        if: steps.check-label.outputs.deploy == 'true'
+        run: |
+          echo "Waiting 10s for WORKER_BASE_URL secret to propagate to Cloudflare Workers..."
+          sleep 10
+
       - name: Verify Endpoints
         if: steps.check-label.outputs.deploy == 'true'
         id: verify
