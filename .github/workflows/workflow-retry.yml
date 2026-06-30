@@ -1,6 +1,10 @@
 name: Workflow Auto Retry
 
 on:
+  # PRがmainにマージされたとき（BEHIND状態のPRブランチを即座に更新するため）
+  push:
+    branches:
+      - main
   schedule:
     # 毎日UTC 0:00に実行
     - cron: '0 0 * * *'
@@ -102,6 +106,12 @@ jobs:
             }
 
             // ── STEP 2: 過去48時間以内に失敗したワークフローランを再実行 ────
+            // push イベント時はスキップ（マージ直後は新しいCIが起動するため不要）
+            if (context.eventName === 'push') {
+              console.log('=== STEP 2: Skipped (push event - new CI will start automatically) ===');
+              return;
+            }
+
             console.log('=== STEP 2: Retrying failed workflow runs ===');
             const cutoffTime = new Date(Date.now() - 48 * 60 * 60 * 1000);
 
