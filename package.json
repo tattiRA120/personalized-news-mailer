@@ -14,7 +14,7 @@
     "drizzle-orm": "^0.45.2",
     "fast-xml-parser": "^5.9.3",
     "hono": "^4.12.27",
-    "honox": "^0.1.56",
+    "honox": "^0.1.58",
     "linalg-wasm": "^0.1.0"
   },
   "scripts": {
