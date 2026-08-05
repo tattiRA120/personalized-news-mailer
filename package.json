@@ -13,7 +13,7 @@
   "dependencies": {
     "drizzle-orm": "^0.45.2",
     "fast-xml-parser": "^5.10.1",
-    "hono": "^4.12.32",
+    "hono": "^4.12.34",
     "honox": "^0.1.60",
     "linalg-wasm": "^0.1.0"
   },
@@ -28,6 +28,7 @@
     "esbuild": "^0.28.1",
     "brace-expansion": "^2.1.2",
     "@hono/node-server": "^2.0.5",
-    "sharp": "^0.35.3"
+    "sharp": "^0.35.3",
+    "undici": "^7.29.0"
   }
 }
