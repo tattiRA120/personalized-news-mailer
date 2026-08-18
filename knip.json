@@ -18,5 +18,8 @@
   ],
   "ignoreBinaries": [
     "wasm-pack"
+  ],
+  "ignore": [
+    "src/mocks/cloudflare-workers.ts"
   ]
 }
