@@ -7,13 +7,13 @@
     "drizzle-kit": "^0.31.10",
     "knip": "^6.34.0",
     "typescript": "^6.0.3",
-    "vite": "^8.2.4",
+    "vite": "^8.3.5",
     "wrangler": "^4.151.0"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.2",
     "fast-xml-parser": "^5.11.1",
-    "hono": "^4.13.7",
+    "hono": "^4.13.13",
     "honox": "^0.1.61",
     "linalg-wasm": "^0.1.0"
   },
