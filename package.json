@@ -7,7 +7,7 @@
     "drizzle-kit": "^0.31.10",
     "knip": "^6.34.0",
     "typescript": "^6.0.3",
-    "vite": "^8.2.2",
+    "vite": "^8.2.4",
     "wrangler": "^4.151.0"
   },
   "dependencies": {
